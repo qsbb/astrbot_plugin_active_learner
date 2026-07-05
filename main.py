@@ -634,6 +634,17 @@ class ActiveLearnerPlugin(Star):
         context.register_web_api(
             f"/{PLUGIN_NAME}/debug", self._web_debug, ["GET"], "诊断信息"
         )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/builtin_kb/list", self._web_builtin_kb_list, ["GET"], "列出 AstrBot 内置知识库"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/builtin_kb/<kb_id>/documents",
+            self._web_builtin_kb_documents, ["GET"], "列出 KB 内文档",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/builtin_kb/import",
+            self._web_builtin_kb_import, ["POST"], "从内置 KB 批量导入",
+        )
 
     async def _web_debug(self):
         """返回数据库和插件诊断信息。"""
@@ -1173,7 +1184,7 @@ class ActiveLearnerPlugin(Star):
             refine=refine,
         )
 
-    async def _import_chunks_batch(
+    async def _import_chunks_batch_data(
         self,
         chunks: list[str],
         scope: Scope,
@@ -1181,13 +1192,14 @@ class ActiveLearnerPlugin(Star):
         base_topic: str,
         source_label: str,
         refine: bool,
-    ) -> "MessageEventResult":
-        """共享的批量 chunk 入库逻辑（PDF/DOCX/TXT/长 MD 共用）。
+    ) -> dict:
+        """共享的批量 chunk 入库逻辑（PDF/DOCX/TXT/长 MD / 内置 KB 共用）。
 
         - 批量精炼（如有 provider）
         - 批量嵌入（如有 embedder）
         - 每个 chunk 用 make_chunk_id 生成独立 ID
         - 写入后失效向量矩阵缓存
+        返回 dict（不包 json_response），供调用方决定如何响应。
         """
         # 批量精炼
         refine_results = None
@@ -1261,14 +1273,30 @@ class ActiveLearnerPlugin(Star):
             f"导入 {source_label}: {success_count}/{len(chunks)} chunks 成功 "
             f"(scope: {scope}, refine={'yes' if refine_results else 'no'})"
         )
-        return json_response({
+        return {
             "ok": True,
             "total": len(chunks),
             "success": success_count,
             "failed": len(chunks) - success_count,
             "parent_doc_id": parent_doc_id,
             "results": results,
-        })
+        }
+
+    async def _import_chunks_batch(
+        self,
+        chunks: list[str],
+        scope: Scope,
+        parent_doc_id: str,
+        base_topic: str,
+        source_label: str,
+        refine: bool,
+    ) -> "MessageEventResult":
+        """向后兼容包装：返回 json_response。新代码请直接调用 _import_chunks_batch_data。"""
+        data = await self._import_chunks_batch_data(
+            chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
+            base_topic=base_topic, source_label=source_label, refine=refine,
+        )
+        return json_response(data)
 
     async def _web_import_pdf(self):
         """导入 PDF：JSON body {filename, base64, scope_type, scope_id, refine?, chunk_size?, chunk_overlap?}"""
@@ -1458,6 +1486,221 @@ class ActiveLearnerPlugin(Star):
             "total": len(results),
             "success": success_count,
             "failed": len(results) - success_count,
+            "results": results,
+        })
+
+    # ---------- 内置知识库导入 ----------
+
+    def _get_kb_manager(self):
+        """获取 AstrBot KnowledgeBaseManager，不可用时返回 None。"""
+        return getattr(self.context, "kb_manager", None)
+
+    async def _web_builtin_kb_list(self):
+        """列出 AstrBot 内置知识库所有 KB。"""
+        km = self._get_kb_manager()
+        if km is None:
+            return error_response(
+                "当前 AstrBot 版本未启用知识库模块（kb_manager 不可用）",
+                status_code=501,
+            )
+        try:
+            kbs = await km.list_kbs()
+        except Exception as e:
+            return error_response(f"读取知识库列表失败: {e}", status_code=500)
+        items = []
+        for kb in kbs:
+            doc_count = 0
+            try:
+                docs = await km.kb_db.list_documents_by_kb(kb.kb_id, limit=10000)
+                doc_count = len(docs)
+            except Exception:
+                pass
+            items.append({
+                "kb_id": kb.kb_id,
+                "kb_name": kb.kb_name,
+                "description": kb.description or "",
+                "emoji": kb.emoji or "📚",
+                "doc_count": doc_count,
+            })
+        return json_response({"items": items})
+
+    async def _web_builtin_kb_documents(self, kb_id: str):
+        """列出指定 KB 的所有文档。"""
+        km = self._get_kb_manager()
+        if km is None:
+            return error_response(
+                "当前 AstrBot 版本未启用知识库模块（kb_manager 不可用）",
+                status_code=501,
+            )
+        kb_helper = await km.get_kb(kb_id)
+        if kb_helper is None:
+            return error_response("知识库不存在", status_code=404)
+        try:
+            docs = await km.kb_db.list_documents_by_kb(kb_id, limit=10000)
+        except Exception as e:
+            return error_response(f"读取文档列表失败: {e}", status_code=500)
+        items = [{
+            "doc_id": d.doc_id,
+            "doc_name": d.doc_name,
+            "file_type": d.file_type,
+            "chunk_count": d.chunk_count,
+            "file_size": d.file_size,
+            "created_at": float(d.created_at) if d.created_at else 0,
+        } for d in docs]
+        return json_response({
+            "items": items,
+            "kb_id": kb_id,
+            "kb_name": kb_helper.kb.kb_name,
+        })
+
+    async def _read_builtin_doc_chunks(self, kb_helper, doc_id: str) -> list[str]:
+        """读取某文档的所有 chunk 文本。
+
+        优先用 KBHelper.vec_db.document_storage.get_documents，
+        失败时降级直接读 SQLite：<data_dir>/knowledge_base/<kb_id>/doc.db
+        """
+        # 优先 API
+        try:
+            storage = getattr(kb_helper.vec_db, "document_storage", None) if kb_helper.vec_db else None
+            if storage is not None:
+                rows = await storage.get_documents({"kb_doc_id": doc_id}, limit=10000)
+                if rows:
+                    def _idx(r):
+                        meta = r.get("metadata") or {}
+                        if isinstance(meta, str):
+                            try:
+                                import json as _json
+                                meta = _json.loads(meta)
+                            except Exception:
+                                meta = {}
+                        return meta.get("chunk_index", 0)
+                    rows_sorted = sorted(rows, key=_idx)
+                    return [r.get("text", "") for r in rows_sorted if r.get("text")]
+        except Exception as e:
+            logger.debug(f"读 chunks (API 失败, 降级读 SQLite): {e}")
+
+        # 降级：直接读 SQLite
+        try:
+            import sqlite3 as _sqlite3
+            try:
+                from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+                data_root = Path(get_astrbot_data_path())
+            except ImportError:
+                data_root = Path(self._db_path).parent.parent  # 兜底：从插件目录推断
+            kb_id = kb_helper.kb.kb_id
+            db_path = data_root / "knowledge_base" / kb_id / "doc.db"
+            if not db_path.exists():
+                logger.debug(f"内置 KB doc.db 不存在: {db_path}")
+                return []
+            conn = _sqlite3.connect(str(db_path), check_same_thread=False)
+            try:
+                rows = conn.execute(
+                    """SELECT text, json_extract(metadata,'$.chunk_index') AS idx
+                       FROM documents
+                       WHERE json_extract(metadata,'$.kb_doc_id') = ?
+                       ORDER BY idx""",
+                    (doc_id,),
+                ).fetchall()
+                return [r[0] for r in rows if r[0]]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"读 chunks SQLite 失败: {e}")
+            return []
+
+    async def _web_builtin_kb_import(self):
+        """从内置 KB 批量导入：JSON body {kb_id, doc_ids, scope_type, scope_id, refine?, chunk_size?, chunk_overlap?}
+
+        每个文档的所有 chunks 合并为一段文本 → 重新分块 → 走 _import_chunks_batch_data 入库。
+        """
+        payload = await request.json(default={}) or {}
+        kb_id = (payload.get("kb_id") or "").strip()
+        doc_ids = payload.get("doc_ids") or []
+        scope_type = (payload.get("scope_type") or "").strip()
+        scope_id = (payload.get("scope_id") or "").strip()
+        refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
+        try:
+            chunk_size = int(payload.get("chunk_size", 500))
+            chunk_overlap = int(payload.get("chunk_overlap", 50))
+        except (TypeError, ValueError):
+            return error_response("chunk_size / chunk_overlap 必须是整数", status_code=400)
+
+        if not kb_id or not doc_ids or not scope_type:
+            return error_response("kb_id, doc_ids, scope_type required", status_code=400)
+        if not isinstance(doc_ids, list):
+            return error_response("doc_ids 必须是数组", status_code=400)
+
+        km = self._get_kb_manager()
+        if km is None:
+            return error_response(
+                "当前 AstrBot 版本未启用知识库模块（kb_manager 不可用）",
+                status_code=501,
+            )
+        kb_helper = await km.get_kb(kb_id)
+        if kb_helper is None:
+            return error_response(f"知识库 {kb_id} 不存在", status_code=404)
+
+        scope = Scope(type=scope_type, id=scope_id)
+        results = []
+        success_count = 0
+
+        for doc_id in doc_ids:
+            try:
+                # 拿文档元数据
+                doc = None
+                try:
+                    doc = await km.kb_db.get_document_by_id(doc_id)
+                except Exception as e:
+                    logger.debug(f"get_document_by_id 失败: {e}")
+                if doc is None:
+                    results.append({"doc_id": doc_id, "ok": False, "error": "文档不存在"})
+                    continue
+
+                # 读 chunks 文本
+                chunks_text = await self._read_builtin_doc_chunks(kb_helper, doc_id)
+                if not chunks_text:
+                    results.append({
+                        "doc_id": doc_id, "doc_name": doc.doc_name,
+                        "ok": False, "error": "文档无文本（chunks 为空）",
+                    })
+                    continue
+
+                # 拼接后重新分块
+                full_text = "\n\n".join(chunks_text)
+                new_chunks = chunk_text(full_text, max_size=chunk_size, overlap=chunk_overlap)
+                if not new_chunks:
+                    results.append({
+                        "doc_id": doc_id, "doc_name": doc.doc_name,
+                        "ok": False, "error": "重新分块后无内容",
+                    })
+                    continue
+
+                # 复用 _import_chunks_batch_data 入库
+                parent_doc_id = uuid.uuid4().hex[:16]
+                base_topic = doc.doc_name.rsplit(".", 1)[0] if doc.doc_name else "内置KB文档"
+                source_label = f"内置KB导入 ({kb_helper.kb.kb_name}/{doc.doc_name})"
+                batch_data = await self._import_chunks_batch_data(
+                    chunks=new_chunks, scope=scope, parent_doc_id=parent_doc_id,
+                    base_topic=base_topic, source_label=source_label, refine=refine,
+                )
+                success_count += 1
+                results.append({
+                    "doc_id": doc_id, "doc_name": doc.doc_name,
+                    "ok": True, "chunks": len(new_chunks),
+                    "batch": batch_data,
+                })
+            except Exception as e:
+                results.append({"doc_id": doc_id, "ok": False, "error": str(e)})
+
+        logger.info(
+            f"内置 KB 批量导入: {success_count}/{len(doc_ids)} 成功 "
+            f"(kb_id={kb_id}, scope={scope})"
+        )
+        return json_response({
+            "ok": True,
+            "total": len(doc_ids),
+            "success": success_count,
+            "failed": len(doc_ids) - success_count,
             "results": results,
         })
 

@@ -941,7 +941,265 @@ async function init() {
   bindImportEvents();
   bindSettingsEvents();
   bindConfigEvents();
+  bindBuiltinKbEvents();
   await refreshAll();
 }
 
 init().catch((e) => showToast(`初始化失败：${e.message}`, true));
+
+// ---------- Builtin KB Modal（从 AstrBot 内置知识库导入） ----------
+
+const builtinKbState = {
+  selectedKbId: "",
+  selectedDocIds: new Set(),
+  docs: [],
+};
+
+function openBuiltinKbModal() {
+  const modal = document.getElementById("builtin-kb-modal");
+  modal.classList.remove("hidden");
+  const errBox = document.getElementById("builtin-kb-error");
+  if (errBox) errBox.classList.add("hidden");
+  const progress = document.getElementById("builtin-kb-progress");
+  if (progress) progress.classList.add("hidden");
+  loadBuiltinKbList();
+}
+
+function closeBuiltinKbModal() {
+  document.getElementById("builtin-kb-modal").classList.add("hidden");
+}
+
+function showBuiltinKbError(msg) {
+  const errBox = document.getElementById("builtin-kb-error");
+  if (!errBox) return;
+  errBox.textContent = msg;
+  errBox.classList.remove("hidden");
+}
+
+async function loadBuiltinKbList() {
+  const listEl = document.getElementById("builtin-kb-list");
+  listEl.innerHTML = '<p class="muted">加载中…</p>';
+  try {
+    const data = await bridge.apiGet("builtin_kb/list");
+    renderBuiltinKbList(data.items || []);
+  } catch (e) {
+    listEl.innerHTML = "";
+    showBuiltinKbError(`读取知识库列表失败：${escapeHtml(e.message || String(e))}`);
+  }
+}
+
+function renderBuiltinKbList(items) {
+  const listEl = document.getElementById("builtin-kb-list");
+  if (!items.length) {
+    listEl.innerHTML = '<p class="muted">尚无知识库。请先在 AstrBot Dashboard 创建并上传文档。</p>';
+    return;
+  }
+  listEl.innerHTML = "";
+  items.forEach((kb) => {
+    const div = document.createElement("div");
+    div.className = "kb-item";
+    div.dataset.kbId = kb.kb_id;
+    div.innerHTML = `
+      <div class="kb-item-header">
+        <span class="kb-emoji">${escapeHtml(kb.emoji || "📚")}</span>
+        <div class="kb-item-info">
+          <div class="kb-name">${escapeHtml(kb.kb_name)}</div>
+          <div class="kb-meta">${kb.doc_count} 个文档</div>
+        </div>
+      </div>
+      ${kb.description ? `<div class="kb-desc">${escapeHtml(kb.description)}</div>` : ""}
+    `;
+    div.addEventListener("click", () => selectBuiltinKb(kb.kb_id, div));
+    listEl.appendChild(div);
+  });
+}
+
+async function selectBuiltinKb(kbId, el) {
+  document.querySelectorAll("#builtin-kb-list .kb-item").forEach((n) => n.classList.remove("active"));
+  if (el) el.classList.add("active");
+  builtinKbState.selectedKbId = kbId;
+  builtinKbState.selectedDocIds.clear();
+  updateBuiltinKbSelectedCount();
+  await loadBuiltinKbDocuments(kbId);
+}
+
+async function loadBuiltinKbDocuments(kbId) {
+  const docsEl = document.getElementById("builtin-kb-docs");
+  const titleEl = document.getElementById("builtin-kb-docs-title");
+  docsEl.innerHTML = '<p class="muted">加载中…</p>';
+  if (titleEl) titleEl.textContent = "文档列表";
+  try {
+    const data = await bridge.apiGet(`builtin_kb/${kbId}/documents`);
+    builtinKbState.docs = data.items || [];
+    renderBuiltinKbDocs(builtinKbState.docs);
+    if (titleEl) titleEl.textContent = `文档列表（${data.kb_name || ""}）`;
+  } catch (e) {
+    docsEl.innerHTML = "";
+    showBuiltinKbError(`读取文档列表失败：${escapeHtml(e.message || String(e))}`);
+  }
+}
+
+function renderBuiltinKbDocs(items) {
+  const docsEl = document.getElementById("builtin-kb-docs");
+  if (!items.length) {
+    docsEl.innerHTML = '<p class="muted">该知识库无文档。</p>';
+    return;
+  }
+  docsEl.innerHTML = "";
+  items.forEach((doc) => {
+    const div = document.createElement("div");
+    div.className = "doc-item";
+    const icon = fileIcon(doc.file_type);
+    const sizeStr = formatFileSize(doc.file_size);
+    const dateStr = doc.created_at ? formatTime(doc.created_at) : "";
+    div.innerHTML = `
+      <label class="doc-checkbox">
+        <input type="checkbox" data-doc-id="${escapeHtml(doc.doc_id)}" />
+        <span class="doc-icon">${icon}</span>
+      </label>
+      <div class="doc-info">
+        <div class="doc-name">${escapeHtml(doc.doc_name)}</div>
+        <div class="doc-meta">
+          <span class="badge badge-type">${escapeHtml(doc.file_type || "未知")}</span>
+          <span class="badge">${doc.chunk_count} chunks</span>
+          ${sizeStr ? `<span class="badge">${sizeStr}</span>` : ""}
+          ${dateStr ? `<span class="muted">${dateStr}</span>` : ""}
+        </div>
+      </div>
+    `;
+    const checkbox = div.querySelector('input[type="checkbox"]');
+    checkbox.addEventListener("change", () => toggleBuiltinKbDoc(doc.doc_id, checkbox.checked));
+    docsEl.appendChild(div);
+  });
+}
+
+function fileIcon(fileType) {
+  const ft = (fileType || "").toLowerCase();
+  if (ft === "pdf") return "📄";
+  if (ft === "doc" || ft === "docx") return "📝";
+  if (ft === "md" || ft === "markdown") return "📑";
+  if (ft === "txt") return "📃";
+  if (ft === "html") return "🌐";
+  return "📄";
+}
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function toggleBuiltinKbDoc(docId, checked) {
+  if (checked) {
+    builtinKbState.selectedDocIds.add(docId);
+  } else {
+    builtinKbState.selectedDocIds.delete(docId);
+  }
+  updateBuiltinKbSelectedCount();
+}
+
+function updateBuiltinKbSelectedCount() {
+  const countEl = document.getElementById("builtin-kb-selected-count");
+  const importBtn = document.getElementById("builtin-kb-import");
+  if (countEl) countEl.textContent = `已选 ${builtinKbState.selectedDocIds.size} 个`;
+  if (importBtn) importBtn.disabled = builtinKbState.selectedDocIds.size === 0;
+}
+
+function builtinKbSelectAll() {
+  if (!builtinKbState.docs.length) return;
+  builtinKbState.docs.forEach((d) => builtinKbState.selectedDocIds.add(d.doc_id));
+  document.querySelectorAll('#builtin-kb-docs input[type="checkbox"]').forEach((cb) => {
+    cb.checked = true;
+  });
+  updateBuiltinKbSelectedCount();
+}
+
+function builtinKbSelectNone() {
+  builtinKbState.selectedDocIds.clear();
+  document.querySelectorAll('#builtin-kb-docs input[type="checkbox"]').forEach((cb) => {
+    cb.checked = false;
+  });
+  updateBuiltinKbSelectedCount();
+}
+
+async function importBuiltinKb() {
+  if (!builtinKbState.selectedKbId || builtinKbState.selectedDocIds.size === 0) {
+    showToast("请先选择知识库和文档", true);
+    return;
+  }
+  const scopeType = document.getElementById("builtin-kb-scope-type").value;
+  const scopeId = document.getElementById("builtin-kb-scope-id").value.trim();
+  const chunkSize = parseInt(document.getElementById("builtin-kb-chunk-size").value, 10) || 500;
+  const chunkOverlap = parseInt(document.getElementById("builtin-kb-chunk-overlap").value, 10) || 50;
+  const refine = document.getElementById("builtin-kb-refine").checked;
+  if (!scopeType) {
+    showToast("请选择 Scope 类型", true);
+    return;
+  }
+
+  const btn = document.getElementById("builtin-kb-import");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "导入中…";
+  const progressEl = document.getElementById("builtin-kb-progress");
+  progressEl.classList.remove("hidden");
+  progressEl.classList.remove("error");
+  progressEl.innerHTML = `<p class="muted">正在导入 ${builtinKbState.selectedDocIds.size} 个文档…</p>`;
+
+  try {
+    const payload = {
+      kb_id: builtinKbState.selectedKbId,
+      doc_ids: Array.from(builtinKbState.selectedDocIds),
+      scope_type: scopeType,
+      scope_id: scopeId,
+      refine,
+      chunk_size: chunkSize,
+      chunk_overlap: chunkOverlap,
+    };
+    const result = await bridge.apiPost("builtin_kb/import", payload);
+    const success = result.success || 0;
+    const total = result.total || 0;
+    const failed = result.failed || 0;
+    let html = `<p>✅ 导入完成：<strong>${success}/${total}</strong> 个文档成功</p>`;
+    if (Array.isArray(result.results)) {
+      const failedItems = result.results.filter((r) => !r.ok);
+      if (failedItems.length) {
+        html += '<div class="import-failed-list"><strong>失败列表：</strong><ul>';
+        failedItems.forEach((r) => {
+          const name = r.doc_name || r.doc_id;
+          html += `<li>${escapeHtml(name)}: ${escapeHtml(r.error || "未知错误")}</li>`;
+        });
+        html += "</ul></div>";
+      }
+    }
+    progressEl.innerHTML = html;
+    showToast(`内置 KB 导入完成：${success}/${total} 成功`);
+    if (success > 0) {
+      await refreshAll();
+    }
+  } catch (e) {
+    progressEl.classList.add("error");
+    progressEl.innerHTML = `<p>❌ 导入失败：${escapeHtml(e.message || String(e))}</p>`;
+    showToast(`导入失败：${e.message || e}`, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+function bindBuiltinKbEvents() {
+  document.getElementById("btn-builtin-kb").addEventListener("click", openBuiltinKbModal);
+  document
+    .querySelectorAll("#builtin-kb-modal .modal-close, #builtin-kb-modal .modal-backdrop")
+    .forEach((el) => {
+      el.addEventListener("click", closeBuiltinKbModal);
+    });
+  document.getElementById("builtin-kb-cancel").addEventListener("click", closeBuiltinKbModal);
+  document.getElementById("builtin-kb-select-all").addEventListener("click", builtinKbSelectAll);
+  document.getElementById("builtin-kb-select-none").addEventListener("click", builtinKbSelectNone);
+  document.getElementById("builtin-kb-import").addEventListener("click", importBuiltinKb);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeBuiltinKbModal();
+  });
+}

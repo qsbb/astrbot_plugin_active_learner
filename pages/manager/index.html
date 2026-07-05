@@ -13,6 +13,7 @@
       <div class="actions">
         <button id="btn-refresh" type="button" title="刷新">↻ 刷新</button>
         <button id="btn-import" type="button" title="导入">⬆ 导入</button>
+        <button id="btn-builtin-kb" type="button" title="从 AstrBot 内置知识库导入">📚 内置知识库</button>
         <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
         <button id="btn-config" type="button" title="编辑配置文件">📋 配置</button>
         <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
@@ -382,6 +383,75 @@
 
         <div id="import-result" class="import-result hidden"></div>
       </div>
+    </div>
+  </div>
+
+  <div id="builtin-kb-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card modal-card-wide">
+      <header class="modal-header">
+        <h2>📚 从内置知识库导入</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="config-intro">读取 AstrBot 内置知识库的文档，挑选后由 LLM 精炼为记忆条目入库。</p>
+        <div id="builtin-kb-error" class="error-banner hidden"></div>
+
+        <div class="builtin-kb-layout">
+          <div class="builtin-kb-left">
+            <h3>知识库</h3>
+            <div id="builtin-kb-list" class="builtin-kb-list">加载中…</div>
+          </div>
+
+          <div class="builtin-kb-right">
+            <div class="builtin-kb-right-header">
+              <h3 id="builtin-kb-docs-title">文档列表</h3>
+              <div class="builtin-kb-bulk">
+                <button type="button" id="builtin-kb-select-all">全选</button>
+                <button type="button" id="builtin-kb-select-none">清空</button>
+                <span id="builtin-kb-selected-count" class="muted">已选 0 个</span>
+              </div>
+            </div>
+            <div id="builtin-kb-docs" class="builtin-kb-docs">
+              <p class="muted">请先在左侧选择一个知识库</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="scope-row">
+          <label class="control">
+            <span>Scope 类型 *</span>
+            <select id="builtin-kb-scope-type">
+              <option value="global">global（全局）</option>
+              <option value="private">private（私聊）</option>
+              <option value="group">group（群聊）</option>
+            </select>
+          </label>
+          <label class="control">
+            <span>Scope ID</span>
+            <input type="text" id="builtin-kb-scope-id" placeholder="global 时留空" />
+          </label>
+        </div>
+        <div class="scope-row">
+          <label class="control">
+            <span>分块大小</span>
+            <input type="number" id="builtin-kb-chunk-size" value="500" min="100" max="5000" />
+          </label>
+          <label class="control">
+            <span>重叠</span>
+            <input type="number" id="builtin-kb-chunk-overlap" value="50" min="0" max="500" />
+          </label>
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" id="builtin-kb-refine" checked />
+          <span>LLM 精炼后入库（每个文档所有 chunks 合并后重新分块 + 精炼）</span>
+        </label>
+        <div id="builtin-kb-progress" class="import-result hidden"></div>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="builtin-kb-cancel">取消</button>
+        <button type="button" id="builtin-kb-import" class="primary" disabled>导入选中文件</button>
+      </footer>
     </div>
   </div>
 

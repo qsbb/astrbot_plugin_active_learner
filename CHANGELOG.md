@@ -2,6 +2,31 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.5.0] - 2026-07-06
+
+### 新增
+
+- **从 AstrBot 内置知识库批量导入**：Dashboard 顶部新增「📚 内置知识库」按钮，打开模态框：
+  - 左侧显示所有知识库（KB）列表，含名称、描述、文档数
+  - 选中后右侧显示该 KB 的文档列表（可滚动），每项含文件类型图标、chunk 数量、文件大小、创建时间
+  - 多选复选框 + 全选/清空按钮 + 已选数量计数
+  - 选择 Scope + 分块大小 + 重叠 + 是否精炼后批量导入
+  - 每个文档的所有 chunks 合并为一段文本 → 重新按用户配置分块 → 复用 `_import_chunks_batch_data` 走「精炼 + 嵌入 + 入库」流程
+  - 失败的文档单独列出，不阻塞其他文档导入
+- **3 个新 Web API**：
+  - `GET /builtin_kb/list` — 列出所有内置 KB
+  - `GET /builtin_kb/<kb_id>/documents` — 列出某 KB 内的文档
+  - `POST /builtin_kb/import` — 批量导入选中文档
+
+### 重构
+
+- 拆分 `_import_chunks_batch` 为 `_import_chunks_batch_data`（返回 dict）+ 包装层（返回 json_response），让内置 KB 导入可直接复用核心入库逻辑而不需要解析 JSON 响应
+
+### 降级策略
+
+- `kb_manager` 不可用（旧版 AstrBot）→ 返回 501 + 友好错误提示
+- `vec_db.document_storage` 不可用 → 自动降级直接读 SQLite `<kb_id>/doc.db`
+
 ## [2.4.12] - 2026-07-06
 
 ### 修复
