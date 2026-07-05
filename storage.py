@@ -115,11 +115,12 @@ def _column_exists(conn, table: str, column: str) -> bool:
 def _migrate_schema(conn) -> int:
     """执行版本化迁移。返回当前 schema 版本。"""
     import time as _time
-    # 检查 schema_version 表是否有记录
+    # 检查 schema_version 表是否有记录。MAX(version) 在空表上返回 NULL，需显式处理。
     try:
         cur = conn.execute("SELECT MAX(version) AS v FROM schema_version")
         row = cur.fetchone()
-        current = row[0] if row else 0
+        val = row[0] if row else None
+        current = val if val is not None else 0
     except Exception:
         current = 0
 
