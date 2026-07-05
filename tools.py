@@ -80,10 +80,6 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         }
     )
 
-    def __init__(self, plugin):
-        super().__init__()
-        object.__setattr__(self, "_plugin", plugin)
-
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         topic = kwargs.get("topic", "").strip()
         query = kwargs.get("query", topic).strip()
@@ -185,10 +181,6 @@ class RecallMemoryTool(FunctionTool):  # type: ignore[misc]
         }
     )
 
-    def __init__(self, plugin):
-        super().__init__()
-        object.__setattr__(self, "_plugin", plugin)
-
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         query = kwargs.get("query", "").strip()
         if not query:
@@ -245,10 +237,6 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
             "required": ["topic", "claim"],
         }
     )
-
-    def __init__(self, plugin):
-        super().__init__()
-        object.__setattr__(self, "_plugin", plugin)
 
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         topic = kwargs.get("topic", "").strip()
@@ -326,10 +314,6 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
             "required": ["keyword"],
         }
     )
-
-    def __init__(self, plugin):
-        super().__init__()
-        object.__setattr__(self, "_plugin", plugin)
 
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         keyword = kwargs.get("keyword", "").strip()
@@ -432,13 +416,21 @@ def _format_bili_results(results: list[dict], fallback: bool = False) -> str:
 
 def create_tools(plugin) -> list:
     """根据配置创建工具列表。"""
-    tools = [
-        SearchAndLearnTool(plugin),
-        RecallMemoryTool(plugin),
-        VerifyKnowledgeTool(plugin),
+    tool_classes = [
+        SearchAndLearnTool,
+        RecallMemoryTool,
+        VerifyKnowledgeTool,
     ]
     # B 站工具按配置启用
     enable_bili = bool(plugin.config.get("enable_bilibili", False))
     if enable_bili:
-        tools.append(SearchBilibiliTool(plugin))
+        tool_classes.append(SearchBilibiliTool)
+
+    # pydantic v2 dataclass 会覆盖自定义 __init__，所以 plugin 引用
+    # 通过 object.__setattr__ 在实例化后注入，绕过字段校验。
+    tools = []
+    for cls in tool_classes:
+        tool = cls()
+        object.__setattr__(tool, "_plugin", plugin)
+        tools.append(tool)
     return tools
