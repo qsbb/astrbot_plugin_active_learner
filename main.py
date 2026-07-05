@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.1",
+    "2.6.2",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -1696,7 +1696,7 @@ class ActiveLearnerPlugin(Star):
             "file_type": d.file_type,
             "chunk_count": d.chunk_count,
             "file_size": d.file_size,
-            "created_at": float(d.created_at) if d.created_at else 0,
+            "created_at": float(d.created_at.timestamp()) if d.created_at else 0,
         } for d in docs]
         return json_response({
             "items": items,
