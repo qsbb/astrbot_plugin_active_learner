@@ -286,15 +286,12 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
-        # 3. 主动学习提示
-        is_learn_trigger = False
+        # 3. 主动学习提示（v2.4.6：去掉正则门槛，无结果就提示，让 LLM 自主判断是否搜索）
         if self._enable_active_learn_hint and not hits:
-            is_learn_trigger = any(re.search(p, msg) for p in ACTIVE_LEARN_PATTERNS)
-            if is_learn_trigger:
-                parts.append(
-                    "[学习提示] 此问题记忆库暂无答案。"
-                    "如需学习该知识，可调用 search_and_learn 工具搜索并存储。"
-                )
+            parts.append(
+                "[学习提示] 记忆库无相关内容。如果你不确定如何回答，"
+                "可调用 search_and_learn 工具搜索并学习。"
+            )
 
         # 4. 注入
         if not parts:

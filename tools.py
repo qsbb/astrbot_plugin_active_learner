@@ -60,9 +60,9 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
 
     name: str = "search_and_learn"
     description: str = (
-        "搜索网络学习新知识并记忆。遇到不确定的问题时直接调用本工具，"
-        "无需在回复中预告\"让我查查看\"、\"我搜一下\"等话术："
+        "搜索网络学习新知识并记忆。当用户提及你不熟悉的话题、或你不确定如何回答时直接调用："
         "搜索多来源、总结成简明知识、存入记忆库供日后检索。"
+        "无需预告\"让我查查看\"等话术，直接调用即可。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
