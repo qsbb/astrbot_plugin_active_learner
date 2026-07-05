@@ -254,6 +254,12 @@ class ActiveLearnerPlugin(Star):
         if not parts:
             return
 
+        # 行为规范（有内容注入时附带，约束 LLM 不要预告工具调用）
+        parts.append(
+            "[行为规范] 有记忆就直接答；需调用工具时直接调用，"
+            "不要在回复里预告\"让我查查看\"、\"我搜一下\"、\"让我想想\"等话术。"
+        )
+
         injection = "\n".join(parts)
         # 标签汇总，让日志一眼看出注入了什么
         tags = []

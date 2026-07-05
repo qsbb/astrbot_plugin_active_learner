@@ -60,8 +60,9 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
 
     name: str = "search_and_learn"
     description: str = (
-        "搜索网络学习新知识并记忆。当遇到你不确定或不知道的问题时调用："
-        "先搜索多个来源，再总结成简明知识，最后存入记忆库供日后检索。"
+        "搜索网络学习新知识并记忆。遇到不确定的问题时直接调用本工具，"
+        "无需在回复中预告\"让我查查看\"、\"我搜一下\"等话术："
+        "搜索多来源、总结成简明知识、存入记忆库供日后检索。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -179,8 +180,9 @@ class RecallMemoryTool(FunctionTool):  # type: ignore[misc]
 
     name: str = "recall_memory"
     description: str = (
-        "从记忆库检索已学习的知识。当用户问到之前讨论过或学习过的话题时使用。"
-        "如果检索到相关记忆，请基于记忆内容回答；如果未检索到，可以考虑调用 search_and_learn。"
+        "从记忆库检索已学习的知识。用户问到之前讨论过或学习过的话题时直接调用。"
+        "检索到记忆就基于记忆回答，不要说\"让我回忆一下\"等话术；"
+        "未检索到可考虑调用 search_and_learn。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -234,8 +236,8 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
     name: str = "verify_knowledge"
     description: str = (
         "验证某条知识的准确性。通过多源搜索 + LLM 自辩论 + 交叉验证来核实。"
-        "当用户质疑某条信息、或你需要确认准确性时使用。"
-        "验证后会自动更新记忆库的置信度并保留历史版本。"
+        "用户质疑某条信息或需要确认准确性时直接调用。"
+        "验证后自动更新记忆库置信度并保留历史版本。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -313,8 +315,8 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
     name: str = "search_bilibili"
     description: str = (
         "搜索 Bilibili 视频。返回标题、UP主、简介、链接。"
-        "适用于用户想看视频、找教程、了解某主题的视频内容时。"
-        "如果不可用会自动回退到普通网页搜索 site:bilibili.com。"
+        "用户想看视频、找教程、了解某主题的视频内容时直接调用。"
+        "不可用时自动回退到普通网页搜索 site:bilibili.com。"
     )
     parameters: dict = Field(
         default_factory=lambda: {

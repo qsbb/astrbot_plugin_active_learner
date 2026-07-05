@@ -1,7 +1,7 @@
 name: astrbot_plugin_active_learner
 display_name: 主动学习记忆
 desc: 自动检索注入上下文、主动多源学习新知识、按用户/群聊双层隔离的 SQLite 记忆库、质疑时多源交叉验证与版本化
-version: 2.4.2
+version: 2.4.3
 author: AstrBotUser
 repo: https://github.com/qsbb/astrbot_plugin_active_learner
 tags:
