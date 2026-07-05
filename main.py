@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.4",
+    "2.6.5.1",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -294,14 +294,14 @@ class ActiveLearnerPlugin(Star):
 
         if parts:
             parts.append("（参考即可，不要照搬；如发现错误请指出，可调用 verify_knowledge 验证）")
-            # v2.4.0：References footer 内嵌（fallback 路径，on_llm_response hook 不可用时也能看到引用）
+            # v2.4.0：References 仅记录到日志，不注入到 LLM 上下文（否则 LLM 会把它输出到回复中）
             if not _ON_LLM_RESPONSE_AVAILABLE and hits:
-                refs_lines = ["📚 参考资料:"]
-                for h in hits:
-                    e = h.entry
-                    v_tag = "已验证" if e.verified else "待验证"
-                    refs_lines.append(f"- [{e.topic}] 置信度 {e.confidence:.0%} ({v_tag})")
-                parts.append("\n".join(refs_lines))
+                logger.info(
+                    "注入记忆参考: " + " | ".join(
+                        f"[{h.entry.id}] {h.entry.topic} ({h.entry.confidence:.0%})"
+                        for h in hits
+                    )
+                )
 
         # 2. 质疑检测
         is_challenge = any(re.search(p, msg) for p in CHALLENGE_PATTERNS)
