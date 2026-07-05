@@ -9,3 +9,5 @@ venv/
 *.db
 memory.db
 memory_export_*.json
+.trae/
+COMMIT_MSG_TMP

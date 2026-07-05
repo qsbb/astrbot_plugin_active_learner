@@ -19,6 +19,13 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
 
+try:
+    from astrbot.api.web import error_response, file_response, json_response, request
+    _WEB_AVAILABLE = True
+except ImportError:  # AstrBot < v4.26 没有 Plugin Pages 支持
+    _WEB_AVAILABLE = False
+    error_response = file_response = json_response = request = None  # type: ignore
+
 from .bili_source import BiliSource
 from .models import Scope
 from .searcher import WebSearcher
@@ -27,12 +34,14 @@ from .triggers import ACTIVE_LEARN_PATTERNS, CHALLENGE_PATTERNS
 from .tools import create_tools
 from .verifier import Verifier
 
+PLUGIN_NAME = "astrbot_plugin_active_learner"
+
 
 @register(
     "astrbot_plugin_active_learner",
     "AstrBotUser",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.0.0",
+    "2.1.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -94,6 +103,16 @@ class ActiveLearnerPlugin(Star):
             f"bili={'on' if self.bili_source.is_available() else 'off'} | "
             f"db={db_path}"
         )
+
+        # 注册 Dashboard 管理页面后端 API（AstrBot v4.26+）
+        if _WEB_AVAILABLE:
+            try:
+                self._register_web_apis(context)
+                logger.info("已注册 Dashboard 管理页面 API")
+            except Exception as e:
+                logger.warning(f"Web API 注册失败，Dashboard 页面将不可用: {e}")
+        else:
+            logger.info("当前 AstrBot 版本不支持 Plugin Pages，跳过 Dashboard 页面注册")
 
     async def terminate(self):
         try:
@@ -367,3 +386,175 @@ class ActiveLearnerPlugin(Star):
             lines.append(f"   {v.content[:100]}...")
             lines.append("")
         yield event.plain_result("\n".join(lines))
+
+    # ---------- Dashboard 管理页面后端 API ----------
+
+    def _register_web_apis(self, context: Context) -> None:
+        """注册 8 个 web API 路由供 Dashboard 页面调用。"""
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/stats", self._web_stats, ["GET"], "记忆库统计"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/scopes", self._web_scopes, ["GET"], "列出所有 scope"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/memories", self._web_memories, ["GET"], "记忆列表（分页+搜索）"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/memory/<entry_id>",
+            self._web_memory_detail, ["GET"], "记忆详情",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/memory/<entry_id>/versions",
+            self._web_memory_versions, ["GET"], "版本历史",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/memory/<entry_id>/forget",
+            self._web_memory_forget, ["POST"], "软删除记忆",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/memory/<entry_id>/verify",
+            self._web_memory_verify, ["POST"], "触发验证",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/export", self._web_export, ["GET"], "导出 JSON"
+        )
+
+    @staticmethod
+    def _scope_from_query():
+        """从 query 参数构造 Scope，缺失时返回 None（表示全库视图）。"""
+        st = request.query.get("scope_type")
+        sid = request.query.get("scope_id")
+        if not st or not sid:
+            return None
+        return Scope(type=st, id=sid)
+
+    async def _web_stats(self):
+        scope = self._scope_from_query()
+        if scope is None:
+            data = self.store.global_stats()
+        else:
+            data = self.store.stats(scope)
+        return json_response(data)
+
+    async def _web_scopes(self):
+        return json_response({"scopes": self.store.list_scopes()})
+
+    async def _web_memories(self):
+        page = request.query.get("page", 1, type=int)
+        per_page = request.query.get("per_page", 20, type=int)
+        per_page = max(1, min(per_page, 100))
+        keyword = request.query.get("keyword") or None
+        scope = self._scope_from_query()
+        if scope is None:
+            entries, total, total_pages = self.store.list_all_memories(
+                page=page, per_page=per_page, keyword=keyword
+            )
+        else:
+            entries, total, total_pages = self.store.list_memories(
+                scope, page=page, per_page=per_page
+            )
+        return json_response({
+            "items": [e.to_dict() for e in entries],
+            "total": total,
+            "total_pages": total_pages,
+            "page": page,
+            "per_page": per_page,
+        })
+
+    async def _web_memory_detail(self, entry_id: str):
+        entry = self.store.get_entry_by_id(entry_id)
+        if entry is None:
+            return error_response("memory not found", status_code=404)
+        return json_response(entry.to_dict())
+
+    async def _web_memory_versions(self, entry_id: str):
+        versions = self.store.list_versions(entry_id)
+        return json_response({"items": [v.to_dict() for v in versions]})
+
+    async def _web_memory_forget(self, entry_id: str):
+        entry = self.store.get_entry_by_id(entry_id)
+        if entry is None:
+            return error_response("memory not found", status_code=404)
+        scope = Scope(type=entry.scope_type, id=entry.scope_id)
+        ok, _ = self.store.forget(scope, entry.topic)
+        if not ok:
+            return error_response("forget failed", status_code=500)
+        return json_response({"ok": True})
+
+    async def _web_memory_verify(self, entry_id: str):
+        entry = self.store.get_entry_by_id(entry_id)
+        if entry is None:
+            return error_response("memory not found", status_code=404)
+        payload = await request.json(default={}) or {}
+        provider_id = (payload.get("provider_id") or "").strip()
+        if not provider_id:
+            provider_id = self._resolve_default_provider_id()
+        if not provider_id:
+            return error_response(
+                "无法确定 LLM provider，请在请求体中指定 provider_id",
+                status_code=400,
+            )
+        try:
+            result = await self.verifier.run(entry, provider_id)
+        except Exception as e:
+            return error_response(f"验证失败: {e}", status_code=500)
+        return json_response({
+            "verdict": result.verdict,
+            "confidence": result.confidence,
+            "content": result.content,
+            "reasoning": result.reasoning,
+            "sources_count": result.sources_count,
+            "sources_consistent": result.sources_consistent,
+            "text": result.to_text(),
+        })
+
+    async def _web_export(self):
+        scope = self._scope_from_query()
+        if scope is None:
+            entries, _, _ = self.store.list_all_memories(page=1, per_page=10 ** 9)
+            data = [e.to_dict() for e in entries]
+            suffix = "all"
+        else:
+            data = self.store.export_scope(scope)
+            suffix = f"{scope.type}_{scope.id}"
+        export_path = StarTools.get_data_dir() / f"memory_export_{suffix}.json"
+        try:
+            with open(export_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            return error_response(f"导出失败: {e}", status_code=500)
+        return file_response(
+            export_path,
+            filename=f"memory_export_{suffix}.json",
+            content_type="application/json",
+        )
+
+    def _resolve_default_provider_id(self) -> str:
+        """尝试从 context 拿默认 provider id，拿不到返回空串。"""
+        for method_name in (
+            "get_using_provider_id",
+            "get_using_provider",
+            "get_default_provider_id",
+        ):
+            method = getattr(self.context, method_name, None)
+            if not callable(method) or asyncio.iscoroutinefunction(method):
+                continue
+            try:
+                result = method()
+            except Exception:
+                continue
+            if isinstance(result, str) and result:
+                return result
+            pid = getattr(result, "id", None) or getattr(result, "name", None)
+            if pid:
+                return str(pid)
+        # 兜底：从 provider_manager.providers 取第一个
+        pm = getattr(self.context, "provider_manager", None)
+        if pm is not None:
+            providers = getattr(pm, "providers", None) or []
+            for p in providers:
+                pid = getattr(p, "id", None) or getattr(p, "name", None)
+                if pid:
+                    return str(pid)
+        return ""

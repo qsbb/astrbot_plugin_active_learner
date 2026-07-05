@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>主动学习记忆 · 管理面板</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>🧠 主动学习记忆</h1>
+      <div class="actions">
+        <button id="btn-refresh" type="button" title="刷新">↻ 刷新</button>
+        <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
+      </div>
+    </div>
+    <p class="subtitle">跨 scope 浏览、检索、验证、删除记忆条目</p>
+  </header>
+
+  <main>
+    <section class="controls">
+      <label class="control">
+        <span>作用域</span>
+        <select id="scope-select">
+          <option value="">全部作用域</option>
+        </select>
+      </label>
+      <form id="search-form" class="control search-control">
+        <input type="search" id="search-input" placeholder="按主题或内容搜索…" />
+        <button type="submit">搜索</button>
+        <button type="button" id="search-clear">清空</button>
+      </form>
+    </section>
+
+    <section id="stats" class="stats-grid">
+      <div class="stat-card"><div class="stat-label">总条数</div><div class="stat-value" data-stat="total">—</div></div>
+      <div class="stat-card"><div class="stat-label">已验证</div><div class="stat-value" data-stat="verified">—</div></div>
+      <div class="stat-card"><div class="stat-label">被质疑条数</div><div class="stat-value" data-stat="challenged">—</div></div>
+      <div class="stat-card"><div class="stat-label">质疑总次数</div><div class="stat-value" data-stat="challenged_total">—</div></div>
+      <div class="stat-card"><div class="stat-label">平均置信度</div><div class="stat-value" data-stat="avg_confidence">—</div></div>
+      <div class="stat-card"><div class="stat-label">总访问次数</div><div class="stat-value" data-stat="access_total">—</div></div>
+    </section>
+
+    <section class="table-wrap">
+      <table class="memory-table">
+        <thead>
+          <tr>
+            <th>主题</th>
+            <th>内容预览</th>
+            <th>作用域</th>
+            <th>置信度</th>
+            <th>状态</th>
+            <th>更新时间</th>
+            <th class="col-actions">操作</th>
+          </tr>
+        </thead>
+        <tbody id="memory-tbody">
+          <tr class="empty-row"><td colspan="7">加载中…</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="pagination">
+      <button id="page-prev" type="button">‹ 上一页</button>
+      <span id="page-info">—</span>
+      <button id="page-next" type="button">下一页 ›</button>
+    </section>
+  </main>
+
+  <div id="detail-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2 id="detail-title">详情</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div id="detail-body" class="modal-body"></div>
+      <footer class="modal-footer">
+        <button type="button" id="detail-verify">🔍 触发验证</button>
+        <button type="button" id="detail-forget" class="danger">🗑 删除</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

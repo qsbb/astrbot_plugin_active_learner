@@ -461,3 +461,91 @@ class MemoryStore:
             self._max_entries = max_entries
         if min_confidence is not None:
             self._min_confidence = min_confidence
+
+    # ---------- Dashboard 用：跨 scope 视图 ----------
+
+    def list_scopes(self) -> list[dict]:
+        """列出所有非空 (scope_type, scope_id) 组合，按记忆数降序。"""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT scope_type, scope_id, COUNT(*) AS count
+                   FROM memories
+                   GROUP BY scope_type, scope_id
+                   ORDER BY count DESC, scope_type ASC, scope_id ASC""",
+            ).fetchall()
+            return [
+                {"scope_type": r["scope_type"], "scope_id": r["scope_id"], "count": r["count"]}
+                for r in rows
+            ]
+
+    def global_stats(self) -> dict:
+        """跨所有 scope 的汇总统计。"""
+        with self._lock:
+            cur = self._conn.execute(
+                """SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END) AS verified,
+                    SUM(CASE WHEN challenge_count > 0 THEN 1 ELSE 0 END) AS challenged,
+                    SUM(challenge_count) AS challenged_total,
+                    AVG(confidence) AS avg_conf,
+                    SUM(access_count) AS access_total
+                   FROM memories""",
+            ).fetchone()
+            if not cur or cur["total"] == 0:
+                return {
+                    "total": 0, "verified": 0, "challenged": 0,
+                    "challenged_total": 0, "avg_confidence": 0.0,
+                    "access_total": 0, "scope_type": None, "scope_id": None,
+                }
+            return {
+                "total": cur["total"],
+                "verified": cur["verified"] or 0,
+                "challenged": cur["challenged"] or 0,
+                "challenged_total": cur["challenged_total"] or 0,
+                "avg_confidence": float(cur["avg_conf"] or 0.0),
+                "access_total": cur["access_total"] or 0,
+                "scope_type": None,
+                "scope_id": None,
+            }
+
+    def list_all_memories(
+        self,
+        page: int = 1,
+        per_page: int = 20,
+        keyword: Optional[str] = None,
+    ) -> tuple[list[MemoryEntry], int, int]:
+        """跨所有 scope 分页列出记忆。返回 (entries, total, total_pages)。
+
+        keyword 非空时按 topic/content LIKE 过滤。
+        """
+        with self._lock:
+            if keyword:
+                like = f"%{keyword}%"
+                count_row = self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM memories WHERE topic LIKE ? OR content LIKE ?",
+                    (like, like),
+                ).fetchone()
+                total = count_row["c"] if count_row else 0
+                total_pages = max(1, (total + per_page - 1) // per_page)
+                page = max(1, min(page, total_pages))
+                offset = (page - 1) * per_page
+                rows = self._conn.execute(
+                    f"""SELECT {SELECT_COLS} FROM memories
+                        WHERE topic LIKE ? OR content LIKE ?
+                        ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                    (like, like, per_page, offset),
+                ).fetchall()
+            else:
+                count_row = self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM memories",
+                ).fetchone()
+                total = count_row["c"] if count_row else 0
+                total_pages = max(1, (total + per_page - 1) // per_page)
+                page = max(1, min(page, total_pages))
+                offset = (page - 1) * per_page
+                rows = self._conn.execute(
+                    f"""SELECT {SELECT_COLS} FROM memories
+                        ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                    (per_page, offset),
+                ).fetchall()
+            return [MemoryEntry.from_row(r) for r in rows], total, total_pages
