@@ -2,6 +2,49 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.0] - 2026-07-06
+
+### 新增
+
+- **向量混合检索**：FTS5 bm25 + 余弦相似度，权重 0.4/0.6，自动 min-max 归一化
+  - 新模块 `embedder.py`：封装 AstrBot `EmbeddingProvider`，自动取第一个可用 provider（零配置）
+  - 单条查询带 LRU 缓存（256 条），scope → numpy 矩阵内存缓存，写时失效
+  - 无 provider 时自动降级为纯 FTS5
+- **跨 scope 回退检索**：private → group → global，带 1.0/0.8/0.6 分数惩罚
+- **软衰减遗忘**：记忆分数随访问时间指数衰减（半衰期默认 30 天），查询时动态计算，无需后台任务
+- **文档分块**：PDF / Word / TXT / Markdown 长文档自动分块入库，每个 chunk 独立 ID
+  - 新模块 `chunker.py`：`chunk_text` / `chunk_markdown` / `chunk_pdf` / `chunk_docx`
+  - 滑动窗口 + overlap（默认 500 字符，重叠 50）
+  - Markdown 优先按 `##` 拆 section，保留标题作为 chunk 前缀
+  - `make_chunk_id(scope, parent_doc_id, chunk_idx)` 隔离 chunk ID，避免折叠 bug
+- **引用溯源**：LLM 回答末尾自动追加 📚 参考资料 footer
+  - 优先用 `on_llm_response` hook（如 AstrBot 支持），否则在 `on_llm_request` 注入时内嵌
+  - 注入文本格式改为 `[记忆#{id}] topic（tag）: content`
+- **`/memory refresh <topic>`** 命令：刷新某条记忆的访问时间，恢复衰减分数
+- 3 个新导入 handler：`import_pdf` / `import_docx` / `import_txt`（base64 上传 + 分块 + 批量精炼 + 批量嵌入）
+- 配置加 4 字段：`embedding_enabled`、`hybrid_search_weight`、`decay_half_life_days`、`enable_scope_fallback`
+- `refiner.refine_import_batch`：批量精炼，每个 chunk 一次 LLM 调用，单 chunk 失败不影响其他
+
+### 变更
+
+- 版本号 `2.3.0 → 2.4.0`
+- `on_llm_request` 检索从 `store.search`（纯 FTS5）改为 `store.search_hybrid`（FTS5 + 向量 + 衰减 + scope 回退）
+- `_web_import_md` 长文档支持分块：单 chunk 走原路径（向后兼容），多 chunk 走批量路径
+- 数据库 schema 迁移：新增 `schema_version` 表、`memories_embedding` 表、`memories` 表加 `parent_doc_id` / `last_accessed_at` 列
+- 注入日志增加 `last_accessed_at` 更新（用于衰减计算）
+
+### 优化
+
+- 检索线程安全：查询向量在 `storage._lock` 外计算，避免阻塞写入
+- Embedding provider 自动取第一个可用（零配置）
+- 批量嵌入预算 256 条，避免 API 限流
+
+### 依赖
+
+- 新增 `numpy>=1.24.0`（向量计算）
+- 新增 `pypdf>=4.0.0`（PDF 文本提取）
+- 新增 `python-docx>=1.1.0`（Word 文档提取）
+
 ## [2.3.0] - 2026-07-06
 
 ### 新增

@@ -13,8 +13,10 @@ import asyncio
 import io
 import json
 import re
+import uuid
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
@@ -29,7 +31,9 @@ except ImportError:  # AstrBot < v4.26 没有 Plugin Pages 支持
     error_response = file_response = json_response = request = None  # type: ignore
 
 from .bili_source import BiliSource
-from .models import Scope
+from .chunker import chunk_docx, chunk_markdown, chunk_pdf, chunk_text
+from .embedder import Embedder
+from .models import Scope, make_chunk_id
 from .refiner import KnowledgeRefiner
 from .searcher import WebSearcher
 from .settings_store import SettingsStore
@@ -40,12 +44,15 @@ from .verifier import Verifier
 
 PLUGIN_NAME = "astrbot_plugin_active_learner"
 
+# 运行时检测 on_llm_response hook 是否可用（不可用时降级为 on_llm_request 内嵌 References）
+_ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
+
 
 @register(
     "astrbot_plugin_active_learner",
     "AstrBotUser",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.3.0",
+    "2.4.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -97,6 +104,17 @@ class ActiveLearnerPlugin(Star):
             StarTools.get_data_dir() / "active_learner_settings.json"
         )
 
+        # v2.4.0：向量混合检索配置
+        self._embedding_enabled = bool(cfg.get("embedding_enabled", True))
+        self._hybrid_weights = self._parse_hybrid_weights(
+            cfg.get("hybrid_search_weight", "0.4,0.6")
+        )
+        self._decay_half_life_days = float(cfg.get("decay_half_life_days", 30))
+        self._enable_scope_fallback = bool(cfg.get("enable_scope_fallback", True))
+        self.embedder: Optional[Embedder] = (
+            Embedder(self) if self._embedding_enabled else None
+        )
+
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
 
@@ -132,6 +150,17 @@ class ActiveLearnerPlugin(Star):
             pass
         logger.info("ActiveLearner 已卸载，记忆已持久化")
 
+    @staticmethod
+    def _parse_hybrid_weights(s: str) -> tuple[float, float]:
+        """解析 '0.4,0.6' 格式。返回 (fts_weight, vec_weight)。"""
+        try:
+            parts = [float(x.strip()) for x in str(s).split(",")]
+            if len(parts) == 2 and all(0.0 <= p <= 1.0 for p in parts):
+                return parts[0], parts[1]
+        except Exception:
+            pass
+        return 0.4, 0.6
+
     # ---------- 上下文注入 + 质疑检测 + 主动学习提示（合并钩子） ----------
 
     @filter.on_llm_request()
@@ -147,20 +176,47 @@ class ActiveLearnerPlugin(Star):
         scope = Scope.from_event(event)
         parts: list[str] = []
 
-        # 1. 检索记忆
+        # 1. 检索记忆（v2.4.0：混合检索 FTS5 + 向量）
         try:
-            hits = await asyncio.to_thread(self.store.search, scope, msg, 3)
+            query_vec = None
+            if self.embedder is not None:
+                query_vec = await self.embedder.embed_query(msg)
+            hits = await asyncio.to_thread(
+                self.store.search_hybrid,
+                scope, msg, 3,
+                embedder=self.embedder,
+                fts_weight=self._hybrid_weights[0],
+                vec_weight=self._hybrid_weights[1],
+                enable_scope_fallback=self._enable_scope_fallback,
+                decay_half_life_days=self._decay_half_life_days,
+                query_vec=query_vec,
+            )
         except Exception as e:
             logger.debug(f"记忆检索失败: {e}")
             hits = []
 
+        # 把注入的记忆 ID 挂到 event 上，供 on_llm_response footer 使用
+        injected_ids = [h.entry.id for h in hits]
+        try:
+            object.__setattr__(event, "_injected_memory_ids", injected_ids)
+        except Exception:
+            pass
+
         for h in hits:
             entry = h.entry
             tag = "✅已验证" if entry.verified else f"⚠️置信度{entry.confidence:.0%}"
-            parts.append(f"[记忆] {entry.topic}（{tag}）: {entry.content}")
+            parts.append(f"[记忆#{entry.id}] {entry.topic}（{tag}）: {entry.content}")
 
         if parts:
             parts.append("（参考即可，不要照搬；如发现错误请指出，可调用 verify_knowledge 验证）")
+            # v2.4.0：References footer 内嵌（fallback 路径，on_llm_response hook 不可用时也能看到引用）
+            if not _ON_LLM_RESPONSE_AVAILABLE and hits:
+                refs_lines = ["📚 参考资料:"]
+                for h in hits:
+                    e = h.entry
+                    v_tag = "已验证" if e.verified else "待验证"
+                    refs_lines.append(f"- [{e.topic}] 置信度 {e.confidence:.0%} ({v_tag})")
+                parts.append("\n".join(refs_lines))
 
         # 2. 质疑检测
         is_challenge = any(re.search(p, msg) for p in CHALLENGE_PATTERNS)
@@ -210,6 +266,38 @@ class ActiveLearnerPlugin(Star):
                 logger.warning("extra_user_content_parts 不可用，降级用 system_prompt 注入")
         except Exception as e:
             logger.error(f"上下文注入失败: {e}")
+
+    # v2.4.0：on_llm_response hook（仅在 AstrBot 支持时启用）
+    if _ON_LLM_RESPONSE_AVAILABLE:
+
+        @filter.on_llm_response()  # type: ignore[misc]
+        async def on_llm_response(self, event: AstrMessageEvent, response):
+            """LLM 响应后追加 References footer（如果 on_llm_request 注入了记忆）。"""
+            try:
+                injected_ids = getattr(event, "_injected_memory_ids", []) or []
+                if not injected_ids:
+                    return
+                refs_entries = self.store.get_entries_by_ids(injected_ids[:5])
+                if not refs_entries:
+                    return
+                footer_lines = ["", "📚 参考资料:"]
+                for e in refs_entries:
+                    v_tag = "已验证" if e.verified else "待验证"
+                    footer_lines.append(f"- [{e.topic}] 置信度 {e.confidence:.0%} ({v_tag})")
+                footer = "\n".join(footer_lines)
+                completion = getattr(response, "completion_text", None)
+                if completion is not None:
+                    try:
+                        response.completion_text = completion + "\n" + footer
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        response.text = (response.text or "") + "\n" + footer
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"on_llm_response footer 失败: {e}")
 
     # ---------- /memory 指令组 ----------
 
@@ -407,10 +495,27 @@ class ActiveLearnerPlugin(Star):
             lines.append("")
         yield event.plain_result("\n".join(lines))
 
+    @memory_cmd.command("refresh")
+    async def memory_refresh(self, event: AstrMessageEvent, topic: str):
+        """刷新某条记忆的 last_accessed_at，恢复衰减分数。"""
+        scope = Scope.from_event(event)
+        entry = self.store.search_by_topic(scope, topic)
+        if entry is None:
+            hits = self.store.search(scope, topic, top_k=1)
+            entry = hits[0].entry if hits else None
+        if entry is None:
+            yield event.plain_result(f"❌ 未找到关于「{topic}」的记忆")
+            return
+        self.store.update_last_accessed(entry.id)
+        yield event.plain_result(
+            f"🔄 已刷新「{entry.topic}」的访问时间，衰减分数已恢复。\n"
+            f"当前置信度: {entry.confidence:.0%}"
+        )
+
     # ---------- Dashboard 管理页面后端 API ----------
 
     def _register_web_apis(self, context: Context) -> None:
-        """注册 14 个 web API 路由供 Dashboard 页面调用。"""
+        """注册 17 个 web API 路由供 Dashboard 页面调用。"""
         context.register_web_api(
             f"/{PLUGIN_NAME}/stats", self._web_stats, ["GET"], "记忆库统计"
         )
@@ -447,6 +552,15 @@ class ActiveLearnerPlugin(Star):
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/import_zip", self._web_import_zip, ["POST"], "批量导入 ZIP"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/import_pdf", self._web_import_pdf, ["POST"], "导入 PDF"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/import_docx", self._web_import_docx, ["POST"], "导入 DOCX"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/import_txt", self._web_import_txt, ["POST"], "导入 TXT（带分块）"
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/providers", self._web_providers, ["GET"], "列出可用 LLM Provider"
@@ -746,7 +860,10 @@ class ActiveLearnerPlugin(Star):
         return json_response({"ok": True, "entry": entry.to_dict()})
 
     async def _web_import_md(self):
-        """导入单个 Markdown：JSON body {filename?, topic?, content, scope_type, scope_id, refine?}"""
+        """导入单个 Markdown：JSON body {filename?, topic?, content, scope_type, scope_id, refine?, chunk_size?, chunk_overlap?}
+
+        v2.4.0 起支持长文档分块：超过 chunk_size 的 MD 会被拆成多个 chunk 入库。
+        """
         payload = await request.json(default={}) or {}
         content = payload.get("content") or ""
         filename = (payload.get("filename") or "").strip()
@@ -754,6 +871,8 @@ class ActiveLearnerPlugin(Star):
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
         refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
+        chunk_size = int(payload.get("chunk_size", 500))
+        chunk_overlap = int(payload.get("chunk_overlap", 50))
         if not content or not scope_type:
             return error_response("content, scope_type required", status_code=400)
 
@@ -762,30 +881,268 @@ class ActiveLearnerPlugin(Star):
             topic = extracted_topic or (filename.rsplit(".", 1)[0] if filename else "未命名")
 
         scope = Scope(type=scope_type, id=scope_id)
+
+        # v2.4.0：长文档分块
+        chunks = chunk_markdown(content_clean, max_size=chunk_size, overlap=chunk_overlap)
+        if not chunks:
+            return error_response("MD 内容为空", status_code=400)
+
+        # 单 chunk：走简单路径，保持响应格式向后兼容
+        if len(chunks) == 1:
+            try:
+                final_content = chunks[0]
+                final_keywords = None
+                final_confidence = 0.6
+                base_source = f"MD导入 ({filename})" if filename else "MD导入"
+                source_tag = base_source
+                if refine:
+                    provider_id = await self._resolve_plugin_provider_id()
+                    result = await self.refiner.refine_import(topic, chunks[0], provider_id)
+                    final_content = result.summary
+                    final_keywords = result.keywords
+                    final_confidence = result.confidence
+                    source_tag = f"{base_source}+精炼" if result.refined else f"{base_source}+未精炼"
+                    if not result.refined:
+                        logger.warning(f"导入「{topic}」精炼降级为原内容")
+                entry = self.store.add_or_update(
+                    scope=scope, topic=topic, content=final_content,
+                    keywords=final_keywords, source=source_tag,
+                    sources_detail=None, confidence=final_confidence,
+                )
+            except Exception as e:
+                return error_response(f"导入失败: {e}", status_code=500)
+            logger.info(f"导入 MD: {topic} (scope: {scope}, source: {source_tag})")
+            return json_response({"ok": True, "entry": entry.to_dict()})
+
+        # 多 chunk：走批量路径
+        parent_doc_id = uuid.uuid4().hex[:16]
+        return await self._import_chunks_batch(
+            chunks=chunks,
+            scope=scope,
+            parent_doc_id=parent_doc_id,
+            base_topic=topic,
+            source_label=f"MD导入 ({filename})" if filename else "MD导入",
+            refine=refine,
+        )
+
+    async def _import_chunks_batch(
+        self,
+        chunks: list[str],
+        scope: Scope,
+        parent_doc_id: str,
+        base_topic: str,
+        source_label: str,
+        refine: bool,
+    ) -> "MessageEventResult":
+        """共享的批量 chunk 入库逻辑（PDF/DOCX/TXT/长 MD 共用）。
+
+        - 批量精炼（如有 provider）
+        - 批量嵌入（如有 embedder）
+        - 每个 chunk 用 make_chunk_id 生成独立 ID
+        - 写入后失效向量矩阵缓存
+        """
+        # 批量精炼
+        refine_results = None
+        if refine:
+            provider_id = await self._resolve_plugin_provider_id()
+            if provider_id:
+                try:
+                    refine_results = await self.refiner.refine_import_batch(
+                        topics=[f"{base_topic} #{i+1}" for i in range(len(chunks))],
+                        raw_contents=chunks,
+                        provider_id=provider_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"批量精炼失败，降级为原内容: {e}")
+                    refine_results = None
+
+        # 批量嵌入
+        embed_vecs = None
+        if self.embedder is not None and self.embedder.available:
+            try:
+                embed_vecs = await self.embedder.embed_batch(chunks)
+            except Exception as e:
+                logger.warning(f"批量嵌入失败: {e}")
+                embed_vecs = None
+
+        # 入库
+        results = []
+        success_count = 0
+        for i, chunk in enumerate(chunks):
+            try:
+                chunk_id = make_chunk_id(scope, parent_doc_id, i)
+                topic = f"{base_topic} #{i+1}"
+
+                if refine_results and i < len(refine_results) and refine_results[i].refined:
+                    final_content = refine_results[i].summary
+                    final_keywords = refine_results[i].keywords
+                    final_confidence = refine_results[i].confidence
+                    source_tag = f"{source_label}+精炼"
+                else:
+                    final_content = chunk
+                    final_keywords = None
+                    final_confidence = 0.5
+                    source_tag = source_label
+
+                entry = self.store.add_chunk(
+                    chunk_id=chunk_id, scope=scope, topic=topic,
+                    content=final_content, keywords=final_keywords,
+                    source=source_tag, confidence=final_confidence,
+                    parent_doc_id=parent_doc_id,
+                )
+
+                # 保存向量
+                if embed_vecs and i < len(embed_vecs) and embed_vecs[i]:
+                    try:
+                        self.store.save_embedding(
+                            chunk_id, embed_vecs[i], self.embedder.dim, self.embedder.model_name  # type: ignore[union-attr]
+                        )
+                    except Exception as e:
+                        logger.debug(f"保存向量失败 chunk {i}: {e}")
+
+                success_count += 1
+                results.append({"chunk": i + 1, "topic": topic, "entry_id": entry.id, "ok": True})
+            except Exception as e:
+                results.append({"chunk": i + 1, "ok": False, "error": str(e)})
+
+        # 失效向量矩阵缓存
+        if self.embedder is not None:
+            self.embedder.invalidate_matrix_cache(f"{scope.type}:{scope.id}")
+
+        logger.info(
+            f"导入 {source_label}: {success_count}/{len(chunks)} chunks 成功 "
+            f"(scope: {scope}, refine={'yes' if refine_results else 'no'})"
+        )
+        return json_response({
+            "ok": True,
+            "total": len(chunks),
+            "success": success_count,
+            "failed": len(chunks) - success_count,
+            "parent_doc_id": parent_doc_id,
+            "results": results,
+        })
+
+    async def _web_import_pdf(self):
+        """导入 PDF：JSON body {filename, base64, scope_type, scope_id, refine?, chunk_size?, chunk_overlap?}"""
+        import base64 as _b64
+
+        payload = await request.json(default={}) or {}
+        b64 = payload.get("base64") or ""
+        filename = (payload.get("filename") or "").strip()
+        scope_type = (payload.get("scope_type") or "").strip()
+        scope_id = (payload.get("scope_id") or "").strip()
+        refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
+        chunk_size = int(payload.get("chunk_size", 500))
+        chunk_overlap = int(payload.get("chunk_overlap", 50))
+
+        if not b64 or not scope_type:
+            return error_response("base64, scope_type required", status_code=400)
+
         try:
-            final_content = content_clean
-            final_keywords = None
-            final_confidence = 0.6
-            base_source = f"MD导入 ({filename})" if filename else "MD导入"
-            source_tag = base_source
-            if refine:
-                provider_id = await self._resolve_plugin_provider_id()
-                result = await self.refiner.refine_import(topic, content_clean, provider_id)
-                final_content = result.summary
-                final_keywords = result.keywords
-                final_confidence = result.confidence
-                source_tag = f"{base_source}+精炼" if result.refined else f"{base_source}+未精炼"
-                if not result.refined:
-                    logger.warning(f"导入「{topic}」精炼降级为原内容")
-            entry = self.store.add_or_update(
-                scope=scope, topic=topic, content=final_content,
-                keywords=final_keywords, source=source_tag,
-                sources_detail=None, confidence=final_confidence,
-            )
+            file_bytes = _b64.b64decode(b64)
         except Exception as e:
-            return error_response(f"导入失败: {e}", status_code=500)
-        logger.info(f"导入 MD: {topic} (scope: {scope}, source: {source_tag})")
-        return json_response({"ok": True, "entry": entry.to_dict()})
+            return error_response(f"base64 解码失败: {e}", status_code=400)
+
+        try:
+            chunks = chunk_pdf(file_bytes, max_size=chunk_size, overlap=chunk_overlap)
+        except ImportError as e:
+            return error_response(str(e), status_code=400)
+        except Exception as e:
+            return error_response(f"PDF 解析失败: {e}", status_code=500)
+
+        if not chunks:
+            return error_response("PDF 未提取到任何文本", status_code=400)
+
+        scope = Scope(type=scope_type, id=scope_id)
+        parent_doc_id = uuid.uuid4().hex[:16]
+        base_topic = filename.rsplit(".", 1)[0] if filename else "PDF文档"
+        return await self._import_chunks_batch(
+            chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
+            base_topic=base_topic,
+            source_label=f"PDF导入 ({filename})" if filename else "PDF导入",
+            refine=refine,
+        )
+
+    async def _web_import_docx(self):
+        """导入 DOCX：JSON body {filename, base64, scope_type, scope_id, refine?, chunk_size?, chunk_overlap?}"""
+        import base64 as _b64
+
+        payload = await request.json(default={}) or {}
+        b64 = payload.get("base64") or ""
+        filename = (payload.get("filename") or "").strip()
+        scope_type = (payload.get("scope_type") or "").strip()
+        scope_id = (payload.get("scope_id") or "").strip()
+        refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
+        chunk_size = int(payload.get("chunk_size", 500))
+        chunk_overlap = int(payload.get("chunk_overlap", 50))
+
+        if not b64 or not scope_type:
+            return error_response("base64, scope_type required", status_code=400)
+
+        try:
+            file_bytes = _b64.b64decode(b64)
+        except Exception as e:
+            return error_response(f"base64 解码失败: {e}", status_code=400)
+
+        try:
+            chunks = chunk_docx(file_bytes, max_size=chunk_size, overlap=chunk_overlap)
+        except ImportError as e:
+            return error_response(str(e), status_code=400)
+        except Exception as e:
+            return error_response(f"DOCX 解析失败: {e}", status_code=500)
+
+        if not chunks:
+            return error_response("DOCX 未提取到任何文本", status_code=400)
+
+        scope = Scope(type=scope_type, id=scope_id)
+        parent_doc_id = uuid.uuid4().hex[:16]
+        base_topic = filename.rsplit(".", 1)[0] if filename else "DOCX文档"
+        return await self._import_chunks_batch(
+            chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
+            base_topic=base_topic,
+            source_label=f"DOCX导入 ({filename})" if filename else "DOCX导入",
+            refine=refine,
+        )
+
+    async def _web_import_txt(self):
+        """导入 TXT：JSON body {filename, base64, scope_type, scope_id, refine?, chunk_size?, chunk_overlap?}"""
+        import base64 as _b64
+
+        payload = await request.json(default={}) or {}
+        b64 = payload.get("base64") or ""
+        filename = (payload.get("filename") or "").strip()
+        scope_type = (payload.get("scope_type") or "").strip()
+        scope_id = (payload.get("scope_id") or "").strip()
+        refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
+        chunk_size = int(payload.get("chunk_size", 500))
+        chunk_overlap = int(payload.get("chunk_overlap", 50))
+
+        if not b64 or not scope_type:
+            return error_response("base64, scope_type required", status_code=400)
+
+        try:
+            file_bytes = _b64.b64decode(b64)
+        except Exception as e:
+            return error_response(f"base64 解码失败: {e}", status_code=400)
+
+        try:
+            text = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = file_bytes.decode("gbk", errors="replace")
+
+        chunks = chunk_text(text, max_size=chunk_size, overlap=chunk_overlap)
+        if not chunks:
+            return error_response("TXT 内容为空", status_code=400)
+
+        scope = Scope(type=scope_type, id=scope_id)
+        parent_doc_id = uuid.uuid4().hex[:16]
+        base_topic = filename.rsplit(".", 1)[0] if filename else "TXT文档"
+        return await self._import_chunks_batch(
+            chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
+            base_topic=base_topic,
+            source_label=f"TXT导入 ({filename})" if filename else "TXT导入",
+            refine=refine,
+        )
 
     async def _web_import_zip(self):
         """批量导入 ZIP 中的 .md 文件：JSON body {filename?, base64, scope_type, scope_id, refine?}"""

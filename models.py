@@ -71,6 +71,9 @@ class MemoryEntry:
     created_at: float = 0.0
     updated_at: float = 0.0
     last_challenged_at: float = 0.0
+    # v2.4.0 新增字段
+    parent_doc_id: Optional[str] = None
+    last_accessed_at: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -89,6 +92,8 @@ class MemoryEntry:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "last_challenged_at": self.last_challenged_at,
+            "parent_doc_id": self.parent_doc_id,
+            "last_accessed_at": self.last_accessed_at,
         }
 
     @classmethod
@@ -123,6 +128,8 @@ class MemoryEntry:
             created_at=float(get("created_at") or 0.0),
             updated_at=float(get("updated_at") or 0.0),
             last_challenged_at=float(get("last_challenged_at") or 0.0),
+            parent_doc_id=get("parent_doc_id"),
+            last_accessed_at=float(get("last_accessed_at") or 0.0),
         )
 
 
@@ -183,6 +190,16 @@ def make_memory_id(scope: Scope, topic: str) -> str:
     """
     import hashlib
     raw = f"{scope.type}|{scope.id}|{topic.lower().strip()}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def make_chunk_id(scope: Scope, parent_doc_id: str, chunk_idx: int) -> str:
+    """生成 chunk 专用 ID。
+
+    与 make_memory_id 隔离，避免同一文档的多个 chunk 因共享 topic 而折叠成一行。
+    """
+    import hashlib
+    raw = f"chunk|{scope.type}|{scope.id}|{parent_doc_id}|{chunk_idx}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 

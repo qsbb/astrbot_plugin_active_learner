@@ -115,6 +115,44 @@ class KnowledgeRefiner:
         reply = await self._safe_generate(provider_id, prompt)
         return self._parse_result(reply, fallback_summary=raw_content, topic=topic)
 
+    async def refine_import_batch(
+        self,
+        topics: list[str],
+        raw_contents: list[str],
+        provider_id: str,
+    ) -> list[RefineResult]:
+        """批量精炼。每个 chunk 一次 LLM 调用（顺序执行，避免 provider 限流）。
+
+        单 chunk 失败不影响其他 chunk。无 provider 时整体降级。
+        """
+        if not provider_id:
+            return [
+                RefineResult(
+                    summary=raw,
+                    keywords=[topic] if topic else [],
+                    confidence=0.5,
+                    reasoning="未配置 provider",
+                    refined=False,
+                )
+                for topic, raw in zip(topics, raw_contents)
+            ]
+
+        results: list[RefineResult] = []
+        for topic, raw in zip(topics, raw_contents):
+            try:
+                r = await self.refine_import(topic, raw, provider_id)
+                results.append(r)
+            except Exception as e:
+                logger.warning(f"批量精炼 chunk '{topic}' 失败: {e}")
+                results.append(RefineResult(
+                    summary=raw,
+                    keywords=[topic] if topic else [],
+                    confidence=0.5,
+                    reasoning=f"精炼失败: {e}",
+                    refined=False,
+                ))
+        return results
+
     # ---------- 内部方法 ----------
 
     async def _extract_facts(self, topic: str, search_text: str, provider_id: str) -> str:

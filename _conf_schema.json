@@ -40,5 +40,29 @@
         "type": "string",
         "hint": "留空则按事件默认 Provider。也可在 Dashboard「⚙ 设置」页选择，设置页优先级更高。",
         "default": ""
+    },
+    "embedding_enabled": {
+        "description": "启用向量检索",
+        "type": "bool",
+        "hint": "无可用 Embedding Provider 时自动降级为纯 FTS5。需要先在 AstrBot 中配置 Embedding Provider。",
+        "default": true
+    },
+    "hybrid_search_weight": {
+        "description": "FTS5 与向量分数权重",
+        "type": "string",
+        "hint": "格式 'fts,vec'，例如 '0.4,0.6' 表示 FTS5 占 40%，向量占 60%",
+        "default": "0.4,0.6"
+    },
+    "decay_half_life_days": {
+        "description": "记忆衰减半衰期（天）",
+        "type": "int",
+        "hint": "记忆分数随访问时间衰减，半衰期越短遗忘越快。30 天表示 30 天未访问则分数减半。",
+        "default": 30
+    },
+    "enable_scope_fallback": {
+        "description": "启用跨 scope 回退检索",
+        "type": "bool",
+        "hint": "private scope 命中不足时回退到 group/global，带 0.8/0.6 分数惩罚",
+        "default": true
     }
 }

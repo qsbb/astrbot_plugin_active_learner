@@ -138,6 +138,9 @@
           <button type="button" class="tab-btn active" data-tab="text" role="tab">文本</button>
           <button type="button" class="tab-btn" data-tab="md" role="tab">Markdown</button>
           <button type="button" class="tab-btn" data-tab="zip" role="tab">批量 ZIP</button>
+          <button type="button" class="tab-btn" data-tab="pdf" role="tab">PDF</button>
+          <button type="button" class="tab-btn" data-tab="docx" role="tab">Word</button>
+          <button type="button" class="tab-btn" data-tab="txt" role="tab">TXT</button>
         </div>
 
         <div class="tab-panels">
@@ -194,6 +197,16 @@
                 <input type="text" name="scope_id" placeholder="global 时留空" />
               </label>
             </div>
+            <div class="scope-row">
+              <label class="control">
+                <span>分块大小（字符）</span>
+                <input type="number" name="chunk_size" value="500" min="100" max="5000" />
+              </label>
+              <label class="control">
+                <span>重叠（字符）</span>
+                <input type="number" name="chunk_overlap" value="50" min="0" max="500" />
+              </label>
+            </div>
             <label class="checkbox-row">
               <input type="checkbox" name="refine" checked />
               <span>LLM 精炼后入库（未配置 Provider 时自动降级为原内容）</span>
@@ -226,6 +239,117 @@
               <span>LLM 精炼后入库（未配置 Provider 时自动降级为原内容）</span>
             </label>
             <button type="submit" class="primary">批量导入</button>
+          </form>
+
+          <form id="import-pdf-form" class="tab-panel" data-panel="pdf">
+            <label class="control">
+              <span>PDF 文件 *</span>
+              <input type="file" name="file" accept=".pdf,application/pdf" required />
+            </label>
+            <p class="hint">PDF 会被自动分块入库，每个 chunk 一条独立记忆。需要后端安装 <code>pypdf</code>。</p>
+            <div class="scope-row">
+              <label class="control">
+                <span>Scope 类型 *</span>
+                <select name="scope_type">
+                  <option value="global">global（全局）</option>
+                  <option value="private">private（私聊）</option>
+                  <option value="group">group（群聊）</option>
+                </select>
+              </label>
+              <label class="control">
+                <span>Scope ID</span>
+                <input type="text" name="scope_id" placeholder="global 时留空" />
+              </label>
+            </div>
+            <div class="scope-row">
+              <label class="control">
+                <span>分块大小（字符）</span>
+                <input type="number" name="chunk_size" value="500" min="100" max="5000" />
+              </label>
+              <label class="control">
+                <span>重叠（字符）</span>
+                <input type="number" name="chunk_overlap" value="50" min="0" max="500" />
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input type="checkbox" name="refine" checked />
+              <span>LLM 精炼后入库（每个 chunk 一次 LLM 调用，未配置 Provider 时降级为原内容）</span>
+            </label>
+            <button type="submit" class="primary">导入 PDF</button>
+          </form>
+
+          <form id="import-docx-form" class="tab-panel" data-panel="docx">
+            <label class="control">
+              <span>Word 文件 *</span>
+              <input type="file" name="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required />
+            </label>
+            <p class="hint">Word 文档会被自动分块入库。需要后端安装 <code>python-docx</code>。</p>
+            <div class="scope-row">
+              <label class="control">
+                <span>Scope 类型 *</span>
+                <select name="scope_type">
+                  <option value="global">global（全局）</option>
+                  <option value="private">private（私聊）</option>
+                  <option value="group">group（群聊）</option>
+                </select>
+              </label>
+              <label class="control">
+                <span>Scope ID</span>
+                <input type="text" name="scope_id" placeholder="global 时留空" />
+              </label>
+            </div>
+            <div class="scope-row">
+              <label class="control">
+                <span>分块大小（字符）</span>
+                <input type="number" name="chunk_size" value="500" min="100" max="5000" />
+              </label>
+              <label class="control">
+                <span>重叠（字符）</span>
+                <input type="number" name="chunk_overlap" value="50" min="0" max="500" />
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input type="checkbox" name="refine" checked />
+              <span>LLM 精炼后入库（每个 chunk 一次 LLM 调用，未配置 Provider 时降级为原内容）</span>
+            </label>
+            <button type="submit" class="primary">导入 Word</button>
+          </form>
+
+          <form id="import-txt-form" class="tab-panel" data-panel="txt">
+            <label class="control">
+              <span>TXT 文件 *</span>
+              <input type="file" name="file" accept=".txt,text/plain" required />
+            </label>
+            <p class="hint">长文本会被自动分块入库（滑动窗口 + 重叠）。</p>
+            <div class="scope-row">
+              <label class="control">
+                <span>Scope 类型 *</span>
+                <select name="scope_type">
+                  <option value="global">global（全局）</option>
+                  <option value="private">private（私聊）</option>
+                  <option value="group">group（群聊）</option>
+                </select>
+              </label>
+              <label class="control">
+                <span>Scope ID</span>
+                <input type="text" name="scope_id" placeholder="global 时留空" />
+              </label>
+            </div>
+            <div class="scope-row">
+              <label class="control">
+                <span>分块大小（字符）</span>
+                <input type="number" name="chunk_size" value="500" min="100" max="5000" />
+              </label>
+              <label class="control">
+                <span>重叠（字符）</span>
+                <input type="number" name="chunk_overlap" value="50" min="0" max="500" />
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input type="checkbox" name="refine" checked />
+              <span>LLM 精炼后入库（每个 chunk 一次 LLM 调用，未配置 Provider 时降级为原内容）</span>
+            </label>
+            <button type="submit" class="primary">导入 TXT</button>
           </form>
         </div>
 

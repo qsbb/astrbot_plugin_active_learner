@@ -515,13 +515,94 @@ async function submitImportMd(form) {
       scope_type: form.scope_type.value,
       scope_id: form.scope_id.value || "",
       refine: form.refine.checked,
+      chunk_size: parseInt(form.chunk_size?.value || "500", 10),
+      chunk_overlap: parseInt(form.chunk_overlap?.value || "50", 10),
     };
     const result = await bridge.apiPost("import_md", payload);
-    showImportResult(`✅ 已导入：<strong>${escapeHtml(result.entry.topic)}</strong>`);
+    // v2.4.0：MD 可能返回单条 entry 或批量 chunks
+    if (result.entry) {
+      showImportResult(`✅ 已导入：<strong>${escapeHtml(result.entry.topic)}</strong>`);
+    } else if (result.total != null) {
+      const lines = [
+        `✅ 分块导入完成：成功 ${result.success} / 总计 ${result.total}（失败 ${result.failed}）`,
+      ];
+      if (result.results && result.results.length) {
+        lines.push('<ul class="import-detail-list">');
+        for (const r of result.results) {
+          if (r.ok) {
+            lines.push(`<li>✅ ${escapeHtml(r.topic || "")} (chunk #${r.chunk})</li>`);
+          } else {
+            lines.push(`<li>❌ chunk #${r.chunk}：${escapeHtml(r.error || "未知错误")}</li>`);
+          }
+        }
+        lines.push("</ul>");
+      }
+      showImportResult(lines.join(""));
+    } else {
+      showImportResult("✅ 已导入");
+    }
     form.reset();
     await refreshAll();
   } catch (e) {
     showImportResult(`❌ 导入失败：${escapeHtml(e.message || String(e))}`, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+}
+
+async function submitImportFile(form, endpoint, label) {
+  const file = form.file.files[0];
+  if (!file) {
+    showImportResult(`❌ 请选择${label}文件`, true);
+    return;
+  }
+  const btn = form.querySelector('button[type="submit"]');
+  const original = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "导入中…";
+  }
+  try {
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    const base64 = btoa(binary);
+    const payload = {
+      filename: file.name,
+      base64,
+      scope_type: form.scope_type.value,
+      scope_id: form.scope_id.value || "",
+      refine: form.refine.checked,
+      chunk_size: parseInt(form.chunk_size?.value || "500", 10),
+      chunk_overlap: parseInt(form.chunk_overlap?.value || "50", 10),
+    };
+    const result = await bridge.apiPost(endpoint, payload);
+    const lines = [
+      `✅ ${label}分块导入完成：成功 ${result.success} / 总计 ${result.total}（失败 ${result.failed}）`,
+    ];
+    if (result.results && result.results.length) {
+      lines.push('<ul class="import-detail-list">');
+      for (const r of result.results) {
+        if (r.ok) {
+          lines.push(`<li>✅ ${escapeHtml(r.topic || "")} (chunk #${r.chunk})</li>`);
+        } else {
+          lines.push(`<li>❌ chunk #${r.chunk}：${escapeHtml(r.error || "未知错误")}</li>`);
+        }
+      }
+      lines.push("</ul>");
+    }
+    showImportResult(lines.join(""));
+    form.reset();
+    await refreshAll();
+  } catch (e) {
+    showImportResult(`❌ ${label}导入失败：${escapeHtml(e.message || String(e))}`, true);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -610,6 +691,18 @@ function bindImportEvents() {
   document.getElementById("import-zip-form").addEventListener("submit", (e) => {
     e.preventDefault();
     submitImportZip(e.target);
+  });
+  document.getElementById("import-pdf-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitImportFile(e.target, "import_pdf", "PDF");
+  });
+  document.getElementById("import-docx-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitImportFile(e.target, "import_docx", "Word");
+  });
+  document.getElementById("import-txt-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitImportFile(e.target, "import_txt", "TXT");
   });
 
   document.addEventListener("keydown", (e) => {
