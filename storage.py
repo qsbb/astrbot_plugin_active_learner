@@ -91,6 +91,22 @@ CREATE TABLE IF NOT EXISTS memories_embedding (
 );
 CREATE INDEX IF NOT EXISTS idx_embed_mem ON memories_embedding(memory_id);
 CREATE INDEX IF NOT EXISTS idx_embed_scope ON memories_embedding(memory_id);
+
+CREATE TABLE IF NOT EXISTS slang_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  phrase TEXT NOT NULL,
+  context TEXT,
+  occurrences INTEGER DEFAULT 1,
+  first_seen REAL,
+  last_seen REAL,
+  learned INTEGER DEFAULT 0,
+  learned_at REAL,
+  UNIQUE(scope_type, scope_id, phrase)
+);
+CREATE INDEX IF NOT EXISTS idx_slang_pending
+  ON slang_candidates(scope_type, scope_id, learned, occurrences DESC);
 """
 
 # 查询用列顺序（与 MemoryEntry.from_row 对齐，含 keywords + v2.4 新字段）
@@ -919,3 +935,65 @@ class MemoryStore:
                     (per_page, offset),
                 ).fetchall()
             return [MemoryEntry.from_row(r) for r in rows], total, total_pages
+
+    # ---------- 群黑话候选 v2.6.0 ----------
+
+    def add_slang_candidate(self, scope: Scope, phrase: str, context: str) -> None:
+        """新增或累加候选词出现次数。UNIQUE 冲突时累加 occurrences 并刷新 last_seen/context。"""
+        now = now_ts()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO slang_candidates
+                   (scope_type, scope_id, phrase, context, occurrences,
+                    first_seen, last_seen, learned, learned_at)
+                   VALUES (?, ?, ?, ?, 1, ?, ?, 0, NULL)
+                   ON CONFLICT(scope_type, scope_id, phrase) DO UPDATE SET
+                     occurrences = occurrences + 1,
+                     last_seen = excluded.last_seen,
+                     context = excluded.context""",
+                (scope.type, scope.id, phrase, context, now, now),
+            )
+
+    def list_pending_slang(self, scope: Scope, limit: int = 5) -> list[dict]:
+        """返回 top-K pending 候选（learned=0），按 occurrences DESC。"""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT phrase, context, occurrences, first_seen, last_seen
+                   FROM slang_candidates
+                   WHERE scope_type = ? AND scope_id = ? AND learned = 0
+                   ORDER BY occurrences DESC, last_seen DESC
+                   LIMIT ?""",
+                (scope.type, scope.id, limit),
+            ).fetchall()
+            return [
+                {
+                    "phrase": r["phrase"],
+                    "context": r["context"] or "",
+                    "occurrences": r["occurrences"],
+                    "first_seen": r["first_seen"],
+                    "last_seen": r["last_seen"],
+                }
+                for r in rows
+            ]
+
+    def mark_slang_learned(self, scope: Scope, phrase: str) -> None:
+        """UPDATE learned=1, learned_at=now WHERE scope=? AND phrase=?"""
+        now = now_ts()
+        with self._lock:
+            self._conn.execute(
+                """UPDATE slang_candidates
+                   SET learned = 1, learned_at = ?
+                   WHERE scope_type = ? AND scope_id = ? AND phrase = ?""",
+                (now, scope.type, scope.id, phrase),
+            )
+
+    def get_last_batch_time(self, scope: Scope) -> float:
+        """SELECT MAX(learned_at) FROM slang_candidates WHERE scope=? AND learned=1。无记录返回 0.0。"""
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT MAX(learned_at) AS m FROM slang_candidates
+                   WHERE scope_type = ? AND scope_id = ? AND learned = 1""",
+                (scope.type, scope.id),
+            ).fetchone()
+            val = row["m"] if row else None
+            return val if val is not None else 0.0

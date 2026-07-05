@@ -2,6 +2,26 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.0] - 2026-07-06
+
+### 新增
+
+- **群黑话被动捕获 + 定时批量学习**：极低 token 成本自动获取群聊黑话/术语
+  - 新增 `@filter.on_message()` 钩子，纯字符串扫描群消息（**不调 LLM**），用正则提取候选黑话词
+  - 候选词存入新表 `slang_candidates`，含出现次数、首次/最后出现时间、上下文片段
+  - 每个 scope 距上次批量学习 ≥ `slang_capture_interval_hours`（默认 24h）且 pending 候选 ≥ `slang_capture_batch_size`（默认 5）时触发
+  - **1 次 LLM 调用**批量处理 K 个候选词（不是 N 次），分别精炼后存入 `memories` 表
+  - 候选词标记 `learned=1` 避免重复处理；解析失败的也标记避免无限重试
+  - 进程内节流：每 scope 5 分钟最多查一次 DB 看是否该触发批量
+- **5 个新配置项**：`enable_slang_capture`（默认关）/ `slang_capture_interval_hours` / `slang_capture_batch_size` / `slang_capture_min_occurrences` / `slang_capture_scope_only_group`
+- **新模块 `slang_capture.py`**：纯函数实现候选词提取（10 个正则模式）+ 批量 prompt 构建 + 响应解析（`=== <phrase> ===` section 格式）
+
+### 降级策略
+
+- AstrBot 不支持 `@filter.on_message()` → 特性自动禁用，启动日志输出警告
+- LLM 无响应 → 候选词保留 `learned=0`，下次批量重试
+- 未配置 LLM Provider → 复用 `_resolve_plugin_provider_id` 4 层 fallback 链路
+
 ## [2.5.0] - 2026-07-06
 
 ### 新增

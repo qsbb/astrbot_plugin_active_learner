@@ -95,5 +95,35 @@
         "type": "float",
         "hint": "每次检索结果未命中关心领域时，boost 乘以此系数。0.85 表示每次衰减 15%。越大衰减越慢。",
         "default": 0.85
+    },
+    "enable_slang_capture": {
+        "description": "启用群黑话被动捕获",
+        "type": "bool",
+        "hint": "自动扫描群消息提取候选黑话词（不调 LLM），攒够 batch_size 后定时 1 次 LLM 批量学习。需要 AstrBot 支持 on_message 钩子。",
+        "default": false
+    },
+    "slang_capture_interval_hours": {
+        "description": "黑话批量学习间隔（小时）",
+        "type": "int",
+        "hint": "每 scope 距上次批量学习多少小时后才允许再次触发。",
+        "default": 24
+    },
+    "slang_capture_batch_size": {
+        "description": "每次批量学习的候选词数",
+        "type": "int",
+        "hint": "pending 候选词达到此数量才触发批量学习。每次 1 次 LLM 调用处理这么多词。",
+        "default": 5
+    },
+    "slang_capture_min_occurrences": {
+        "description": "候选词最低出现次数",
+        "type": "int",
+        "hint": "候选词在群里出现次数低于此值则不计入批量学习。避免一次性口语被学习。",
+        "default": 2
+    },
+    "slang_capture_scope_only_group": {
+        "description": "仅捕获群聊消息",
+        "type": "bool",
+        "hint": "true 仅捕获 group scope；false 同时捕获 private scope 黑话。",
+        "default": true
     }
 }

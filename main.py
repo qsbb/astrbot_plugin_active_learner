@@ -33,10 +33,15 @@ except ImportError:  # AstrBot < v4.26 没有 Plugin Pages 支持
 from .bili_source import BiliSource
 from .chunker import chunk_docx, chunk_markdown, chunk_pdf, chunk_text
 from .embedder import Embedder
-from .models import Scope, make_chunk_id
+from .models import Scope, make_chunk_id, now_ts
 from .refiner import KnowledgeRefiner
 from .searcher import WebSearcher
 from .settings_store import SettingsStore
+from .slang_capture import (
+    build_batch_prompt,
+    extract_candidates,
+    parse_batch_response,
+)
 from .storage import MemoryStore
 from .triggers import ACTIVE_LEARN_PATTERNS, CHALLENGE_PATTERNS
 from .tools import create_tools
@@ -46,6 +51,8 @@ PLUGIN_NAME = "astrbot_plugin_active_learner"
 
 # 运行时检测 on_llm_response hook 是否可用（不可用时降级为 on_llm_request 内嵌 References）
 _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
+# 运行时检测 on_message hook 是否可用（v2.6.0 群黑话捕获依赖）
+_ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
 
 
 @register(
@@ -131,6 +138,18 @@ class ActiveLearnerPlugin(Star):
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
 
+        # v2.6.0：群黑话被动捕获 + 定时批量学习
+        self._enable_slang_capture = _ON_MESSAGE_AVAILABLE and bool(
+            cfg.get("enable_slang_capture", False)
+        )
+        self._slang_interval_hours = float(cfg.get("slang_capture_interval_hours", 24))
+        self._slang_batch_size = int(cfg.get("slang_capture_batch_size", 5))
+        self._slang_min_occurrences = int(cfg.get("slang_capture_min_occurrences", 2))
+        self._slang_scope_only_group = bool(
+            cfg.get("slang_capture_scope_only_group", True)
+        )
+        self._slang_last_check: dict[str, float] = {}  # 进程内节流：scope_key → 上次检查时间
+
         # 注册 LLM 工具
         self._tools = []
         try:
@@ -152,6 +171,18 @@ class ActiveLearnerPlugin(Star):
             )
         except Exception as e:
             logger.warning(f"数据库状态检查失败: {e}")
+
+        # v2.6.0：群黑话捕获特性状态
+        if self._enable_slang_capture:
+            logger.info(
+                f"群黑话捕获已启用 | interval={self._slang_interval_hours}h | "
+                f"batch_size={self._slang_batch_size} | min_occ={self._slang_min_occurrences} | "
+                f"scope_only_group={self._slang_scope_only_group}"
+            )
+        elif not _ON_MESSAGE_AVAILABLE and bool(cfg.get("enable_slang_capture", False)):
+            logger.warning(
+                "配置启用了 enable_slang_capture，但当前 AstrBot 不支持 on_message 钩子，特性已禁用"
+            )
 
         # 注册 Dashboard 管理页面后端 API（AstrBot v4.26+）
         if _WEB_AVAILABLE:
@@ -355,6 +386,116 @@ class ActiveLearnerPlugin(Star):
                         pass
             except Exception as e:
                 logger.debug(f"on_llm_response footer 失败: {e}")
+
+    # ---------- v2.6.0：群黑话被动捕获 + 定时批量学习 ----------
+
+    if _ON_MESSAGE_AVAILABLE:
+
+        @filter.on_message()  # type: ignore[misc]
+        async def on_message(self, event: AstrMessageEvent):
+            """被动扫描群消息，提取候选黑话词。不调 LLM。"""
+            if not self._enable_slang_capture:
+                return
+            try:
+                scope = Scope.from_event(event)
+                if self._slang_scope_only_group and scope.type != "group":
+                    return
+                text = ""
+                try:
+                    text = event.get_message_str() or ""
+                except Exception:
+                    return
+                if not text or len(text) < 4:
+                    return
+                candidates = extract_candidates(text)
+                if not candidates:
+                    return
+                for phrase, ctx in candidates:
+                    await asyncio.to_thread(
+                        self.store.add_slang_candidate, scope, phrase, ctx
+                    )
+                # 节流检查：每个 scope 5 分钟最多查一次 DB 看是否该触发批量学习
+                self._maybe_trigger_batch_learn(scope)
+            except Exception as e:
+                logger.debug(f"slang 捕获失败: {e}")
+
+    def _maybe_trigger_batch_learn(self, scope: Scope) -> None:
+        """节流检查：每 scope 5 分钟最多查一次 DB；满足条件则 asyncio.create_task 触发批量学习。"""
+        scope_key = f"{scope.type}:{scope.id}"
+        now = now_ts()
+        last = self._slang_last_check.get(scope_key, 0.0)
+        if now - last < 300:  # 5 分钟节流
+            return
+        self._slang_last_check[scope_key] = now
+        try:
+            last_batch = self.store.get_last_batch_time(scope)
+            if now - last_batch < self._slang_interval_hours * 3600:
+                return
+            pending = self.store.list_pending_slang(
+                scope, limit=self._slang_batch_size
+            )
+            if len(pending) < self._slang_batch_size:
+                return
+            # 过滤 occurrences < min_occurrences
+            qualified = [
+                c for c in pending
+                if c["occurrences"] >= self._slang_min_occurrences
+            ]
+            if len(qualified) < self._slang_batch_size:
+                return
+            asyncio.create_task(self._async_batch_learn_slang(scope, qualified))
+        except Exception as e:
+            logger.debug(f"slang 触发检查失败: {e}")
+
+    async def _async_batch_learn_slang(
+        self, scope: Scope, candidates: list[dict]
+    ) -> None:
+        """1 次 LLM 调用批量学习 K 个候选词。"""
+        try:
+            provider_id = ""
+            try:
+                provider_id = await self._resolve_plugin_provider_id(umo="")
+            except Exception:
+                provider_id = ""
+            prompt = build_batch_prompt(candidates)
+            # 复用 refiner._safe_generate 的 LLM 调用模式
+            response_text = await self.refiner._safe_generate(provider_id, prompt)
+            if not response_text or not response_text.strip():
+                logger.warning(
+                    f"slang 批量学习失败：LLM 无响应 (scope: {scope}, candidates: {len(candidates)})"
+                )
+                return
+            parsed = parse_batch_response(response_text, candidates)
+            parsed_phrases = {p["phrase"] for p in parsed}
+            success = 0
+            for item in parsed:
+                try:
+                    await asyncio.to_thread(
+                        self.store.add_or_update,
+                        scope, item["phrase"], item["summary"],
+                        keywords=item["keywords"],
+                        source="群黑话自动学习",
+                        confidence=item["confidence"],
+                    )
+                    success += 1
+                except Exception as e:
+                    logger.warning(f"slang 入库失败「{item['phrase']}」: {e}")
+                await asyncio.to_thread(
+                    self.store.mark_slang_learned, scope, item["phrase"]
+                )
+            # 标记未解析的候选词为 learned（避免无限重试）
+            for c in candidates:
+                if c["phrase"] not in parsed_phrases:
+                    await asyncio.to_thread(
+                        self.store.mark_slang_learned, scope, c["phrase"]
+                    )
+            if self.embedder is not None:
+                self.embedder.invalidate_matrix_cache()
+            logger.info(
+                f"✅ slang 批量学习: {success}/{len(candidates)} 成功 (scope: {scope})"
+            )
+        except Exception as e:
+            logger.warning(f"❌ slang 批量学习异常: {e}")
 
     # ---------- /memory 指令组 ----------
 
