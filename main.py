@@ -121,6 +121,11 @@ class ActiveLearnerPlugin(Star):
             if t.strip()
         ]
         self._context_inject_count = max(1, min(10, int(cfg.get("context_inject_count", 3))))
+        # priority boost 动态衰减：命中关心领域重置为 max，未命中则逐步衰减到 min
+        self._priority_boost_max = float(cfg.get("priority_boost_max", 1.3))
+        self._priority_boost_min = float(cfg.get("priority_boost_min", 1.0))
+        self._priority_boost_decay = float(cfg.get("priority_boost_decay", 0.85))
+        self._priority_boost = self._priority_boost_max if self._priority_topics else 1.0
 
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
@@ -168,6 +173,18 @@ class ActiveLearnerPlugin(Star):
             pass
         return 0.4, 0.6
 
+    def _hits_match_priority(self, hits) -> bool:
+        """检查检索结果中是否有任一记忆命中关心领域。"""
+        if not self._priority_topics or not hits:
+            return False
+        for h in hits:
+            topic_lower = (h.entry.topic or "").lower()
+            kws = h.entry.keywords or []
+            text_to_check = topic_lower + " " + " ".join(k.lower() for k in kws)
+            if any(pt in text_to_check for pt in self._priority_topics):
+                return True
+        return False
+
     # ---------- 上下文注入 + 质疑检测 + 主动学习提示（合并钩子） ----------
 
     @filter.on_llm_request()
@@ -198,7 +215,26 @@ class ActiveLearnerPlugin(Star):
                 decay_half_life_days=self._decay_half_life_days,
                 query_vec=query_vec,
                 priority_topics=self._priority_topics,
+                priority_boost=self._priority_boost,
             )
+            # 动态调整 priority boost：命中关心领域 → 重置；未命中 → 衰减
+            if self._priority_topics:
+                if self._hits_match_priority(hits):
+                    if self._priority_boost < self._priority_boost_max:
+                        logger.debug(
+                            f"priority boost 命中重置: {self._priority_boost:.2f} -> {self._priority_boost_max:.2f}"
+                        )
+                    self._priority_boost = self._priority_boost_max
+                else:
+                    new_boost = max(
+                        self._priority_boost_min,
+                        self._priority_boost * self._priority_boost_decay,
+                    )
+                    if new_boost != self._priority_boost:
+                        logger.debug(
+                            f"priority boost 衰减: {self._priority_boost:.2f} -> {new_boost:.2f}"
+                        )
+                    self._priority_boost = new_boost
         except Exception as e:
             logger.debug(f"记忆检索失败: {e}")
             hits = []

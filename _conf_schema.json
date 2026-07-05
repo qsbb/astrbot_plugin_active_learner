@@ -76,5 +76,23 @@
         "type": "int",
         "hint": "每次对话从记忆库检索并注入 LLM 的记忆条数（1-10）。过多会占用上下文窗口，过少可能漏掉相关知识。",
         "default": 3
+    },
+    "priority_boost_max": {
+        "description": "关心领域初始/命中时分数乘子",
+        "type": "float",
+        "hint": "关心领域命中时的分数乘子。1.3 表示 +30% 加权。1.0 等于关闭。建议 1.1-1.5。",
+        "default": 1.3
+    },
+    "priority_boost_min": {
+        "description": "关心领域衰减下限",
+        "type": "float",
+        "hint": "连续非关心领域查询时 boost 逐步衰减到此下限。1.0 表示完全淡化（等于无优先）。",
+        "default": 1.0
+    },
+    "priority_boost_decay": {
+        "description": "关心领域每次未命中的衰减系数",
+        "type": "float",
+        "hint": "每次检索结果未命中关心领域时，boost 乘以此系数。0.85 表示每次衰减 15%。越大衰减越慢。",
+        "default": 0.85
     }
 }
