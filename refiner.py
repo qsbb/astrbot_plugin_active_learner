@@ -115,6 +115,54 @@ class KnowledgeRefiner:
         reply = await self._safe_generate(provider_id, prompt)
         return self._parse_result(reply, fallback_summary=raw_content, topic=topic)
 
+    async def refine_snippet(
+        self,
+        topic: str,
+        snippet: str,
+        provider_id: str,
+    ) -> RefineResult:
+        """从对话片段中提取并精炼知识。
+
+        LLM 在对话中标记了值得记忆的知识点，本方法把对话片段蒸馏为结构化知识卡。
+        无 provider 时降级存储原始片段。
+        """
+        if not provider_id:
+            return RefineResult(
+                summary=snippet,
+                keywords=[topic] if topic else [],
+                confidence=0.4,
+                reasoning="未配置 LLM provider，直接存储原始片段",
+                refined=False,
+            )
+
+        prompt = (
+            f"你是知识工程师。用户在对话中提到了「{topic}」，"
+            f"请从以下对话片段中提取并精炼知识。\n\n"
+            f"对话片段：\n{snippet[:3000]}\n\n"
+            f"要求：\n"
+            f"1. SUMMARY ≤200 字，提取核心知识点（定义/原理/事实），剔除闲聊和无关内容\n"
+            f"2. KEYWORDS 3-5 个，便于检索\n"
+            f"3. CONFIDENCE 0-100：信息完整度和可信度\n"
+            f"4. REASON ≤50 字\n"
+            f"5. 严格按以下格式输出（每行一个字段）：\n"
+            f"SUMMARY: <摘要>\n"
+            f"KEYWORDS: <关键词1>, <关键词2>, ...\n"
+            f"CONFIDENCE: <0-100>\n"
+            f"REASON: <依据>\n"
+        )
+
+        reply = await self._safe_generate(provider_id, prompt)
+        result = self._parse_result(reply, fallback_summary=snippet, topic=topic)
+        if result is None:
+            return RefineResult(
+                summary=snippet,
+                keywords=[topic] if topic else [],
+                confidence=0.4,
+                reasoning="精炼解析失败，降级存储原始片段",
+                refined=False,
+            )
+        return result
+
     async def refine_import_batch(
         self,
         topics: list[str],

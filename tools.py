@@ -417,18 +417,19 @@ def _format_bili_results(results: list[dict], fallback: bool = False) -> str:
 
 @pydantic_dataclass
 class SaveMemoryTool(FunctionTool):  # type: ignore[misc]
-    """将对话中产生的知识存入记忆库。
+    """将对话中值得记忆的知识点标记给插件，插件异步精炼后存入记忆库。
 
-    仅存储知识性内容（概念、原理、技术事实）。
-    不存储个人信息、用户偏好、闲聊内容——那些由 livingmemory 插件管理。
+    LLM 只需判断"这里有一个值得记的知识点"并传入对话片段，
+    不需要自己组织内容——插件会调用 LLM 异步分析、精炼、存储。
     """
 
     name: str = "save_memory"
     description: str = (
-        "将知识性内容存入记忆库供日后检索。"
-        "仅存储通用知识（如概念定义、技术原理、客观事实、方法论），"
-        "不要存储用户个人信息、偏好、关系、日程等——那些由其他系统管理。"
-        "当你在对话中通过推理、综合用户信息、或自身知识产生了值得记录的知识时调用。"
+        "标记对话中值得记忆的知识点。你只需传入主题和相关对话片段，"
+        "插件会异步调用 LLM 精炼后存入记忆库。"
+        "仅标记通用知识（概念、原理、事实、方法论），"
+        "不要标记个人信息、偏好、关系、日程。"
+        "当对话中出现了值得日后检索的知识时调用。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -438,49 +439,65 @@ class SaveMemoryTool(FunctionTool):  # type: ignore[misc]
                     "type": "string",
                     "description": "知识主题（如'Python GIL'、'量子纠缠原理'）",
                 },
-                "content": {
+                "snippet": {
                     "type": "string",
-                    "description": "知识内容，简明扼要地描述。建议 50-300 字。",
-                },
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "关键词列表，便于日后检索。可选。",
+                    "description": "对话中与该知识点相关的片段。不需要自己组织，直接传对话原文即可，插件会精炼。",
                 },
             },
-            "required": ["topic", "content"],
+            "required": ["topic", "snippet"],
         }
     )
 
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         topic = kwargs.get("topic", "").strip()
-        content = kwargs.get("content", "").strip()
-        keywords = kwargs.get("keywords") or []
-        if not topic or not content:
-            return ("topic 和 content 不能为空")
+        snippet = kwargs.get("snippet", "").strip()
+        if not topic or not snippet:
+            return ("topic 和 snippet 不能为空")
 
         plugin = self._plugin
         scope = _resolve_scope(context)
         if scope is None:
-            return ("无法识别会话作用域，存储失败")
+            return ("无法识别会话作用域")
 
-        logger.info(f"save_memory: 主题「{topic}」(scope: {scope})")
+        # 解析 provider_id
+        event = _get_event(context)
+        umo = event.unified_msg_origin if event is not None else ""
+        provider_id = ""
         try:
+            provider_id = await plugin._resolve_plugin_provider_id(umo=umo)
+        except Exception:
+            provider_id = ""
+
+        # 立即返回，异步精炼 + 存储
+        asyncio.create_task(
+            self._async_refine_and_save(plugin, scope, topic, snippet, provider_id)
+        )
+        return (f"已标记「{topic}」，正在后台分析并存储。")
+
+    async def _async_refine_and_save(self, plugin, scope, topic, snippet, provider_id):
+        """异步：LLM 精炼对话片段 → 存入记忆库 → 日志确认。"""
+        try:
+            logger.info(f"save_memory 开始精炼「{topic}」(scope: {scope}, provider: {'有' if provider_id else '无'})")
+            # 1. LLM 精炼
+            result = await plugin.refiner.refine_snippet(topic, snippet, provider_id)
+            # 2. 存入记忆库
             entry = await asyncio.to_thread(
                 plugin.store.add_or_update,
-                scope, topic, content,
-                keywords=keywords,
-                source="对话推理",
-                confidence=0.5,
+                scope, topic, result.summary,
+                keywords=result.keywords,
+                source="对话推理" + ("（精炼）" if result.refined else "（原始）"),
+                confidence=result.confidence,
             )
-            # 失效向量缓存
+            # 3. 失效向量缓存
             if plugin.embedder is not None:
                 plugin.embedder.invalidate_matrix_cache()
-            logger.info(f"已存储知识「{topic}」(id: {entry.id})")
-            return (f"已记住「{topic}」，日后可以检索到。")
+            logger.info(
+                f"✅ save_memory 已存储「{topic}」"
+                f"(id: {entry.id}, 精炼={'是' if result.refined else '否'}, "
+                f"置信度={result.confidence:.0%})"
+            )
         except Exception as e:
-            logger.warning(f"save_memory 失败: {e}")
-            return (f"存储失败: {e}")
+            logger.warning(f"❌ save_memory 异步存储失败「{topic}」: {e}")
 
 
 def create_tools(plugin) -> list:

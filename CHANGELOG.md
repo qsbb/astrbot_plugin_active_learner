@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.8] - 2026-07-06
+
+### 重构
+
+- **`save_memory` 改为两步异步流程**：LLM 只需标记知识点 + 传入对话片段，插件异步调用 LLM 精炼后存入记忆库。LLM 不再需要自己组织内容，降低工具调用门槛
+- 新增 `KnowledgeRefiner.refine_snippet()`：从对话片段中蒸馏出结构化知识卡（摘要 + 关键词 + 置信度）
+- 工具参数从 `content`（需要 LLM 自己组织）改为 `snippet`（传对话原文即可）
+- 异步存储全流程日志可追踪：`save_memory 开始精炼` → `✅ save_memory 已存储`
+
 ## [2.4.7] - 2026-07-06
 
 ### 新增
