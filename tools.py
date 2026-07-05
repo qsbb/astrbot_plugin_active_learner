@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Optional
 
@@ -410,12 +411,85 @@ def _format_bili_results(results: list[dict], fallback: bool = False) -> str:
     return "\n".join(lines)
 
 
+# ============================================================
+# Tool 5: save_memory
+# ============================================================
+
+@pydantic_dataclass
+class SaveMemoryTool(FunctionTool):  # type: ignore[misc]
+    """将对话中产生的知识存入记忆库。
+
+    仅存储知识性内容（概念、原理、技术事实）。
+    不存储个人信息、用户偏好、闲聊内容——那些由 livingmemory 插件管理。
+    """
+
+    name: str = "save_memory"
+    description: str = (
+        "将知识性内容存入记忆库供日后检索。"
+        "仅存储通用知识（如概念定义、技术原理、客观事实、方法论），"
+        "不要存储用户个人信息、偏好、关系、日程等——那些由其他系统管理。"
+        "当你在对话中通过推理、综合用户信息、或自身知识产生了值得记录的知识时调用。"
+    )
+    parameters: dict = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "知识主题（如'Python GIL'、'量子纠缠原理'）",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "知识内容，简明扼要地描述。建议 50-300 字。",
+                },
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "关键词列表，便于日后检索。可选。",
+                },
+            },
+            "required": ["topic", "content"],
+        }
+    )
+
+    async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
+        topic = kwargs.get("topic", "").strip()
+        content = kwargs.get("content", "").strip()
+        keywords = kwargs.get("keywords") or []
+        if not topic or not content:
+            return ("topic 和 content 不能为空")
+
+        plugin = self._plugin
+        scope = _resolve_scope(context)
+        if scope is None:
+            return ("无法识别会话作用域，存储失败")
+
+        logger.info(f"save_memory: 主题「{topic}」(scope: {scope})")
+        try:
+            entry = await asyncio.to_thread(
+                plugin.store.add_or_update,
+                scope, topic, content,
+                keywords=keywords,
+                source="对话推理",
+                confidence=0.5,
+            )
+            # 失效向量缓存
+            if plugin.embedder is not None:
+                plugin.embedder.invalidate_matrix_cache()
+            logger.info(f"已存储知识「{topic}」(id: {entry.id})")
+            return (f"已记住「{topic}」，日后可以检索到。")
+        except Exception as e:
+            logger.warning(f"save_memory 失败: {e}")
+            return (f"存储失败: {e}")
+
+
 def create_tools(plugin) -> list:
     """根据配置创建工具列表。"""
     tool_classes = [
         SearchAndLearnTool,
         RecallMemoryTool,
         VerifyKnowledgeTool,
+        SaveMemoryTool,
     ]
     # B 站工具按配置启用
     enable_bili = bool(plugin.config.get("enable_bilibili", False))
