@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.9] - 2026-07-06
+
+### 重构
+
+- **拟人化统一记忆池**：scope 从硬过滤改为软权重，所有知识存于统一池中
+  - FTS5 检索不再按 scope 过滤——所有记忆都可被搜到
+  - 向量检索加载全部记忆的向量，不再按 scope 分片缓存
+  - scope penalty 软权重：当前 scope ×1.0，global ×0.9，其他 scope ×0.8
+  - 移除 `enable_scope_fallback` 硬过滤开关——不再需要回退，所有结果一律保留
+- **设计理念**：知识本就不需要隐私隔离（个人信息归 livingmemory 管）。A 学的"量子纠缠"，B 问时也能检索到，只是权重稍低。更像人类记忆——不会"换了房间就忘记"
+
 ## [2.4.8] - 2026-07-06
 
 ### 重构

@@ -425,6 +425,7 @@ class MemoryStore:
     ) -> list[tuple[MemoryEntry, float]]:
         """FTS5 检索 + bm25 分数。返回 [(entry, bm25_score), ...]。
 
+        v2.4.9：不再按 scope 硬过滤，检索所有记忆——scope 退化为软权重，在 search_hybrid 里施加。
         bm25 分数越小越好（FTS5 默认），调用方需取负转为"越大越好"。
         """
         match_expr = _build_match_query(query)
@@ -437,9 +438,8 @@ class MemoryStore:
                     FROM memories_fts f
                     JOIN memories m ON m.rowid = f.rowid
                     WHERE memories_fts MATCH ?
-                      AND ((m.scope_type = ? AND m.scope_id = ?) OR m.scope_type = ?)
                     LIMIT ?""",
-                (match_expr, scope.type, scope.id, SCOPE_GLOBAL, limit),
+                (match_expr, limit),
             ).fetchall()
         except sqlite3.OperationalError:
             return []
@@ -456,25 +456,24 @@ class MemoryStore:
         scope: Scope,
         embedder,
     ) -> tuple[Any, list[str]]:
-        """加载 scope 的所有向量到 numpy 矩阵。带内存缓存。
+        """加载所有记忆的向量到 numpy 矩阵。带内存缓存。
 
+        v2.4.9：不再按 scope 过滤——所有记忆的向量统一加载，scope 退化为软权重。
         必须在 self._lock 内调用。
         """
         import numpy as np
-        scope_key = f"{scope.type}:{scope.id}"
-        if scope_key in embedder._matrix_cache:
-            return embedder._matrix_cache[scope_key]
+        cache_key = "__all__"
+        if cache_key in embedder._matrix_cache:
+            return embedder._matrix_cache[cache_key]
         rows = self._conn.execute(
             """SELECT e.memory_id, e.embedding, e.dim
                FROM memories_embedding e
                JOIN memories m ON m.id = e.memory_id
-               WHERE m.scope_type = ? AND m.scope_id = ?
                ORDER BY e.memory_id""",
-            (scope.type, scope.id),
         ).fetchall()
         if not rows:
             result = (np.zeros((0, embedder.dim), dtype=np.float32), [])
-            embedder._matrix_cache[scope_key] = result
+            embedder._matrix_cache[cache_key] = result
             return result
         ids = []
         vecs = []
@@ -492,7 +491,7 @@ class MemoryStore:
         else:
             matrix = np.vstack(vecs).astype(np.float32)
         result = (matrix, ids)
-        embedder._matrix_cache[scope_key] = result
+        embedder._matrix_cache[cache_key] = result
         return result
 
     def search_by_vector(
@@ -545,19 +544,13 @@ class MemoryStore:
         now = _time.time()
 
         with self._lock:
-            # 1. FTS5 检索（当前 scope + global）
+            # 1. FTS5 检索（v2.4.9：检索所有记忆，不按 scope 过滤）
             fts_results = self._search_fts(scope, query, top_k * 5)
 
             # 2. 向量检索（如有 query_vec 和 embedder）
             vec_results: list[tuple[str, float]] = []
             if query_vec is not None and embedder is not None and embedder.available:
                 vec_results = self.search_by_vector(scope, query_vec, top_k * 5, embedder)
-                # 也检索 global scope
-                if scope.type != SCOPE_GLOBAL:
-                    global_vec_results = self.search_by_vector(
-                        Scope(SCOPE_GLOBAL, SCOPE_GLOBAL), query_vec, top_k * 5, embedder
-                    )
-                    vec_results.extend(global_vec_results)
 
             # 3. 合并 FTS 和向量结果（按 memory_id 去重）
             all_ids: set[str] = set()
@@ -605,15 +598,15 @@ class MemoryStore:
                 entry = entries[mid]
                 # 加权混合分数
                 hybrid = fts_weight * fts_norm[i] + vec_weight * vec_norm[i]
-                # scope penalty
+                # scope penalty（v2.4.9：软权重，不硬过滤）
                 scope_tag = scope_map.get(mid, "other")
                 if scope_tag == "current":
                     penalty = 1.0
                 elif scope_tag == "global":
-                    penalty = 0.6 if enable_scope_fallback else 0.0
+                    penalty = 0.9
                 else:
-                    # other scope（如 group 但当前是 private）—— 仅 fallback 启用时保留
-                    penalty = 0.8 if enable_scope_fallback else 0.0
+                    # other scope（如 group 但当前是 private）—— 软权重保留
+                    penalty = 0.8
                 # decay score: confidence * 0.5^(days / half_life)
                 last_access = entry.last_accessed_at or entry.created_at
                 days = max(0.0, (now - last_access) / 86400.0)
