@@ -86,6 +86,7 @@ class ActiveLearnerPlugin(Star):
 
         # 存储层
         db_path = StarTools.get_data_dir() / "memory.db"
+        self._db_path = db_path
         self.store = MemoryStore(
             db_path=db_path,
             max_entries=max_entries,
@@ -131,19 +132,26 @@ class ActiveLearnerPlugin(Star):
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
 
         # 注册 LLM 工具
+        self._tools = []
         try:
             tools = create_tools(self)
             if tools:
+                self._tools = tools
                 self.context.add_llm_tools(*tools)
                 logger.info(f"已注册 {len(tools)} 个 LLM 工具: {[t.name for t in tools]}")
         except Exception as e:
             logger.error(f"注册 LLM 工具失败: {e}")
 
-        logger.info(
-            f"ActiveLearner 已加载 | max_entries={max_entries} | "
-            f"bili={'on' if self.bili_source.is_available() else 'off'} | "
-            f"db={db_path}"
-        )
+        # 诊断：启动时打印数据库状态
+        try:
+            total = self.store.count_all()
+            logger.info(
+                f"ActiveLearner 已加载 | max_entries={max_entries} | "
+                f"bili={'on' if self.bili_source.is_available() else 'off'} | "
+                f"db={db_path} | 记忆={total}条 | schema=v{self.store._schema_version}"
+            )
+        except Exception as e:
+            logger.warning(f"数据库状态检查失败: {e}")
 
         # 注册 Dashboard 管理页面后端 API（AstrBot v4.26+）
         if _WEB_AVAILABLE:
@@ -236,8 +244,10 @@ class ActiveLearnerPlugin(Star):
                         )
                     self._priority_boost = new_boost
         except Exception as e:
-            logger.debug(f"记忆检索失败: {e}")
+            logger.warning(f"记忆检索失败: {e}")
             hits = []
+
+        logger.info(f"记忆检索: {len(hits)} hits (scope: {scope}, query: {msg[:50]})")
 
         # 把注入的记忆 ID 挂到 event 上，供 on_llm_response footer 使用
         injected_ids = [h.entry.id for h in hits]
@@ -621,6 +631,31 @@ class ActiveLearnerPlugin(Star):
         context.register_web_api(
             f"/{PLUGIN_NAME}/settings", self._web_save_settings, ["POST"], "保存插件设置"
         )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/debug", self._web_debug, ["GET"], "诊断信息"
+        )
+
+    async def _web_debug(self):
+        """返回数据库和插件诊断信息。"""
+        embedder_available = False
+        embedder_model = ""
+        if self.embedder is not None:
+            try:
+                embedder_available = self.embedder.available
+                embedder_model = self.embedder.model_name
+            except Exception:
+                pass
+        return json_response({
+            "db_path": str(self._db_path),
+            "schema_version": self.store._schema_version,
+            "total_memories": self.store.count_all(),
+            "scopes": self.store.list_scopes(),
+            "embedder_available": embedder_available,
+            "embedder_model": embedder_model,
+            "priority_topics": self._priority_topics,
+            "priority_boost": round(self._priority_boost, 2),
+            "tools_registered": [t.name for t in self._tools],
+        })
 
     @staticmethod
     def _scope_from_query():

@@ -273,7 +273,33 @@ async function exportData() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadScopes(), loadStats(), loadMemories()]);
+  await Promise.all([loadScopes(), loadStats(), loadMemories(), loadDebug()]);
+}
+
+async function loadDebug() {
+  const el = document.getElementById("debug-content");
+  if (!el) return;
+  try {
+    const d = await bridge.apiGet("debug");
+    const scopesList = (d.scopes || [])
+      .map((s) => `<li>${escapeHtml(s.scope_type)}:${escapeHtml(s.scope_id)} — ${s.count} 条</li>`)
+      .join("");
+    const toolsList = (d.tools_registered || []).join(", ") || "（无）";
+    el.innerHTML = `
+      <dl>
+        <dt>数据库路径</dt><dd>${escapeHtml(d.db_path || "—")}</dd>
+        <dt>Schema 版本</dt><dd>v${d.schema_version ?? "—"}</dd>
+        <dt>总记忆数</dt><dd>${d.total_memories ?? 0}</dd>
+        <dt>Embedder</dt><dd>${d.embedder_available ? "✅ 可用" : "❌ 不可用（降级 FTS5）"}${d.embedder_model ? " (" + escapeHtml(d.embedder_model) + ")" : ""}</dd>
+        <dt>已注册工具</dt><dd>${escapeHtml(toolsList)}</dd>
+        <dt>关心领域</dt><dd>${d.priority_topics && d.priority_topics.length ? escapeHtml(d.priority_topics.join(", ")) : "（未设置）"}</dd>
+        <dt>当前 Boost</dt><dd>${d.priority_boost ?? "—"}</dd>
+      </dl>
+      ${scopesList ? `<div class="debug-section"><dt>Scope 列表</dt><ul class="debug-scope-list">${scopesList}</ul></div>` : ""}
+    `;
+  } catch (e) {
+    el.innerHTML = `<span class="error-msg">诊断加载失败：${escapeHtml(e.message)}</span>`;
+  }
 }
 
 function bindEvents() {

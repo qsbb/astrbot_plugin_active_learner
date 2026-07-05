@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.5] - 2026-07-06
+
+### 新增
+
+- **诊断面板**：web 页面新增可折叠的「🔧 诊断信息」面板，显示数据库路径、schema 版本、总记忆数、embedder 状态、已注册工具、scope 列表
+- **`/debug` web API**：返回数据库和插件运行时诊断信息
+- **启动日志增强**：启动时打印记忆总数和 schema 版本（`记忆=N条 | schema=v1`）
+- **检索日志增强**：`on_llm_request` 每次检索后打印 `记忆检索: N hits`，检索异常从 debug 提升到 warning
+
 ## [2.4.4] - 2026-07-06
 
 ### 新增

@@ -835,6 +835,12 @@ class MemoryStore:
 
     # ---------- Dashboard 用：跨 scope 视图 ----------
 
+    def count_all(self) -> int:
+        """返回所有 scope 的记忆总数。"""
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) AS c FROM memories").fetchone()
+            return row["c"] if row else 0
+
     def list_scopes(self) -> list[dict]:
         """列出所有非空 (scope_type, scope_id) 组合，按记忆数降序。"""
         with self._lock:
