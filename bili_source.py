@@ -47,6 +47,9 @@ class BiliSource:
                 "如需启用：pip install bilibili-api-python"
             )
 
+    def is_available(self) -> bool:
+        return _BILI_AVAILABLE
+
     async def search(self, keyword: str, limit: int = 5) -> list[dict]:
         """搜索 B 站视频。返回 [{"title","snippet","url","author"}, ...]"""
         if not _BILI_AVAILABLE or not keyword.strip():
