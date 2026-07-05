@@ -629,6 +629,9 @@ class ActiveLearnerPlugin(Star):
             f"/{PLUGIN_NAME}/settings", self._web_save_settings, ["POST"], "保存插件设置"
         )
         context.register_web_api(
+            f"/{PLUGIN_NAME}/config_schema", self._web_config_schema, ["GET"], "获取配置 schema 与当前值"
+        )
+        context.register_web_api(
             f"/{PLUGIN_NAME}/debug", self._web_debug, ["GET"], "诊断信息"
         )
 
@@ -870,23 +873,73 @@ class ActiveLearnerPlugin(Star):
             "refine_on_verify": bool(data.get("refine_on_verify", True)),
         })
 
+    def _load_schema(self) -> dict:
+        """读取 _conf_schema.json。失败时返回空 dict。"""
+        try:
+            schema_path = Path(__file__).parent / "_conf_schema.json"
+            if schema_path.exists():
+                raw = schema_path.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    return data
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"读取 _conf_schema.json 失败: {e}")
+        return {}
+
+    async def _web_config_schema(self):
+        """返回 _conf_schema.json 全量字段 + 当前合并值。
+
+        值优先级：self._settings（Dashboard 设置）→ self.config（schema 默认）
+        """
+        schema = self._load_schema()
+        settings = self._settings.all()
+        config = self.config or {}
+        fields = []
+        for name, spec in schema.items():
+            if not isinstance(spec, dict):
+                continue
+            default = spec.get("default")
+            # 当前值：settings 优先，否则用 config（即 schema 默认已合并入 config）
+            current_val = settings.get(name, config.get(name, default))
+            fields.append({
+                "name": name,
+                "description": spec.get("description", ""),
+                "hint": spec.get("hint", ""),
+                "type": spec.get("type", "string"),
+                "default": default,
+                "value": current_val,
+            })
+        return json_response({"fields": fields})
+
     async def _web_save_settings(self):
-        """保存插件设置。校验 provider_id 存在性 + bool 字段。"""
+        """保存插件设置。支持所有 schema 字段 + 4 个 refine_* 字段。
+
+        校验：
+        - llm_provider_id：必须存在（空字符串表示使用事件默认）
+        - bool 类型字段：bool()
+        - int 类型字段：int()
+        - float 类型字段：float()
+        - string 类型字段：str()
+        保存后调用 _apply_config_to_runtime() 立即生效。
+        """
         payload = await request.json(default={}) or {}
         if not isinstance(payload, dict):
             return error_response("payload must be a JSON object", status_code=400)
 
+        schema = self._load_schema()
         new_settings: dict = {}
 
-        pid = payload.get("llm_provider_id")
-        if pid is not None:
-            pid = str(pid).strip()
+        # 1. llm_provider_id（特殊处理：空串表示使用默认）
+        if "llm_provider_id" in payload:
+            pid = payload.get("llm_provider_id")
+            pid = str(pid).strip() if pid is not None else ""
             if pid and not self._provider_exists(pid):
                 return error_response(
                     f"provider_id '{pid}' 不存在", status_code=400
                 )
             new_settings["llm_provider_id"] = pid
 
+        # 2. refine_on_*（不在 schema 中，但 settings.json 支持）
         for key in ("refine_on_search", "refine_on_import", "refine_on_verify"):
             if key in payload:
                 try:
@@ -894,14 +947,127 @@ class ActiveLearnerPlugin(Star):
                 except (TypeError, ValueError):
                     return error_response(f"{key} must be boolean", status_code=400)
 
+        # 3. schema 字段（按 type 校验）
+        for name, spec in schema.items():
+            if name not in payload or not isinstance(spec, dict):
+                continue
+            ftype = spec.get("type", "string")
+            raw = payload.get(name)
+            if raw is None and ftype != "string":
+                # None 表示用户清空了输入，跳过此字段
+                continue
+            try:
+                if ftype == "bool":
+                    new_settings[name] = bool(raw)
+                elif ftype == "int":
+                    new_settings[name] = int(raw)
+                elif ftype == "float":
+                    new_settings[name] = float(raw)
+                else:
+                    new_settings[name] = str(raw)
+            except (TypeError, ValueError):
+                return error_response(
+                    f"字段 '{name}' 类型错误：期望 {ftype}，实际 {type(raw).__name__}",
+                    status_code=400,
+                )
+
+        # 保存并应用
         updated = self._settings.update(**new_settings)
+        try:
+            self._apply_config_to_runtime(updated)
+        except Exception as e:
+            logger.warning(f"应用配置到运行时失败: {e}")
         logger.info(f"插件设置已更新: {new_settings}")
-        return json_response({
+
+        # 返回更新后的全量设置（含 schema 字段）
+        resp = {
             "llm_provider_id": updated.get("llm_provider_id", ""),
             "refine_on_search": bool(updated.get("refine_on_search", True)),
             "refine_on_import": bool(updated.get("refine_on_import", True)),
             "refine_on_verify": bool(updated.get("refine_on_verify", True)),
-        })
+        }
+        for name in schema.keys():
+            if name in updated:
+                resp[name] = updated[name]
+        return json_response(resp)
+
+    def _apply_config_to_runtime(self, settings: dict) -> None:
+        """把保存后的设置立即应用到运行时变量（无需重启 AstrBot）。
+
+        合并优先级：settings（自管存储）覆盖 self.config（schema 默认）。
+        """
+        cfg = dict(self.config or {})
+        cfg.update({k: v for k, v in settings.items() if v is not None})
+
+        # 容量与置信度阈值
+        try:
+            self.store._max_entries = int(cfg.get("max_entries", 500))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.store._min_confidence = float(cfg.get("min_confidence", 0.3))
+        except (TypeError, ValueError):
+            pass
+
+        # DuckDuckGo 兜底
+        self.searcher._ddg_fallback = bool(cfg.get("ddg_fallback", True))
+
+        # 关键词提示
+        self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
+
+        # LLM Provider
+        self._cfg_llm_provider_id = (cfg.get("llm_provider_id") or "").strip()
+
+        # 混合检索
+        new_embedding_enabled = bool(cfg.get("embedding_enabled", True))
+        if new_embedding_enabled and self.embedder is None:
+            try:
+                self.embedder = Embedder(self)
+                logger.info("已启用向量检索（运行时切换）")
+            except Exception as e:
+                logger.warning(f"启用向量检索失败: {e}")
+                self.embedder = None
+        elif not new_embedding_enabled and self.embedder is not None:
+            self.embedder = None
+            logger.info("已禁用向量检索（运行时切换）")
+        self._hybrid_weights = self._parse_hybrid_weights(
+            cfg.get("hybrid_search_weight", "0.4,0.6")
+        )
+        try:
+            self._decay_half_life_days = float(cfg.get("decay_half_life_days", 30))
+        except (TypeError, ValueError):
+            pass
+        self._enable_scope_fallback = bool(cfg.get("enable_scope_fallback", True))
+
+        # 关心领域
+        self._priority_topics = [
+            t.strip().lower()
+            for t in (cfg.get("priority_topics") or "").split(",")
+            if t.strip()
+        ]
+        try:
+            self._priority_boost_max = float(cfg.get("priority_boost_max", 1.3))
+            self._priority_boost_min = float(cfg.get("priority_boost_min", 1.0))
+            self._priority_boost_decay = float(cfg.get("priority_boost_decay", 0.85))
+        except (TypeError, ValueError):
+            pass
+        # 重置当前 boost（命中关心领域重置为 max，否则保持 1.0）
+        self._priority_boost = self._priority_boost_max if self._priority_topics else 1.0
+
+        # 上下文注入条数
+        try:
+            self._context_inject_count = max(
+                1, min(10, int(cfg.get("context_inject_count", 3)))
+            )
+        except (TypeError, ValueError):
+            pass
+
+        # 清空 embedder 矩阵缓存（参数变化后需重建）
+        if self.embedder is not None:
+            try:
+                self.embedder.invalidate_matrix_cache()
+            except Exception:
+                pass
 
     # ---------- 导入功能 ----------
 

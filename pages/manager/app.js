@@ -334,6 +334,7 @@ function bindEvents() {
   document.getElementById("btn-refresh").addEventListener("click", refreshAll);
   document.getElementById("btn-export").addEventListener("click", exportData);
   document.getElementById("btn-settings").addEventListener("click", openSettingsModal);
+  document.getElementById("btn-config").addEventListener("click", openConfigModal);
 
   document.getElementById("page-prev").addEventListener("click", () => {
     if (state.page > 1) {
@@ -736,11 +737,210 @@ function bindImportEvents() {
   });
 }
 
+// ---------- Config Modal（直接读取 _conf_schema.json 渲染） ----------
+
+const configState = {
+  fields: [],
+  original: {},
+};
+
+function openConfigModal() {
+  const modal = document.getElementById("config-modal");
+  modal.classList.remove("hidden");
+  loadConfigSchema().catch((e) => {
+    showToast(`加载配置失败: ${e.message}`, true);
+  });
+}
+
+function closeConfigModal() {
+  document.getElementById("config-modal").classList.add("hidden");
+}
+
+async function loadConfigSchema() {
+  const container = document.getElementById("config-form");
+  container.innerHTML = '<p class="muted">加载中…</p>';
+  try {
+    const data = await bridge.apiGet("config_schema");
+    configState.fields = data.fields || [];
+    configState.original = {};
+    for (const f of configState.fields) {
+      configState.original[f.name] = f.value;
+    }
+    renderConfigForm(configState.fields);
+  } catch (e) {
+    container.innerHTML = `<p class="error-msg">加载失败：${escapeHtml(e.message)}</p>`;
+    throw e;
+  }
+}
+
+function renderConfigForm(fields) {
+  const container = document.getElementById("config-form");
+  if (!fields.length) {
+    container.innerHTML = '<p class="muted">未读取到任何配置字段</p>';
+    return;
+  }
+  container.innerHTML = "";
+  for (const f of fields) {
+    const card = document.createElement("div");
+    card.className = "config-field";
+    const isBool = f.type === "bool";
+    const label = document.createElement("label");
+    label.className = isBool ? "config-bool" : "config-input";
+    if (isBool) {
+      label.innerHTML = `
+        <input type="checkbox" data-field="${escapeHtml(f.name)}" ${f.value ? "checked" : ""} />
+        <span class="config-field-name">${escapeHtml(f.description || f.name)}</span>
+        <span class="config-field-key">${escapeHtml(f.name)}</span>
+      `;
+    } else {
+      const inputAttrs = configInputAttrs(f);
+      label.innerHTML = `
+        <span class="config-field-name">${escapeHtml(f.description || f.name)}</span>
+        <span class="config-field-key">${escapeHtml(f.name)}</span>
+        <input ${inputAttrs} data-field="${escapeHtml(f.name)}" value="${escapeHtmlAttr(f.value)}" />
+      `;
+    }
+    card.appendChild(label);
+    if (f.hint) {
+      const hint = document.createElement("p");
+      hint.className = "config-hint";
+      hint.textContent = f.hint;
+      card.appendChild(hint);
+    }
+    if (f.default !== undefined && f.default !== null && f.default !== "") {
+      const def = document.createElement("p");
+      def.className = "config-default";
+      def.textContent = `默认值：${typeof f.default === "boolean" ? (f.default ? "true" : "false") : f.default}`;
+      card.appendChild(def);
+    }
+    container.appendChild(card);
+  }
+}
+
+function configInputAttrs(f) {
+  if (f.type === "int") {
+    return `type="number" step="1"`;
+  }
+  if (f.type === "float") {
+    return `type="number" step="0.01"`;
+  }
+  return `type="text"`;
+}
+
+function escapeHtmlAttr(v) {
+  if (v == null) return "";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return String(v);
+}
+
+function collectConfigPayload() {
+  const payload = {};
+  for (const f of configState.fields) {
+    const el = document.querySelector(`#config-form [data-field="${cssEscape(f.name)}"]`);
+    if (!el) continue;
+    if (f.type === "bool") {
+      payload[f.name] = !!el.checked;
+    } else if (f.type === "int") {
+      const raw = el.value.trim();
+      if (raw === "") continue;
+      const v = parseInt(raw, 10);
+      if (isNaN(v)) {
+        throw new Error(`字段 ${f.name} 必须是整数`);
+      }
+      payload[f.name] = v;
+    } else if (f.type === "float") {
+      const raw = el.value.trim();
+      if (raw === "") continue;
+      const v = parseFloat(raw);
+      if (isNaN(v)) {
+        throw new Error(`字段 ${f.name} 必须是数字`);
+      }
+      payload[f.name] = v;
+    } else {
+      payload[f.name] = el.value;
+    }
+  }
+  return payload;
+}
+
+function cssEscape(name) {
+  if (window.CSS && CSS.escape) return CSS.escape(name);
+  return String(name).replace(/(["\\])/g, "\\$1");
+}
+
+async function saveConfig() {
+  const btn = document.getElementById("config-save");
+  const original = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "保存中…";
+  }
+  let payload;
+  try {
+    payload = collectConfigPayload();
+  } catch (e) {
+    showToast(`校验失败：${e.message}`, true);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+    return;
+  }
+  try {
+    const result = await bridge.apiPost("settings", payload);
+    const changed = Object.keys(payload).length;
+    showToast(`✅ 已保存 ${changed} 项配置并即时生效`);
+    // 更新本地 original，便于"恢复默认"判断
+    for (const k of Object.keys(payload)) {
+      configState.original[k] = payload[k];
+    }
+    closeConfigModal();
+    await loadDebug();
+  } catch (e) {
+    showToast(`保存失败：${escapeHtml(e.message || String(e))}`, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+}
+
+function resetConfigToDefault() {
+  if (!confirm("确认将所有字段重置为 schema 默认值？此操作只填入表单，需点击「保存」才生效。")) {
+    return;
+  }
+  for (const f of configState.fields) {
+    const el = document.querySelector(`#config-form [data-field="${cssEscape(f.name)}"]`);
+    if (!el) continue;
+    if (f.type === "bool") {
+      el.checked = !!f.default;
+    } else {
+      el.value = f.default !== undefined && f.default !== null ? escapeHtmlAttr(f.default) : "";
+    }
+  }
+  showToast("已填入默认值，请点击「保存」生效");
+}
+
+function bindConfigEvents() {
+  document
+    .querySelectorAll("#config-modal .modal-close, #config-modal .modal-backdrop, #config-cancel")
+    .forEach((el) => {
+      el.addEventListener("click", closeConfigModal);
+    });
+  document.getElementById("config-save").addEventListener("click", saveConfig);
+  document.getElementById("config-reset").addEventListener("click", resetConfigToDefault);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeConfigModal();
+  });
+}
+
 async function init() {
   await bridge.ready();
   bindEvents();
   bindImportEvents();
   bindSettingsEvents();
+  bindConfigEvents();
   await refreshAll();
 }
 

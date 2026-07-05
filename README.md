@@ -88,11 +88,22 @@ aiohttp>=3.8.0
 
 可选依赖（启用 B 站搜索）：
 
-```bash
-pip install bilibili-api-python
-```
+本插件 B 站搜索功能采用三级降级链路，按以下优先级依次尝试：
 
-> 不安装也能用，B 站工具会自动回退到 `site:bilibili.com` 网页搜索。
+1. **`astrbot_plugin_bilibili_ai_bot` 插件（推荐，优先使用）**
+   - 仓库地址：https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot
+   - 安装该插件并完成 `/bili登录` 后，本插件会自动接管 B 站搜索请求
+   - 启动时若检测到该插件已加载，会在日志中输出「已连接 astrbot_plugin_bilibili_ai_bot」
+
+2. **`bilibili-api-python` 库（次选）**
+
+   ```bash
+   pip install bilibili-api-python
+   ```
+
+3. **`site:bilibili.com` 网页搜索（兜底）**
+
+> 以上三种方式任一可用即可，不安装也能用——会自动回退到网页搜索。
 
 ## 配置
 

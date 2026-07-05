@@ -14,6 +14,7 @@
         <button id="btn-refresh" type="button" title="刷新">↻ 刷新</button>
         <button id="btn-import" type="button" title="导入">⬆ 导入</button>
         <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
+        <button id="btn-config" type="button" title="编辑配置文件">📋 配置</button>
         <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
       </div>
     </div>
@@ -127,6 +128,27 @@
       <footer class="modal-footer">
         <button type="button" id="settings-cancel">取消</button>
         <button type="button" id="settings-save" class="primary">保存</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="config-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2>📋 编辑配置</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="config-intro">直接读取 <code>_conf_schema.json</code> 渲染。修改后保存即时生效（无需重启 AstrBot）。</p>
+        <div id="config-form" class="config-form">
+          <p class="muted">加载中…</p>
+        </div>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="config-cancel">取消</button>
+        <button type="button" id="config-reset" title="重置为 schema 默认">↺ 恢复默认</button>
+        <button type="button" id="config-save" class="primary">保存</button>
       </footer>
     </div>
   </div>

@@ -658,8 +658,127 @@ input[type="file"]:hover {
   color: var(--text-muted);
 }
 
-.disabled-hint.hidden {
-  display: none;
+/* ---------- Config Modal（直接读取 schema 渲染） ---------- */
+
+.config-intro {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.config-intro code {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  color: var(--text);
+}
+
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.config-field {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--card-bg);
+}
+
+.config-field:hover {
+  border-color: var(--accent);
+}
+
+.config-bool,
+.config-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.config-input {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.config-field-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.config-field-key {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+.config-bool input[type="checkbox"],
+.config-input input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.config-input input[type="text"],
+.config-input input[type="number"] {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.config-input input:focus {
+  border-color: var(--accent);
+  background: var(--card-bg);
+}
+
+.config-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.config-default {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
+
+.config-default::before {
+  content: "▸ ";
+}
+
+#config-modal .modal-footer {
+  justify-content: space-between;
+}
+
+#config-modal .modal-footer > #config-cancel {
+  margin-right: auto;
 }
 
 #settings-modal .modal-body {

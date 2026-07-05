@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.10] - 2026-07-06
+
+### 新增
+
+- **可视化配置编辑入口**：Dashboard 页面顶部新增「📋 配置」按钮，直接读取 `_conf_schema.json` 动态渲染所有 16 个字段的可视化表单
+  - 后端新增 `/config_schema` GET API 返回 schema 与当前合并值
+  - 前端按字段类型动态渲染：`bool` → 复选框，`int`/`float` → 数字输入框，`string` → 文本输入框
+  - 每个字段卡片显示描述、技术名、hint、默认值
+  - 保存即时生效（无需重启 AstrBot）：`_apply_config_to_runtime()` 把合并后的配置应用到所有运行时变量（max_entries、min_confidence、priority_topics、context_inject_count、embedding_enabled、hybrid_search_weight、decay_half_life_days、priority_boost_* 等）
+  - 「↺ 恢复默认」一键填入所有 schema 默认值（仅填入表单，需点击「保存」才生效）
+  - 原「⚙ 设置」按钮保留作为 Provider + 精炼开关的快速切换入口
+
 ## [2.4.9] - 2026-07-06
 
 ### 重构
