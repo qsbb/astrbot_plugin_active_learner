@@ -84,12 +84,12 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         topic = kwargs.get("topic", "").strip()
         query = kwargs.get("query", topic).strip()
         if not topic:
-            return ToolExecResult("请提供要学习的主题")
+            return ("请提供要学习的主题")
 
         plugin = self._plugin
         scope = _resolve_scope(context)
         if scope is None:
-            return ToolExecResult("无法识别会话作用域，学习失败")
+            return ("无法识别会话作用域，学习失败")
 
         # 1. 多源搜索
         search_results = await plugin.searcher.search(query, max_results=6)
@@ -103,7 +103,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
                 logger.debug(f"B 站搜索失败: {e}")
 
         if not search_results:
-            return ToolExecResult(f"搜索「{query}」未找到结果，无法学习")
+            return (f"搜索「{query}」未找到结果，无法学习")
 
         # 2. 整理搜索结果
         snippets = []
@@ -147,7 +147,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
 
         logger.info(f"学习新知识: {topic} (置信度{confidence:.0%})")
 
-        return ToolExecResult(
+        return (
             f"已学习「{topic}」并存入记忆库。\n"
             f"总结: {summary[:200]}\n"
             f"置信度: {confidence:.0%}\n"
@@ -184,16 +184,16 @@ class RecallMemoryTool(FunctionTool):  # type: ignore[misc]
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         query = kwargs.get("query", "").strip()
         if not query:
-            return ToolExecResult("请提供要检索的关键词")
+            return ("请提供要检索的关键词")
 
         plugin = self._plugin
         scope = _resolve_scope(context)
         if scope is None:
-            return ToolExecResult("无法识别会话作用域")
+            return ("无法识别会话作用域")
 
         hits = plugin.store.search(scope, query, top_k=3)
         if not hits:
-            return ToolExecResult(f"记忆库中未找到关于「{query}」的知识。可调用 search_and_learn 学习。")
+            return (f"记忆库中未找到关于「{query}」的知识。可调用 search_and_learn 学习。")
 
         parts = []
         for h in hits:
@@ -204,7 +204,7 @@ class RecallMemoryTool(FunctionTool):  # type: ignore[misc]
                 f"内容: {entry.content}\n"
                 f"来源: {entry.source}"
             )
-        return ToolExecResult("\n\n".join(parts))
+        return ("\n\n".join(parts))
 
 
 # ============================================================
@@ -242,12 +242,12 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
         topic = kwargs.get("topic", "").strip()
         claim = kwargs.get("claim", "").strip()
         if not topic:
-            return ToolExecResult("请提供要验证的主题")
+            return ("请提供要验证的主题")
 
         plugin = self._plugin
         scope = _resolve_scope(context)
         if scope is None:
-            return ToolExecResult("无法识别会话作用域")
+            return ("无法识别会话作用域")
 
         # 优先从记忆库找已有条目
         entry = plugin.store.search_by_topic(scope, topic)
@@ -258,7 +258,7 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
                 entry = hits[0].entry
 
         if entry is None:
-            return ToolExecResult(f"记忆库中未找到关于「{topic}」的记忆，请先调用 search_and_learn 学习。")
+            return (f"记忆库中未找到关于「{topic}」的记忆，请先调用 search_and_learn 学习。")
 
         # 标记质疑
         plugin.store.inc_challenge(entry.id)
@@ -277,7 +277,7 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
         # 执行验证
         result = await plugin.verifier.run(entry, provider_id, claim=claim or None)
 
-        return ToolExecResult(
+        return (
             f"验证完成: {topic}\n"
             f"━━━━━━━━━━\n"
             f"{result.to_text()}"
@@ -318,7 +318,7 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         keyword = kwargs.get("keyword", "").strip()
         if not keyword:
-            return ToolExecResult("请提供搜索关键词")
+            return ("请提供搜索关键词")
 
         try:
             limit = int(kwargs.get("limit", 5))
@@ -332,16 +332,16 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
         if plugin.bili_source and plugin.bili_source.is_available():
             results = await plugin.bili_source.search(keyword, limit=limit)
             if results:
-                return ToolExecResult(_format_bili_results(results))
+                return (_format_bili_results(results))
 
             # 回退
             results = await plugin.bili_source.search_fallback(keyword, plugin.searcher, limit=limit)
-            return ToolExecResult(_format_bili_results(results, fallback=True))
+            return (_format_bili_results(results, fallback=True))
 
         # 不可用 → web 搜索 site:bilibili.com
         query = f"{keyword} site:bilibili.com"
         results = await plugin.searcher.search(query, max_results=limit)
-        return ToolExecResult(_format_bili_results(results, fallback=True))
+        return (_format_bili_results(results, fallback=True))
 
 
 # ============================================================
