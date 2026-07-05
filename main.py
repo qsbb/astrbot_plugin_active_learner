@@ -57,7 +57,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
 
 @register(
     "astrbot_plugin_active_learner",
-    "AstrBotUser",
+    "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
     "2.6.1",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
