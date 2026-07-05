@@ -310,7 +310,7 @@ class ActiveLearnerPlugin(Star):
             tags.append(f"{len(hits)}条记忆")
         if is_challenge and hits:
             tags.append("质疑提示")
-        if is_learn_trigger:
+        if self._enable_active_learn_hint and not hits:
             tags.append("学习提示")
         try:
             if hasattr(req, "extra_user_content_parts"):

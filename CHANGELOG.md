@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.12] - 2026-07-06
+
+### 修复
+
+- **修复 `is_learn_trigger` 未定义导致插件加载/调用崩溃**：v2.4.6 去掉主动学习正则门槛时漏清理 tags 汇总逻辑，第 313 行仍引用已被删除的 `is_learn_trigger` 变量，触发 `NameError`。改为与第 290 行注入条件一致的 `self._enable_active_learn_hint and not hits` 判断
+
 ## [2.4.11] - 2026-07-06
 
 ### 新增
