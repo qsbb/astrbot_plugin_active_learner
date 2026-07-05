@@ -1,8 +1,8 @@
 {
     "max_entries": {
-        "description": "记忆库最大条数",
+        "description": "单 scope 最大记忆条数",
         "type": "int",
-        "hint": "超过此数量后会自动淘汰低质量记忆",
+        "hint": "超过此数量后会按置信度+访问频率淘汰低质量记忆。每个用户/群聊独立计算。",
         "default": 500
     },
     "min_confidence": {
@@ -11,10 +11,28 @@
         "hint": "低于此置信度的记忆会被优先淘汰（0.0~1.0）",
         "default": 0.3
     },
-    "search_threshold": {
-        "description": "关键词匹配阈值",
-        "type": "float",
-        "hint": "匹配分数高于此值才认为相关（0.0~1.0）",
-        "default": 0.45
+    "enable_active_learn_hint": {
+        "description": "启用关键词主动学习提示",
+        "type": "bool",
+        "hint": "当消息命中'什么是/不懂/解释一下'等关键词且记忆库无答案时，提示 LLM 调用 search_and_learn 工具",
+        "default": true
+    },
+    "enable_bilibili": {
+        "description": "启用 B 站搜索源",
+        "type": "bool",
+        "hint": "需要自行 pip install bilibili-api-python。不可用时 search_bilibili 工具会回退到普通网页搜索（site:bilibili.com）",
+        "default": false
+    },
+    "debate_rounds": {
+        "description": "质疑验证的自辩论轮数",
+        "type": "int",
+        "hint": "验证某条记忆时，LLM 自辩论的轮数。2 表示：支持方→质疑方→仲裁。",
+        "default": 2
+    },
+    "ddg_fallback": {
+        "description": "无内置搜索时使用 DuckDuckGo",
+        "type": "bool",
+        "hint": "当 AstrBot 未配置 Tavily/BoCha/Brave/百度 时，是否用 DuckDuckGo 兜底",
+        "default": true
     }
 }

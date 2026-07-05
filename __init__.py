@@ -1,1 +1,1 @@
-# AstrBot Active Learner Plugin
+"""AstrBot 主动学习记忆插件包。"""
