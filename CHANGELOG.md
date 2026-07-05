@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.11] - 2026-07-06
+
+### 新增
+
+- **LLM Provider 配置界面下拉选择**：`_conf_schema.json` 中 `llm_provider_id` 字段添加 `"_special": "select_provider"` 标记，AstrBot 配置界面会自动渲染为下拉框，列出所有已注册的 LLM 模型
+  - 用户无需手动填入 provider id，直接在下拉框中选择即可
+  - 留空（默认）则回退到当前对话模型，行为与之前一致
+  - 参考 `menglimi/astrbot_plugin_private_companion` 的实现约定
+
 ## [2.4.10] - 2026-07-06
 
 ### 新增

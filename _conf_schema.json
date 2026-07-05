@@ -36,9 +36,10 @@
         "default": true
     },
     "llm_provider_id": {
-        "description": "插件专用 LLM Provider ID（可空）",
+        "description": "插件专用 LLM Provider（留空用当前对话模型）",
         "type": "string",
-        "hint": "留空则按事件默认 Provider。也可在 Dashboard「⚙ 设置」页选择，设置页优先级更高。",
+        "_special": "select_provider",
+        "hint": "选择本插件进行搜索学习 / 导入精炼 / 验证 时使用的 LLM。留空则回退到 AstrBot 当前对话模型。Dashboard「⚙ 设置」页的同名字段优先级更高。",
         "default": ""
     },
     "embedding_enabled": {
