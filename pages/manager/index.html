@@ -12,6 +12,7 @@
       <h1>🧠 主动学习记忆</h1>
       <div class="actions">
         <button id="btn-refresh" type="button" title="刷新">↻ 刷新</button>
+        <button id="btn-import" type="button" title="导入">⬆ 导入</button>
         <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
       </div>
     </div>
@@ -80,6 +81,102 @@
         <button type="button" id="detail-verify">🔍 触发验证</button>
         <button type="button" id="detail-forget" class="danger">🗑 删除</button>
       </footer>
+    </div>
+  </div>
+
+  <div id="import-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2>导入记忆</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab-btn active" data-tab="text" role="tab">文本</button>
+          <button type="button" class="tab-btn" data-tab="md" role="tab">Markdown</button>
+          <button type="button" class="tab-btn" data-tab="zip" role="tab">批量 ZIP</button>
+        </div>
+
+        <div class="tab-panels">
+          <form id="import-text-form" class="tab-panel active" data-panel="text">
+            <label class="control">
+              <span>主题 *</span>
+              <input type="text" name="topic" required placeholder="如：量子纠缠" />
+            </label>
+            <label class="control">
+              <span>内容 *</span>
+              <textarea name="content" rows="8" required placeholder="粘贴要记忆的文本内容…"></textarea>
+            </label>
+            <div class="scope-row">
+              <label class="control">
+                <span>Scope 类型 *</span>
+                <select name="scope_type">
+                  <option value="global">global（全局）</option>
+                  <option value="private">private（私聊）</option>
+                  <option value="group">group（群聊）</option>
+                </select>
+              </label>
+              <label class="control">
+                <span>Scope ID</span>
+                <input type="text" name="scope_id" placeholder="global 时留空" />
+              </label>
+            </div>
+            <button type="submit" class="primary">导入</button>
+          </form>
+
+          <form id="import-md-form" class="tab-panel" data-panel="md">
+            <label class="control">
+              <span>Markdown 文件 *</span>
+              <input type="file" name="file" accept=".md,.markdown,text/markdown" required />
+            </label>
+            <label class="control">
+              <span>主题（留空则用首个 # 标题或文件名）</span>
+              <input type="text" name="topic" placeholder="自动提取" />
+            </label>
+            <div class="scope-row">
+              <label class="control">
+                <span>Scope 类型 *</span>
+                <select name="scope_type">
+                  <option value="global">global（全局）</option>
+                  <option value="private">private（私聊）</option>
+                  <option value="group">group（群聊）</option>
+                </select>
+              </label>
+              <label class="control">
+                <span>Scope ID</span>
+                <input type="text" name="scope_id" placeholder="global 时留空" />
+              </label>
+            </div>
+            <button type="submit" class="primary">导入</button>
+          </form>
+
+          <form id="import-zip-form" class="tab-panel" data-panel="zip">
+            <label class="control">
+              <span>ZIP 压缩包 *</span>
+              <input type="file" name="file" accept=".zip,application/zip" required />
+            </label>
+            <p class="hint">批量导入 ZIP 内所有 <code>.md</code> 文件。每个文件成为一条独立记忆，主题取自首个 # 标题或文件名。</p>
+            <div class="scope-row">
+              <label class="control">
+                <span>Scope 类型 *</span>
+                <select name="scope_type">
+                  <option value="global">global（全局）</option>
+                  <option value="private">private（私聊）</option>
+                  <option value="group">group（群聊）</option>
+                </select>
+              </label>
+              <label class="control">
+                <span>Scope ID</span>
+                <input type="text" name="scope_id" placeholder="global 时留空" />
+              </label>
+            </div>
+            <button type="submit" class="primary">批量导入</button>
+          </form>
+        </div>
+
+        <div id="import-result" class="import-result hidden"></div>
+      </div>
     </div>
   </div>
 

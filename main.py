@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
+import zipfile
 from pathlib import Path
 
 from astrbot.api import logger
@@ -41,7 +43,7 @@ PLUGIN_NAME = "astrbot_plugin_active_learner"
     "astrbot_plugin_active_learner",
     "AstrBotUser",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.1.0",
+    "2.2.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -166,6 +168,7 @@ class ActiveLearnerPlugin(Star):
             )
 
         # 3. 主动学习提示
+        is_learn_trigger = False
         if self._enable_active_learn_hint and not hits:
             is_learn_trigger = any(re.search(p, msg) for p in ACTIVE_LEARN_PATTERNS)
             if is_learn_trigger:
@@ -179,11 +182,19 @@ class ActiveLearnerPlugin(Star):
             return
 
         injection = "\n".join(parts)
+        # 标签汇总，让日志一眼看出注入了什么
+        tags = []
+        if hits:
+            tags.append(f"{len(hits)}条记忆")
+        if is_challenge and hits:
+            tags.append("质疑提示")
+        if is_learn_trigger:
+            tags.append("学习提示")
         try:
             if hasattr(req, "extra_user_content_parts"):
                 from astrbot.core.agent.message import TextPart
                 req.extra_user_content_parts.append(TextPart(text=injection))
-                logger.debug(f"注入 {len(hits)} 条记忆上下文 (extra_user_content_parts)")
+                logger.info(f"注入上下文 [{'/'.join(tags)}] (scope: {scope})")
             else:
                 # 兜底：修改 system_prompt（会破坏 prompt 缓存，仅降级用）
                 req.system_prompt = (req.system_prompt or "") + "\n" + injection
@@ -390,7 +401,7 @@ class ActiveLearnerPlugin(Star):
     # ---------- Dashboard 管理页面后端 API ----------
 
     def _register_web_apis(self, context: Context) -> None:
-        """注册 8 个 web API 路由供 Dashboard 页面调用。"""
+        """注册 11 个 web API 路由供 Dashboard 页面调用。"""
         context.register_web_api(
             f"/{PLUGIN_NAME}/stats", self._web_stats, ["GET"], "记忆库统计"
         )
@@ -418,6 +429,15 @@ class ActiveLearnerPlugin(Star):
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/export", self._web_export, ["GET"], "导出 JSON"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/import_text", self._web_import_text, ["POST"], "导入纯文本"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/import_md", self._web_import_md, ["POST"], "导入 Markdown"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/import_zip", self._web_import_zip, ["POST"], "批量导入 ZIP"
         )
 
     @staticmethod
@@ -558,3 +578,132 @@ class ActiveLearnerPlugin(Star):
                 if pid:
                     return str(pid)
         return ""
+
+    # ---------- 导入功能 ----------
+
+    async def _web_import_text(self):
+        """导入纯文本：JSON body {topic, content, scope_type, scope_id, keywords?}"""
+        payload = await request.json(default={}) or {}
+        topic = (payload.get("topic") or "").strip()
+        content = payload.get("content") or ""
+        scope_type = (payload.get("scope_type") or "").strip()
+        scope_id = (payload.get("scope_id") or "").strip()
+        keywords = payload.get("keywords") or None
+        if not topic or not content or not scope_type:
+            return error_response("topic, content, scope_type required", status_code=400)
+        scope = Scope(type=scope_type, id=scope_id)
+        try:
+            entry = self.store.add_or_update(
+                scope=scope, topic=topic, content=content,
+                keywords=keywords, source="手动导入",
+                sources_detail=None, confidence=0.6,
+            )
+        except Exception as e:
+            return error_response(f"导入失败: {e}", status_code=500)
+        logger.info(f"导入文本: {topic} (scope: {scope})")
+        return json_response({"ok": True, "entry": entry.to_dict()})
+
+    async def _web_import_md(self):
+        """导入单个 Markdown：JSON body {filename?, topic?, content, scope_type, scope_id}"""
+        payload = await request.json(default={}) or {}
+        content = payload.get("content") or ""
+        filename = (payload.get("filename") or "").strip()
+        topic = (payload.get("topic") or "").strip()
+        scope_type = (payload.get("scope_type") or "").strip()
+        scope_id = (payload.get("scope_id") or "").strip()
+        if not content or not scope_type:
+            return error_response("content, scope_type required", status_code=400)
+
+        content_clean, extracted_topic = _parse_md(content)
+        if not topic:
+            topic = extracted_topic or (filename.rsplit(".", 1)[0] if filename else "未命名")
+
+        scope = Scope(type=scope_type, id=scope_id)
+        try:
+            entry = self.store.add_or_update(
+                scope=scope, topic=topic, content=content_clean,
+                keywords=None, source=f"MD导入 ({filename})" if filename else "MD导入",
+                sources_detail=None, confidence=0.6,
+            )
+        except Exception as e:
+            return error_response(f"导入失败: {e}", status_code=500)
+        logger.info(f"导入 MD: {topic} (scope: {scope})")
+        return json_response({"ok": True, "entry": entry.to_dict()})
+
+    async def _web_import_zip(self):
+        """批量导入 ZIP 中的 .md 文件：JSON body {filename?, base64, scope_type, scope_id}"""
+        import base64 as _b64
+
+        payload = await request.json(default={}) or {}
+        b64 = payload.get("base64") or ""
+        filename = (payload.get("filename") or "").strip()
+        scope_type = (payload.get("scope_type") or "").strip()
+        scope_id = (payload.get("scope_id") or "").strip()
+        if not b64 or not scope_type:
+            return error_response("base64, scope_type required", status_code=400)
+
+        try:
+            raw = _b64.b64decode(b64)
+        except Exception as e:
+            return error_response(f"base64 解码失败: {e}", status_code=400)
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(raw))
+        except Exception as e:
+            return error_response(f"无法读取 zip: {e}", status_code=400)
+
+        scope = Scope(type=scope_type, id=scope_id)
+        results = []
+        success_count = 0
+        for name in zf.namelist():
+            if name.endswith("/") or not name.lower().endswith(".md"):
+                continue
+            try:
+                md_bytes = zf.read(name)
+                try:
+                    md_content = md_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    md_content = md_bytes.decode("gbk", errors="replace")
+                md_clean, extracted_topic = _parse_md(md_content)
+                topic = extracted_topic or name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                entry = self.store.add_or_update(
+                    scope=scope, topic=topic, content=md_clean,
+                    keywords=None, source=f"ZIP导入 ({name})",
+                    sources_detail=None, confidence=0.6,
+                )
+                success_count += 1
+                results.append({"file": name, "topic": topic, "entry_id": entry.id, "ok": True})
+            except Exception as e:
+                results.append({"file": name, "ok": False, "error": str(e)})
+
+        logger.info(
+            f"批量导入 ZIP: {success_count}/{len(results)} 成功 (scope: {scope})"
+        )
+        return json_response({
+            "ok": True,
+            "total": len(results),
+            "success": success_count,
+            "failed": len(results) - success_count,
+            "results": results,
+        })
+
+
+def _parse_md(content: str) -> tuple[str, str]:
+    """解析 Markdown：去除 YAML frontmatter，提取首个 # 标题。
+
+    返回 (clean_content, title)。无标题时 title 为空字符串。
+    """
+    title = ""
+    # 去 YAML frontmatter
+    if content.startswith("---"):
+        end = content.find("\n---", 3)
+        if end != -1:
+            content = content[end + 4:].lstrip("\n")
+    # 提取首个 # 标题
+    for line in content.split("\n", 30):
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            title = stripped[2:].strip()
+            break
+        if stripped and not stripped.startswith("#"):
+            break
+    return content, title

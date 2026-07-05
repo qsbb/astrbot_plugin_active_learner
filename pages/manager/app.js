@@ -338,9 +338,179 @@ function bindEvents() {
   });
 }
 
+// ---------- Import Modal ----------
+
+function openImportModal() {
+  document.getElementById("import-modal").classList.remove("hidden");
+  document.getElementById("import-result").classList.add("hidden");
+}
+
+function closeImportModal() {
+  document.getElementById("import-modal").classList.add("hidden");
+}
+
+function showImportResult(html, isError = false) {
+  const el = document.getElementById("import-result");
+  el.innerHTML = html;
+  el.classList.toggle("error", isError);
+  el.classList.remove("hidden");
+}
+
+function switchImportTab(tabName) {
+  document.querySelectorAll("#import-modal .tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tabName);
+  });
+  document.querySelectorAll("#import-modal .tab-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.panel === tabName);
+  });
+}
+
+async function submitImportText(form) {
+  const payload = {
+    topic: form.topic.value.trim(),
+    content: form.content.value,
+    scope_type: form.scope_type.value,
+    scope_id: form.scope_id.value.trim(),
+  };
+  if (!payload.topic || !payload.content || !payload.scope_type) {
+    showImportResult("❌ 主题、内容、Scope 类型为必填项", true);
+    return;
+  }
+  try {
+    const result = await bridge.apiPost("import_text", payload);
+    showImportResult(`✅ 已导入记忆：<strong>${escapeHtml(result.entry.topic)}</strong>`);
+    form.reset();
+    await refreshAll();
+  } catch (e) {
+    showImportResult(`❌ 导入失败：${escapeHtml(e.message || String(e))}`, true);
+  }
+}
+
+async function submitImportMd(form) {
+  const file = form.file.files[0];
+  if (!file) {
+    showImportResult("❌ 请选择 Markdown 文件", true);
+    return;
+  }
+  const btn = form.querySelector('button[type="submit"]');
+  const original = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "导入中…";
+  }
+  try {
+    const content = await file.text();
+    const payload = {
+      filename: file.name,
+      topic: form.topic.value || "",
+      content,
+      scope_type: form.scope_type.value,
+      scope_id: form.scope_id.value || "",
+    };
+    const result = await bridge.apiPost("import_md", payload);
+    showImportResult(`✅ 已导入：<strong>${escapeHtml(result.entry.topic)}</strong>`);
+    form.reset();
+    await refreshAll();
+  } catch (e) {
+    showImportResult(`❌ 导入失败：${escapeHtml(e.message || String(e))}`, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+}
+
+async function submitImportZip(form) {
+  const file = form.file.files[0];
+  if (!file) {
+    showImportResult("❌ 请选择 ZIP 文件", true);
+    return;
+  }
+  const btn = form.querySelector('button[type="submit"]');
+  const original = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "导入中…";
+  }
+  try {
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    const base64 = btoa(binary);
+    const payload = {
+      filename: file.name,
+      base64,
+      scope_type: form.scope_type.value,
+      scope_id: form.scope_id.value || "",
+    };
+    const result = await bridge.apiPost("import_zip", payload);
+    const lines = [
+      `✅ 批量导入完成：成功 ${result.success} / 总计 ${result.total}（失败 ${result.failed}）`,
+    ];
+    if (result.results && result.results.length) {
+      lines.push('<ul class="import-detail-list">');
+      for (const r of result.results) {
+        if (r.ok) {
+          lines.push(`<li>✅ ${escapeHtml(r.file)} → ${escapeHtml(r.topic || "")}</li>`);
+        } else {
+          lines.push(`<li>❌ ${escapeHtml(r.file)}：${escapeHtml(r.error || "未知错误")}</li>`);
+        }
+      }
+      lines.push("</ul>");
+    }
+    showImportResult(lines.join(""));
+    form.reset();
+    await refreshAll();
+  } catch (e) {
+    showImportResult(`❌ 批量导入失败：${escapeHtml(e.message || String(e))}`, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+}
+
+function bindImportEvents() {
+  document.getElementById("btn-import").addEventListener("click", openImportModal);
+
+  document.querySelectorAll("#import-modal .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => switchImportTab(btn.dataset.tab));
+  });
+
+  document
+    .querySelectorAll("#import-modal .modal-close, #import-modal .modal-backdrop")
+    .forEach((el) => {
+      el.addEventListener("click", closeImportModal);
+    });
+
+  document.getElementById("import-text-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitImportText(e.target);
+  });
+  document.getElementById("import-md-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitImportMd(e.target);
+  });
+  document.getElementById("import-zip-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitImportZip(e.target);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeImportModal();
+  });
+}
+
 async function init() {
   await bridge.ready();
   bindEvents();
+  bindImportEvents();
   await refreshAll();
 }
 
