@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.4] - 2026-07-06
+
+### 修复
+
+- **Dashboard 验证 400 错误（续）**：改用 `_resolve_plugin_provider_id()`（4 层 fallback 链路）解析 provider，替代原有的简化 fallback。包含：Dashboard 设置 → `_conf_schema.json` → 事件默认 → provider_manager 首条 → 配置字段
+
 ## [2.6.3] - 2026-07-06
 
 ### 修复

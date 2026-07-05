@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.3",
+    "2.6.4",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -878,7 +878,7 @@ class ActiveLearnerPlugin(Star):
         payload = await request.json(default={}) or {}
         provider_id = (payload.get("provider_id") or "").strip()
         if not provider_id:
-            provider_id = self._resolve_default_provider_id()
+            provider_id = await self._resolve_plugin_provider_id()
         if not provider_id:
             return error_response(
                 "无法确定 LLM provider，请在请求体中指定 provider_id",
