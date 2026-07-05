@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.2] - 2026-07-06
+
+### 变更
+
+- **B 站搜索接入 astrbot_plugin_bilibili_ai_bot**：`BiliSource` 现优先通过 `Context` 查找已加载的 `BiliBiliBot` 插件实例，调用其 `search_bilibili_videos(keyword, ps)` 方法搜索视频
+- 三级降级链路：BiliBot 插件 → `bilibili-api-python` 库 → `WebSearcher` 搜 `site:bilibili.com`
+- 接口（`is_available()` / `search()` / `search_fallback()`）保持不变，[tools.py](file:///tools.py) 和 [verifier.py](file:///verifier.py) 无需改动
+- 懒查找：首次调用 `search()` 或 `is_available()` 时才遍历已加载插件，避免加载顺序依赖
+
 ## [2.4.1] - 2026-07-06
 
 ### 新增

@@ -94,7 +94,7 @@ class ActiveLearnerPlugin(Star):
 
         # 搜索器与验证器
         self.searcher = WebSearcher(ddg_fallback=ddg_fallback)
-        self.bili_source = BiliSource()
+        self.bili_source = BiliSource(context)
         self.verifier = Verifier(self)
 
         # Phase 1：精炼器 + 自管设置
