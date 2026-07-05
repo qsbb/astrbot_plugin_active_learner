@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "AstrBotUser",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.4.0",
+    "2.6.1",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -1647,6 +1647,7 @@ class ActiveLearnerPlugin(Star):
         try:
             kbs = await km.list_kbs()
         except Exception as e:
+            logger.error(f"读取知识库列表失败: {e}", exc_info=True)
             return error_response(f"读取知识库列表失败: {e}", status_code=500)
         items = []
         for kb in kbs:
@@ -1654,8 +1655,10 @@ class ActiveLearnerPlugin(Star):
             try:
                 docs = await km.kb_db.list_documents_by_kb(kb.kb_id, limit=10000)
                 doc_count = len(docs)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    f"读取 KB {kb.kb_id} 文档数失败: {e}", exc_info=True
+                )
             items.append({
                 "kb_id": kb.kb_id,
                 "kb_name": kb.kb_name,
@@ -1673,13 +1676,20 @@ class ActiveLearnerPlugin(Star):
                 "当前 AstrBot 版本未启用知识库模块（kb_manager 不可用）",
                 status_code=501,
             )
-        kb_helper = await km.get_kb(kb_id)
-        if kb_helper is None:
-            return error_response("知识库不存在", status_code=404)
+        kb_name = ""
         try:
+            kb_helper = await km.get_kb(kb_id)
+            if kb_helper is None:
+                return error_response("知识库不存在", status_code=404)
+            kb_name = kb_helper.kb.kb_name
             docs = await km.kb_db.list_documents_by_kb(kb_id, limit=10000)
         except Exception as e:
-            return error_response(f"读取文档列表失败: {e}", status_code=500)
+            logger.error(
+                f"读取 KB 文档列表失败 (kb_id={kb_id}): {e}", exc_info=True
+            )
+            return error_response(
+                f"读取文档列表失败: {e}", status_code=500
+            )
         items = [{
             "doc_id": d.doc_id,
             "doc_name": d.doc_name,
@@ -1691,7 +1701,7 @@ class ActiveLearnerPlugin(Star):
         return json_response({
             "items": items,
             "kb_id": kb_id,
-            "kb_name": kb_helper.kb.kb_name,
+            "kb_name": kb_name,
         })
 
     async def _read_builtin_doc_chunks(self, kb_helper, doc_id: str) -> list[str]:
@@ -1777,9 +1787,17 @@ class ActiveLearnerPlugin(Star):
                 "当前 AstrBot 版本未启用知识库模块（kb_manager 不可用）",
                 status_code=501,
             )
-        kb_helper = await km.get_kb(kb_id)
-        if kb_helper is None:
-            return error_response(f"知识库 {kb_id} 不存在", status_code=404)
+        try:
+            kb_helper = await km.get_kb(kb_id)
+            if kb_helper is None:
+                return error_response(f"知识库 {kb_id} 不存在", status_code=404)
+        except Exception as e:
+            logger.error(
+                f"获取内置 KB 失败 (kb_id={kb_id}): {e}", exc_info=True
+            )
+            return error_response(
+                f"获取内置 KB 失败: {e}", status_code=500
+            )
 
         scope = Scope(type=scope_type, id=scope_id)
         results = []

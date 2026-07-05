@@ -984,7 +984,11 @@ async function loadBuiltinKbList() {
     renderBuiltinKbList(data.items || []);
   } catch (e) {
     listEl.innerHTML = "";
-    showBuiltinKbError(`读取知识库列表失败：${escapeHtml(e.message || String(e))}`);
+    const msg = e.message || String(e);
+    const hint = msg.includes("status code 5")
+      ? "（详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看）"
+      : "";
+    showBuiltinKbError(`读取知识库列表失败：${escapeHtml(msg)}${hint}`);
   }
 }
 
@@ -1035,7 +1039,11 @@ async function loadBuiltinKbDocuments(kbId) {
     if (titleEl) titleEl.textContent = `文档列表（${data.kb_name || ""}）`;
   } catch (e) {
     docsEl.innerHTML = "";
-    showBuiltinKbError(`读取文档列表失败：${escapeHtml(e.message || String(e))}`);
+    const msg = e.message || String(e);
+    const hint = msg.includes("status code 5")
+      ? "（详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看）"
+      : "";
+    showBuiltinKbError(`读取文档列表失败：${escapeHtml(msg)}${hint}`);
   }
 }
 
@@ -1180,8 +1188,12 @@ async function importBuiltinKb() {
     }
   } catch (e) {
     progressEl.classList.add("error");
-    progressEl.innerHTML = `<p>❌ 导入失败：${escapeHtml(e.message || String(e))}</p>`;
-    showToast(`导入失败：${e.message || e}`, true);
+    const errMsg = e.message || String(e);
+    const hint = errMsg.includes("status code 5")
+      ? "（详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看）"
+      : "";
+    progressEl.innerHTML = `<p>❌ 导入失败：${escapeHtml(errMsg)}${hint}</p>`;
+    showToast(`导入失败：${errMsg}`, true);
   } finally {
     btn.disabled = false;
     btn.textContent = original;

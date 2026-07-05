@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.1] - 2026-07-06
+
+### 修复
+
+- **内置知识库 500 错误诊断增强**：用户报告"点开内置知识库时读取文档列表失败：Request failed with status code 500"
+  - `_web_builtin_kb_documents`：把 `km.get_kb(kb_id)` 移入 try/except，整个 body 包入异常捕获并 `logger.error(exc_info=True)`，让 AstrBot 日志能看到真实异常堆栈
+  - `_web_builtin_kb_list`：`list_kbs` 异常增加 `logger.error(exc_info=True)`；`list_documents_by_kb` 从静默 `except: pass` 改为 `logger.debug(exc_info=True)`，避免吞掉真实错误
+  - `_web_builtin_kb_import`：`km.get_kb(kb_id)` 移入独立 try/except + `logger.error(exc_info=True)`
+- **前端错误提示增强**：list / documents / import 三个端点检测到 5xx 错误时，提示用户"详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看"
+
 ## [2.6.0] - 2026-07-06
 
 ### 新增
