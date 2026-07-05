@@ -115,39 +115,51 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             sources.append(f"{r.get('title','')} ({r.get('url','')})")
         search_text = "\n---\n".join(snippets)
 
-        # 3. LLM 总结
+        # 3. LLM 精炼（2 步：抽取事实 + 结构化为知识卡）
         event = _get_event(context)
         provider_id = ""
         if event is not None:
             try:
-                provider_id = await plugin.context.get_current_chat_provider_id(
+                provider_id = await plugin._resolve_plugin_provider_id(
                     umo=event.unified_msg_origin
                 )
             except Exception:
                 provider_id = ""
 
-        summary = await _llm_summarize(plugin, provider_id, topic, search_text)
+        refine_result = await plugin.refiner.refine_search_results(
+            topic=topic, search_text=search_text, sources=sources, provider_id=provider_id,
+        )
+        summary = refine_result.summary
 
-        # 4. 提取关键词
-        keywords = _extract_keywords(topic, search_results)
+        # 4. 关键词：refined 时用精炼结果，否则降级用规则提取
+        if refine_result.refined and refine_result.keywords:
+            keywords = refine_result.keywords
+        else:
+            keywords = _extract_keywords(topic, search_results)
 
-        # 5. 置信度
-        confidence = min(0.7, 0.3 + len(search_results) * 0.07)
-        if len(search_results) >= 3:
-            confidence = min(0.85, confidence + 0.1)
+        # 5. 置信度：refined 时用 LLM 自评，否则用规则
+        if refine_result.refined:
+            confidence = refine_result.confidence
+        else:
+            confidence = min(0.7, 0.3 + len(search_results) * 0.07)
+            if len(search_results) >= 3:
+                confidence = min(0.85, confidence + 0.1)
 
         # 6. 存入记忆
+        source_tag = f"网络搜索 ({len(sources)}个来源)"
+        if refine_result.refined:
+            source_tag += "+精炼"
         entry = plugin.store.add_or_update(
             scope=scope,
             topic=topic,
             content=summary,
             keywords=keywords,
-            source=f"网络搜索 ({len(sources)}个来源)",
+            source=source_tag,
             sources_detail=sources,
             confidence=confidence,
         )
 
-        logger.info(f"已学习「{topic}」(置信度{confidence:.0%}, 来源{len(sources)}, scope: {scope})")
+        logger.info(f"已学习「{topic}」(置信度{confidence:.0%}, 来源{len(sources)}, refined={refine_result.refined}, scope: {scope})")
 
         return (
             f"已学习「{topic}」并存入记忆库。\n"
@@ -267,12 +279,12 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
         # 标记质疑
         plugin.store.inc_challenge(entry.id)
 
-        # 取 LLM provider
+        # 取 LLM provider（4 层 fallback：Dashboard 设置 → schema → 事件 scope → 同步默认）
         event = _get_event(context)
         provider_id = ""
         if event is not None:
             try:
-                provider_id = await plugin.context.get_current_chat_provider_id(
+                provider_id = await plugin._resolve_plugin_provider_id(
                     umo=event.unified_msg_origin
                 )
             except Exception:
@@ -355,32 +367,6 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
 # ============================================================
 # 辅助函数
 # ============================================================
-
-async def _llm_summarize(plugin, provider_id: str, topic: str, search_text: str) -> str:
-    """用 LLM 总结搜索结果。"""
-    if not provider_id:
-        return f"（搜索结果摘要）{search_text[:200]}"
-
-    prompt = (
-        f"请根据以下搜索结果，对「{topic}」进行准确、简洁的总结。\n"
-        f"要求:\n"
-        f"1. 提取关键事实，避免主观判断\n"
-        f"2. 标注信息的可信度（高/中/低）\n"
-        f"3. 如果搜索结果相互矛盾，请指出分歧\n"
-        f"4. 总结控制在 200 字以内\n"
-        f"5. 提取 3-5 个关键词放在末尾，格式: [关键词: x, y, z]\n\n"
-        f"搜索结果:\n{search_text}"
-    )
-    try:
-        resp = await plugin.context.llm_generate(
-            chat_provider_id=provider_id,
-            prompt=prompt,
-        )
-        return getattr(resp, "completion_text", "") or f"（搜索结果摘要）{search_text[:200]}"
-    except Exception as e:
-        logger.error(f"LLM 总结失败: {e}")
-        return f"（搜索结果摘要）{search_text[:200]}"
-
 
 def _extract_keywords(topic: str, search_results: list[dict]) -> list[str]:
     """从搜索结果中提取高频关键词。"""

@@ -2,6 +2,39 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.0] - 2026-07-06
+
+### 新增
+
+- **Dashboard 设置页**：管理页顶栏新增「⚙ 设置」按钮，弹出设置 modal
+  - 可选 LLM Provider：下拉列出所有可用 Provider（含 id/name/type），选择后插件所有 LLM 调用（搜索学习/导入精炼/验证）优先使用该 Provider
+  - 3 个精炼开关：搜索学习时精炼 / 导入时精炼 / 验证时精炼（验证开关本期预留，不影响行为）
+  - 设置持久化到 `active_learner_settings.json`，优先级高于 `_conf_schema.json` 中的 `llm_provider_id`
+  - 未选 Provider 时显示橙色警示条「⚠ 未选择 Provider，精炼将降级为原内容直存」
+- 3 个新 web API：`providers` / `settings` (GET/POST)
+- 新模块 `settings_store.py`：插件自管设置存储（线程锁 + 原子 os.replace 写入）
+- 新模块 `refiner.py`：`KnowledgeRefiner` 把搜索结果或原始导入蒸馏为结构化记忆（摘要+关键词+置信度+依据）
+  - `refine_search_results`：2 步精炼（抽取关键事实 + 结构化为知识卡）
+  - `refine_import`：1 步精炼（原始文本直接蒸馏）
+  - 无 Provider 或解析失败时 `refined=False` 降级返回原内容
+
+### 变更
+
+- 版本号 `2.2.0 → 2.3.0`
+- 搜索学习流程：搜索结果 → LLM 2 步精炼（抽取事实 + 结构化）→ 存库；无 Provider 时降级为原搜索摘要
+- 3 个导入 handler（text/md/zip）：增加 `refine` 参数，默认 True；调用 `refiner.refine_import` 蒸馏后存库；source 字段追加 `+精炼`/`+未精炼` 标记
+- 3 个导入表单前端各加「LLM 精炼后入库」复选框
+- `tools.py` 中 `SearchAndLearnTool` / `VerifyKnowledgeTool` 的 Provider 解析改为 `plugin._resolve_plugin_provider_id`（4 层 fallback）
+- 删除 `tools.py` 中 `_llm_summarize` 函数（已被 `refiner.refine_search_results` 取代）
+- `memory verify <topic>` 命令也改用 `_resolve_plugin_provider_id`
+- `_conf_schema.json` 新增第 7 个字段 `llm_provider_id`（字符串，可空）
+
+### 改进
+
+- Provider 解析 4 层 fallback：Dashboard 设置 → schema 字段 → 事件 scope 默认 → 同步默认，兼容多版本 AstrBot
+- 每个 Provider 候选都先经 `_provider_exists` 校验，避免选了已删除的 provider
+- 设置存储与 `_conf_schema.json` 解耦：AstrBot 无 schema 写回 API，使用插件自管 JSON 文件
+
 ## [2.2.0] - 2026-07-06
 
 ### 新增

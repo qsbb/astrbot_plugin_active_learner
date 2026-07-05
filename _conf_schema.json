@@ -34,5 +34,11 @@
         "type": "bool",
         "hint": "当 AstrBot 未配置 Tavily/BoCha/Brave/百度 时，是否用 DuckDuckGo 兜底",
         "default": true
+    },
+    "llm_provider_id": {
+        "description": "插件专用 LLM Provider ID（可空）",
+        "type": "string",
+        "hint": "留空则按事件默认 Provider。也可在 Dashboard「⚙ 设置」页选择，设置页优先级更高。",
+        "default": ""
     }
 }

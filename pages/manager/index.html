@@ -14,6 +14,7 @@
         <button id="btn-refresh" type="button" title="刷新">↻ 刷新</button>
         <button id="btn-import" type="button" title="导入">⬆ 导入</button>
         <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
+        <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
       </div>
     </div>
     <p class="subtitle">跨 scope 浏览、检索、验证、删除记忆条目</p>
@@ -84,6 +85,47 @@
     </div>
   </div>
 
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2>⚙ 插件设置</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="settings-section">
+          <div class="settings-label">LLM Provider</div>
+          <div class="settings-row">
+            <select id="settings-provider"></select>
+            <button type="button" id="btn-refresh-providers" title="刷新列表">↻</button>
+          </div>
+          <p class="hint">选择插件进行搜索学习 / 导入精炼 / 验证 时使用的 LLM。留空则按事件默认 Provider。</p>
+          <p id="settings-no-provider-hint" class="disabled-hint hidden">⚠ 未选择 Provider，精炼将降级为原内容直存</p>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-label">精炼开关</div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="settings-refine-search" />
+            <span>搜索学习时精炼（搜索结果 → LLM 2 步蒸馏 → 入库）</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="settings-refine-import" />
+            <span>导入时精炼（原始文本 → LLM 蒸馏 → 入库）</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="settings-refine-verify" />
+            <span>验证时精炼（本期预留，暂不影响行为）</span>
+          </label>
+        </div>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="settings-cancel">取消</button>
+        <button type="button" id="settings-save" class="primary">保存</button>
+      </footer>
+    </div>
+  </div>
+
   <div id="import-modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-backdrop"></div>
     <div class="modal-card">
@@ -122,6 +164,10 @@
                 <input type="text" name="scope_id" placeholder="global 时留空" />
               </label>
             </div>
+            <label class="checkbox-row">
+              <input type="checkbox" name="refine" checked />
+              <span>LLM 精炼后入库（未配置 Provider 时自动降级为原内容）</span>
+            </label>
             <button type="submit" class="primary">导入</button>
           </form>
 
@@ -148,6 +194,10 @@
                 <input type="text" name="scope_id" placeholder="global 时留空" />
               </label>
             </div>
+            <label class="checkbox-row">
+              <input type="checkbox" name="refine" checked />
+              <span>LLM 精炼后入库（未配置 Provider 时自动降级为原内容）</span>
+            </label>
             <button type="submit" class="primary">导入</button>
           </form>
 
@@ -171,6 +221,10 @@
                 <input type="text" name="scope_id" placeholder="global 时留空" />
               </label>
             </div>
+            <label class="checkbox-row">
+              <input type="checkbox" name="refine" checked />
+              <span>LLM 精炼后入库（未配置 Provider 时自动降级为原内容）</span>
+            </label>
             <button type="submit" class="primary">批量导入</button>
           </form>
         </div>

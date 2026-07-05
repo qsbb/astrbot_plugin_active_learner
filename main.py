@@ -30,7 +30,9 @@ except ImportError:  # AstrBot < v4.26 没有 Plugin Pages 支持
 
 from .bili_source import BiliSource
 from .models import Scope
+from .refiner import KnowledgeRefiner
 from .searcher import WebSearcher
+from .settings_store import SettingsStore
 from .storage import MemoryStore
 from .triggers import ACTIVE_LEARN_PATTERNS, CHALLENGE_PATTERNS
 from .tools import create_tools
@@ -43,7 +45,7 @@ PLUGIN_NAME = "astrbot_plugin_active_learner"
     "astrbot_plugin_active_learner",
     "AstrBotUser",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.2.0",
+    "2.3.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -87,6 +89,13 @@ class ActiveLearnerPlugin(Star):
         self.searcher = WebSearcher(ddg_fallback=ddg_fallback)
         self.bili_source = BiliSource()
         self.verifier = Verifier(self)
+
+        # Phase 1：精炼器 + 自管设置
+        self._cfg_llm_provider_id = (cfg.get("llm_provider_id") or "").strip()
+        self.refiner = KnowledgeRefiner(self)
+        self._settings = SettingsStore(
+            StarTools.get_data_dir() / "active_learner_settings.json"
+        )
 
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
@@ -322,9 +331,9 @@ class ActiveLearnerPlugin(Star):
 
         yield event.plain_result(f"🔍 正在多源验证「{entry.topic}」，请稍候...")
 
-        # 取 provider
+        # 取 provider（4 层 fallback：Dashboard 设置 → schema → 事件 scope → 同步默认）
         try:
-            provider_id = await self.context.get_current_chat_provider_id(
+            provider_id = await self._resolve_plugin_provider_id(
                 umo=event.unified_msg_origin
             )
         except Exception:
@@ -401,7 +410,7 @@ class ActiveLearnerPlugin(Star):
     # ---------- Dashboard 管理页面后端 API ----------
 
     def _register_web_apis(self, context: Context) -> None:
-        """注册 11 个 web API 路由供 Dashboard 页面调用。"""
+        """注册 14 个 web API 路由供 Dashboard 页面调用。"""
         context.register_web_api(
             f"/{PLUGIN_NAME}/stats", self._web_stats, ["GET"], "记忆库统计"
         )
@@ -438,6 +447,15 @@ class ActiveLearnerPlugin(Star):
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/import_zip", self._web_import_zip, ["POST"], "批量导入 ZIP"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/providers", self._web_providers, ["GET"], "列出可用 LLM Provider"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/settings", self._web_get_settings, ["GET"], "获取插件设置"
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/settings", self._web_save_settings, ["POST"], "保存插件设置"
         )
 
     @staticmethod
@@ -579,38 +597,163 @@ class ActiveLearnerPlugin(Star):
                     return str(pid)
         return ""
 
+    def _provider_exists(self, provider_id: str) -> bool:
+        """校验 provider_id 是否在 provider_manager 中存在（防止选了已删除的 provider）。"""
+        if not provider_id:
+            return False
+        pm = getattr(self.context, "provider_manager", None)
+        if pm is None:
+            return True  # 无法校验时不过滤
+        providers = getattr(pm, "providers", None) or []
+        for p in providers:
+            pid = getattr(p, "id", None) or getattr(p, "name", None)
+            if pid and str(pid) == str(provider_id):
+                return True
+        return False
+
+    async def _resolve_plugin_provider_id(self, umo: str = "") -> str:
+        """4 层 fallback 解析插件使用的 LLM Provider ID。
+
+        1. self._settings 中的 llm_provider_id（Dashboard 设置，最高优先级）
+        2. self._cfg_llm_provider_id（_conf_schema.json 中的字段）
+        3. context.get_current_chat_provider_id(umo=...) （事件 scope 默认）
+        4. self._resolve_default_provider_id() （同步兜底）
+
+        每个候选都先经 _provider_exists 校验，避免选了已删除的 provider。
+        """
+        # 1. Dashboard 设置
+        pid = self._settings.get("llm_provider_id") or ""
+        if pid and self._provider_exists(pid):
+            return pid
+
+        # 2. schema 字段
+        if self._cfg_llm_provider_id and self._provider_exists(self._cfg_llm_provider_id):
+            return self._cfg_llm_provider_id
+
+        # 3. 事件 scope 默认（async）
+        if umo:
+            method = getattr(self.context, "get_current_chat_provider_id", None)
+            if callable(method):
+                try:
+                    pid = await method(umo=umo)
+                    if pid and self._provider_exists(pid):
+                        return pid
+                except Exception:
+                    pass
+
+        # 4. 同步兜底
+        return self._resolve_default_provider_id()
+
+    # ---------- 设置与 Provider API ----------
+
+    async def _web_providers(self):
+        """列出所有可用 LLM Provider + 当前选中的。"""
+        pm = getattr(self.context, "provider_manager", None)
+        providers_list = []
+        if pm is not None:
+            for p in getattr(pm, "providers", None) or []:
+                providers_list.append({
+                    "id": str(getattr(p, "id", "") or ""),
+                    "name": str(getattr(p, "name", "") or ""),
+                    "type": str(getattr(p, "type", "") or ""),
+                })
+        current = (
+            self._settings.get("llm_provider_id")
+            or self._cfg_llm_provider_id
+            or self._resolve_default_provider_id()
+        )
+        return json_response({"providers": providers_list, "current": current})
+
+    async def _web_get_settings(self):
+        """返回当前插件设置（含默认值填充）。"""
+        data = self._settings.all()
+        return json_response({
+            "llm_provider_id": data.get("llm_provider_id", ""),
+            "refine_on_search": bool(data.get("refine_on_search", True)),
+            "refine_on_import": bool(data.get("refine_on_import", True)),
+            "refine_on_verify": bool(data.get("refine_on_verify", True)),
+        })
+
+    async def _web_save_settings(self):
+        """保存插件设置。校验 provider_id 存在性 + bool 字段。"""
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("payload must be a JSON object", status_code=400)
+
+        new_settings: dict = {}
+
+        pid = payload.get("llm_provider_id")
+        if pid is not None:
+            pid = str(pid).strip()
+            if pid and not self._provider_exists(pid):
+                return error_response(
+                    f"provider_id '{pid}' 不存在", status_code=400
+                )
+            new_settings["llm_provider_id"] = pid
+
+        for key in ("refine_on_search", "refine_on_import", "refine_on_verify"):
+            if key in payload:
+                try:
+                    new_settings[key] = bool(payload[key])
+                except (TypeError, ValueError):
+                    return error_response(f"{key} must be boolean", status_code=400)
+
+        updated = self._settings.update(**new_settings)
+        logger.info(f"插件设置已更新: {new_settings}")
+        return json_response({
+            "llm_provider_id": updated.get("llm_provider_id", ""),
+            "refine_on_search": bool(updated.get("refine_on_search", True)),
+            "refine_on_import": bool(updated.get("refine_on_import", True)),
+            "refine_on_verify": bool(updated.get("refine_on_verify", True)),
+        })
+
     # ---------- 导入功能 ----------
 
     async def _web_import_text(self):
-        """导入纯文本：JSON body {topic, content, scope_type, scope_id, keywords?}"""
+        """导入纯文本：JSON body {topic, content, scope_type, scope_id, keywords?, refine?}"""
         payload = await request.json(default={}) or {}
         topic = (payload.get("topic") or "").strip()
         content = payload.get("content") or ""
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
         keywords = payload.get("keywords") or None
+        refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
         if not topic or not content or not scope_type:
             return error_response("topic, content, scope_type required", status_code=400)
         scope = Scope(type=scope_type, id=scope_id)
         try:
+            final_content = content
+            final_keywords = keywords
+            final_confidence = 0.6
+            source_tag = "手动导入"
+            if refine:
+                provider_id = await self._resolve_plugin_provider_id()
+                result = await self.refiner.refine_import(topic, content, provider_id)
+                final_content = result.summary
+                final_keywords = result.keywords or keywords
+                final_confidence = result.confidence
+                source_tag = "手动导入+精炼" if result.refined else "手动导入+未精炼"
+                if not result.refined:
+                    logger.warning(f"导入「{topic}」精炼降级为原内容")
             entry = self.store.add_or_update(
-                scope=scope, topic=topic, content=content,
-                keywords=keywords, source="手动导入",
-                sources_detail=None, confidence=0.6,
+                scope=scope, topic=topic, content=final_content,
+                keywords=final_keywords, source=source_tag,
+                sources_detail=None, confidence=final_confidence,
             )
         except Exception as e:
             return error_response(f"导入失败: {e}", status_code=500)
-        logger.info(f"导入文本: {topic} (scope: {scope})")
+        logger.info(f"导入文本: {topic} (scope: {scope}, source: {source_tag})")
         return json_response({"ok": True, "entry": entry.to_dict()})
 
     async def _web_import_md(self):
-        """导入单个 Markdown：JSON body {filename?, topic?, content, scope_type, scope_id}"""
+        """导入单个 Markdown：JSON body {filename?, topic?, content, scope_type, scope_id, refine?}"""
         payload = await request.json(default={}) or {}
         content = payload.get("content") or ""
         filename = (payload.get("filename") or "").strip()
         topic = (payload.get("topic") or "").strip()
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
+        refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
         if not content or not scope_type:
             return error_response("content, scope_type required", status_code=400)
 
@@ -620,18 +763,32 @@ class ActiveLearnerPlugin(Star):
 
         scope = Scope(type=scope_type, id=scope_id)
         try:
+            final_content = content_clean
+            final_keywords = None
+            final_confidence = 0.6
+            base_source = f"MD导入 ({filename})" if filename else "MD导入"
+            source_tag = base_source
+            if refine:
+                provider_id = await self._resolve_plugin_provider_id()
+                result = await self.refiner.refine_import(topic, content_clean, provider_id)
+                final_content = result.summary
+                final_keywords = result.keywords
+                final_confidence = result.confidence
+                source_tag = f"{base_source}+精炼" if result.refined else f"{base_source}+未精炼"
+                if not result.refined:
+                    logger.warning(f"导入「{topic}」精炼降级为原内容")
             entry = self.store.add_or_update(
-                scope=scope, topic=topic, content=content_clean,
-                keywords=None, source=f"MD导入 ({filename})" if filename else "MD导入",
-                sources_detail=None, confidence=0.6,
+                scope=scope, topic=topic, content=final_content,
+                keywords=final_keywords, source=source_tag,
+                sources_detail=None, confidence=final_confidence,
             )
         except Exception as e:
             return error_response(f"导入失败: {e}", status_code=500)
-        logger.info(f"导入 MD: {topic} (scope: {scope})")
+        logger.info(f"导入 MD: {topic} (scope: {scope}, source: {source_tag})")
         return json_response({"ok": True, "entry": entry.to_dict()})
 
     async def _web_import_zip(self):
-        """批量导入 ZIP 中的 .md 文件：JSON body {filename?, base64, scope_type, scope_id}"""
+        """批量导入 ZIP 中的 .md 文件：JSON body {filename?, base64, scope_type, scope_id, refine?}"""
         import base64 as _b64
 
         payload = await request.json(default={}) or {}
@@ -639,6 +796,7 @@ class ActiveLearnerPlugin(Star):
         filename = (payload.get("filename") or "").strip()
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
+        refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
         if not b64 or not scope_type:
             return error_response("base64, scope_type required", status_code=400)
 
@@ -665,10 +823,22 @@ class ActiveLearnerPlugin(Star):
                     md_content = md_bytes.decode("gbk", errors="replace")
                 md_clean, extracted_topic = _parse_md(md_content)
                 topic = extracted_topic or name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                final_content = md_clean
+                final_keywords = None
+                final_confidence = 0.6
+                base_source = f"ZIP导入 ({name})"
+                source_tag = base_source
+                if refine:
+                    provider_id = await self._resolve_plugin_provider_id()
+                    result = await self.refiner.refine_import(topic, md_clean, provider_id)
+                    final_content = result.summary
+                    final_keywords = result.keywords
+                    final_confidence = result.confidence
+                    source_tag = f"{base_source}+精炼" if result.refined else f"{base_source}+未精炼"
                 entry = self.store.add_or_update(
-                    scope=scope, topic=topic, content=md_clean,
-                    keywords=None, source=f"ZIP导入 ({name})",
-                    sources_detail=None, confidence=0.6,
+                    scope=scope, topic=topic, content=final_content,
+                    keywords=final_keywords, source=source_tag,
+                    sources_detail=None, confidence=final_confidence,
                 )
                 success_count += 1
                 results.append({"file": name, "topic": topic, "entry_id": entry.id, "ok": True})
@@ -676,7 +846,7 @@ class ActiveLearnerPlugin(Star):
                 results.append({"file": name, "ok": False, "error": str(e)})
 
         logger.info(
-            f"批量导入 ZIP: {success_count}/{len(results)} 成功 (scope: {scope})"
+            f"批量导入 ZIP: {success_count}/{len(results)} 成功 (scope: {scope}, refine={refine})"
         )
         return json_response({
             "ok": True,

@@ -9,6 +9,12 @@ const state = {
   total: 0,
   totalPages: 1,
   currentDetailId: null,
+  settings: {
+    llm_provider_id: "",
+    refine_on_search: true,
+    refine_on_import: true,
+    refine_on_verify: true,
+  },
 };
 
 function showToast(msg, isErr = false) {
@@ -301,6 +307,7 @@ function bindEvents() {
 
   document.getElementById("btn-refresh").addEventListener("click", refreshAll);
   document.getElementById("btn-export").addEventListener("click", exportData);
+  document.getElementById("btn-settings").addEventListener("click", openSettingsModal);
 
   document.getElementById("page-prev").addEventListener("click", () => {
     if (state.page > 1) {
@@ -338,6 +345,106 @@ function bindEvents() {
   });
 }
 
+// ---------- Settings Modal ----------
+
+function openSettingsModal() {
+  const modal = document.getElementById("settings-modal");
+  modal.classList.remove("hidden");
+  Promise.all([loadProviders(), loadSettings()]).catch((e) => {
+    showToast(`加载设置失败: ${e.message}`, true);
+  });
+}
+
+function closeSettingsModal() {
+  document.getElementById("settings-modal").classList.add("hidden");
+}
+
+async function loadProviders() {
+  const select = document.getElementById("settings-provider");
+  try {
+    const data = await bridge.apiGet("providers");
+    const providers = data.providers || [];
+    const current = data.current || "";
+    select.innerHTML = '<option value="">（使用事件默认 Provider）</option>';
+    for (const p of providers) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = `${p.name || p.id} (${p.type || "?"})`;
+      select.appendChild(opt);
+    }
+    select.value = current || "";
+    updateNoProviderHint(select.value);
+  } catch (e) {
+    showToast(`加载 Provider 列表失败: ${e.message}`, true);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const s = await bridge.apiGet("settings");
+    state.settings = {
+      llm_provider_id: s.llm_provider_id || "",
+      refine_on_search: s.refine_on_search !== false,
+      refine_on_import: s.refine_on_import !== false,
+      refine_on_verify: s.refine_on_verify !== false,
+    };
+    document.getElementById("settings-provider").value = state.settings.llm_provider_id || "";
+    document.getElementById("settings-refine-search").checked = state.settings.refine_on_search;
+    document.getElementById("settings-refine-import").checked = state.settings.refine_on_import;
+    document.getElementById("settings-refine-verify").checked = state.settings.refine_on_verify;
+    updateNoProviderHint(state.settings.llm_provider_id);
+  } catch (e) {
+    showToast(`加载设置失败: ${e.message}`, true);
+  }
+}
+
+function updateNoProviderHint(providerId) {
+  const hint = document.getElementById("settings-no-provider-hint");
+  if (!providerId) {
+    hint.classList.remove("hidden");
+  } else {
+    hint.classList.add("hidden");
+  }
+}
+
+async function saveSettings() {
+  const payload = {
+    llm_provider_id: document.getElementById("settings-provider").value,
+    refine_on_search: document.getElementById("settings-refine-search").checked,
+    refine_on_import: document.getElementById("settings-refine-import").checked,
+    refine_on_verify: document.getElementById("settings-refine-verify").checked,
+  };
+  try {
+    const result = await bridge.apiPost("settings", payload);
+    state.settings = {
+      llm_provider_id: result.llm_provider_id || "",
+      refine_on_search: result.refine_on_search !== false,
+      refine_on_import: result.refine_on_import !== false,
+      refine_on_verify: result.refine_on_verify !== false,
+    };
+    showToast("设置已保存");
+    closeSettingsModal();
+  } catch (e) {
+    showToast(`保存失败: ${e.message}`, true);
+  }
+}
+
+function bindSettingsEvents() {
+  document
+    .querySelectorAll("#settings-modal .modal-close, #settings-modal .modal-backdrop, #settings-cancel")
+    .forEach((el) => {
+      el.addEventListener("click", closeSettingsModal);
+    });
+  document.getElementById("settings-save").addEventListener("click", saveSettings);
+  document.getElementById("btn-refresh-providers").addEventListener("click", loadProviders);
+  document.getElementById("settings-provider").addEventListener("change", (e) => {
+    updateNoProviderHint(e.target.value);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSettingsModal();
+  });
+}
+
 // ---------- Import Modal ----------
 
 function openImportModal() {
@@ -371,6 +478,7 @@ async function submitImportText(form) {
     content: form.content.value,
     scope_type: form.scope_type.value,
     scope_id: form.scope_id.value.trim(),
+    refine: form.refine.checked,
   };
   if (!payload.topic || !payload.content || !payload.scope_type) {
     showImportResult("❌ 主题、内容、Scope 类型为必填项", true);
@@ -406,6 +514,7 @@ async function submitImportMd(form) {
       content,
       scope_type: form.scope_type.value,
       scope_id: form.scope_id.value || "",
+      refine: form.refine.checked,
     };
     const result = await bridge.apiPost("import_md", payload);
     showImportResult(`✅ 已导入：<strong>${escapeHtml(result.entry.topic)}</strong>`);
@@ -447,6 +556,7 @@ async function submitImportZip(form) {
       base64,
       scope_type: form.scope_type.value,
       scope_id: form.scope_id.value || "",
+      refine: form.refine.checked,
     };
     const result = await bridge.apiPost("import_zip", payload);
     const lines = [
@@ -511,6 +621,7 @@ async function init() {
   await bridge.ready();
   bindEvents();
   bindImportEvents();
+  bindSettingsEvents();
   await refreshAll();
 }
 
