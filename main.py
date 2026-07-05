@@ -114,6 +114,13 @@ class ActiveLearnerPlugin(Star):
         self.embedder: Optional[Embedder] = (
             Embedder(self) if self._embedding_enabled else None
         )
+        # 关心领域优先 + 注入条数
+        self._priority_topics = [
+            t.strip().lower()
+            for t in (cfg.get("priority_topics") or "").split(",")
+            if t.strip()
+        ]
+        self._context_inject_count = max(1, min(10, int(cfg.get("context_inject_count", 3))))
 
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
@@ -183,13 +190,14 @@ class ActiveLearnerPlugin(Star):
                 query_vec = await self.embedder.embed_query(msg)
             hits = await asyncio.to_thread(
                 self.store.search_hybrid,
-                scope, msg, 3,
+                scope, msg, self._context_inject_count,
                 embedder=self.embedder,
                 fts_weight=self._hybrid_weights[0],
                 vec_weight=self._hybrid_weights[1],
                 enable_scope_fallback=self._enable_scope_fallback,
                 decay_half_life_days=self._decay_half_life_days,
                 query_vec=query_vec,
+                priority_topics=self._priority_topics,
             )
         except Exception as e:
             logger.debug(f"记忆检索失败: {e}")

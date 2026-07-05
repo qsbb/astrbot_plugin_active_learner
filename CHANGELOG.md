@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.1] - 2026-07-06
+
+### 新增
+
+- **关心领域优先检索**：配置 `priority_topics`（逗号分隔，如 `Python,量子计算,历史`），topic 或 keywords 命中任一关键词的记忆获得 1.3x 分数加权，优先注入上下文
+- **可配置注入条数**：配置 `context_inject_count`（1-10，默认 3），控制每次对话注入 LLM 的记忆条数，避免过多占用上下文窗口
+
+### 修复
+
+- 修复空数据库首次加载时 `schema_version` 表为空导致 `MAX(version)` 返回 NULL，触发 `'<' not supported between instances of 'NoneType' and 'int'` 的加载失败
+
 ## [2.4.0] - 2026-07-06
 
 ### 新增

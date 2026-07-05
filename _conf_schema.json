@@ -64,5 +64,17 @@
         "type": "bool",
         "hint": "private scope 命中不足时回退到 group/global，带 0.8/0.6 分数惩罚",
         "default": true
+    },
+    "priority_topics": {
+        "description": "关心的领域（优先检索）",
+        "type": "string",
+        "hint": "逗号分隔，例如 'Python,量子计算,历史'。topic 或 keywords 命中任一关键词的记忆会获得 1.3x 分数加权，优先注入。",
+        "default": ""
+    },
+    "context_inject_count": {
+        "description": "上下文注入记忆条数",
+        "type": "int",
+        "hint": "每次对话从记忆库检索并注入 LLM 的记忆条数（1-10）。过多会占用上下文窗口，过少可能漏掉相关知识。",
+        "default": 3
     }
 }

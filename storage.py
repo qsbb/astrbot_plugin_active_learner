@@ -527,11 +527,13 @@ class MemoryStore:
         enable_scope_fallback: bool = True,
         decay_half_life_days: float = 30.0,
         query_vec: Optional[list[float]] = None,
+        priority_topics: Optional[list[str]] = None,
     ) -> list[SearchHit]:
         """混合检索：FTS5 + 向量 + scope 回退 + 衰减分数。
 
         query_vec 必须在锁外计算后传入（避免阻塞写入）。
         无 query_vec 时降级为纯 FTS5。
+        priority_topics：关心的领域列表（小写），命中 topic/keywords 的记忆获得 1.3x 分数加权。
         """
         import time as _time
         from .embedder import normalize_scores
@@ -614,6 +616,13 @@ class MemoryStore:
                 days = max(0.0, (now - last_access) / 86400.0)
                 decay = 0.5 ** (days / max(1.0, decay_half_life_days))
                 final_score = (hybrid * penalty) * (entry.confidence * decay if entry.confidence > 0 else decay)
+                # 关心领域加权：topic 或 keywords 命中任一优先话题则 ×1.3
+                if priority_topics:
+                    topic_lower = (entry.topic or "").lower()
+                    kws = entry.keywords or []
+                    text_to_check = topic_lower + " " + " ".join(k.lower() for k in kws)
+                    if any(pt in text_to_check for pt in priority_topics):
+                        final_score *= 1.3
                 hits.append(SearchHit(entry=entry, score=final_score))
 
             hits.sort(key=lambda h: h.score, reverse=True)
