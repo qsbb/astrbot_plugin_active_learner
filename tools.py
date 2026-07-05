@@ -92,6 +92,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             return ("无法识别会话作用域，学习失败")
 
         # 1. 多源搜索
+        logger.info(f"搜索「{query}」(主题: {topic}, scope: {scope})")
         search_results = await plugin.searcher.search(query, max_results=6)
 
         # B 站补充（可选）
@@ -103,6 +104,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
                 logger.debug(f"B 站搜索失败: {e}")
 
         if not search_results:
+            logger.info(f"搜索「{query}」无结果")
             return (f"搜索「{query}」未找到结果，无法学习")
 
         # 2. 整理搜索结果
@@ -145,7 +147,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             confidence=confidence,
         )
 
-        logger.info(f"学习新知识: {topic} (置信度{confidence:.0%})")
+        logger.info(f"已学习「{topic}」(置信度{confidence:.0%}, 来源{len(sources)}, scope: {scope})")
 
         return (
             f"已学习「{topic}」并存入记忆库。\n"
@@ -193,8 +195,10 @@ class RecallMemoryTool(FunctionTool):  # type: ignore[misc]
 
         hits = plugin.store.search(scope, query, top_k=3)
         if not hits:
+            logger.info(f"不知道「{query}」(scope: {scope})")
             return (f"记忆库中未找到关于「{query}」的知识。可调用 search_and_learn 学习。")
 
+        logger.info(f"知道「{query}」(命中{len(hits)}条, scope: {scope})")
         parts = []
         for h in hits:
             entry = h.entry
@@ -275,7 +279,9 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
                 provider_id = ""
 
         # 执行验证
+        logger.info(f"验证「{topic}」(scope: {scope})")
         result = await plugin.verifier.run(entry, provider_id, claim=claim or None)
+        logger.info(f"已验证「{topic}」({result.verdict}, 置信度{result.confidence:.0%})")
 
         return (
             f"验证完成: {topic}\n"
@@ -327,6 +333,8 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
         limit = max(1, min(10, limit))
 
         plugin = self._plugin
+
+        logger.info(f"搜索 B站: {keyword} (limit={limit})")
 
         # 优先用 bilibili-api-python
         if plugin.bili_source and plugin.bili_source.is_available():
