@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.2",
+    "2.6.3",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -946,6 +946,9 @@ class ActiveLearnerPlugin(Star):
                 pid = getattr(p, "id", None) or getattr(p, "name", None)
                 if pid:
                     return str(pid)
+        # 最终兜底：插件配置中的 llm_provider_id（Docker 环境下 provider_manager 为空）
+        if self._cfg_llm_provider_id:
+            return self._cfg_llm_provider_id
         return ""
 
     def _provider_exists(self, provider_id: str) -> bool:

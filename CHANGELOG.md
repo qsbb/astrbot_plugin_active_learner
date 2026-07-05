@@ -2,6 +2,13 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.3] - 2026-07-06
+
+### 修复
+
+- **Dashboard 验证 400 错误**：Docker 部署下 `provider_manager.providers` 为空，`_resolve_default_provider_id()` 返回空串导致 400。增加最终兜底：直接取 `_conf_schema.json` 中的 `llm_provider_id` 配置
+- 前端验证时把 Provider 下拉框的选值传给后端
+
 ## [2.6.2] - 2026-07-06
 
 ### 修复

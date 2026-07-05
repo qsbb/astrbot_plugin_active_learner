@@ -234,8 +234,12 @@ async function verifyMemory(entryId, btn) {
     btn.disabled = true;
     btn.textContent = "验证中…";
   }
+  const providerSelect = document.getElementById("settings-provider");
+  const providerId = providerSelect ? providerSelect.value : "";
   try {
-    const result = await bridge.apiPost(`memory/${entryId}/verify`, {});
+    const result = await bridge.apiPost(`memory/${entryId}/verify`, {
+      provider_id: providerId,
+    });
     showToast(`验证完成：${result.verdict}（置信度 ${formatConfidence(result.confidence)}）`);
     if (state.currentDetailId === entryId) {
       showDetail(entryId);
