@@ -1,0 +1,20 @@
+{
+    "max_entries": {
+        "description": "记忆库最大条数",
+        "type": "int",
+        "hint": "超过此数量后会自动淘汰低质量记忆",
+        "default": 500
+    },
+    "min_confidence": {
+        "description": "最低置信度阈值",
+        "type": "float",
+        "hint": "低于此置信度的记忆会被优先淘汰（0.0~1.0）",
+        "default": 0.3
+    },
+    "search_threshold": {
+        "description": "关键词匹配阈值",
+        "type": "float",
+        "hint": "匹配分数高于此值才认为相关（0.0~1.0）",
+        "default": 0.45
+    }
+}
