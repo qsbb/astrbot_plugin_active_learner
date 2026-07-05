@@ -220,10 +220,11 @@ class WebSearcher:
 # ============== 主插件类 ==============
 
 @register(
-    name="active_learner",
-    desc="主动学习记忆插件：自动检索、学习新知识、记忆存储、质疑验证",
-    author="AstrBotUser",
-    version="1.0.0",
+    "astrbot_plugin_active_learner",
+    "AstrBotUser",
+    "主动学习记忆插件：自动检索、学习新知识、记忆存储、质疑验证",
+    "1.0.0",
+    "https://github.com/astrbot-user/active-learner",
 )
 class ActiveLearnerPlugin(Star):
     """主动学习记忆插件"""

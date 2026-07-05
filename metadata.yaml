@@ -1,8 +1,12 @@
 name: astrbot_plugin_active_learner
-author: AstrBotUser
-version: 1.0.0
-description: 主动学习记忆插件 - 自动检索、主动学习新知识、记忆存储管理、质疑验证纠错
-repo: https://github.com/astrbot-user/active-learner
 display_name: 主动学习记忆
-short_desc: 自动学习并记忆知识，支持质疑验证
-astrbot_version: ">=4.16,<5"
+desc: 自动检索、主动学习新知识、记忆存储管理、质疑验证纠错
+version: 1.0.0
+author: AstrBotUser
+repo: https://github.com/astrbot-user/active-learner
+tags:
+  - 学习
+  - 记忆
+  - 知识库
+  - 搜索
+  - 验证
