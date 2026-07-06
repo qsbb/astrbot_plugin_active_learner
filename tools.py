@@ -165,6 +165,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             return (f"搜索学习「{topic}」失败（存储错误），请稍后重试。")
 
         logger.info(f"✅ 已学习「{topic}」(id: {entry.id}, 置信度{confidence:.0%}, 来源{len(sources)}, refined={refine_result.refined}, scope: {scope})")
+        plugin._active_learn_was_called = True
 
         return (
             f"已学习「{topic}」并存入记忆库。\n"

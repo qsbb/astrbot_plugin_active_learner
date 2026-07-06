@@ -137,6 +137,9 @@ class ActiveLearnerPlugin(Star):
 
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
+        # 主动学习追踪标记（on_llm_request ↔ on_llm_response）
+        self._active_learn_hinted = False
+        self._active_learn_was_called = False
 
         # v2.6.0：群黑话被动捕获 + 定时批量学习
         self._enable_slang_capture = _ON_MESSAGE_AVAILABLE and bool(
@@ -323,10 +326,13 @@ class ActiveLearnerPlugin(Star):
 
         # 3. 主动学习提示（v2.4.6：去掉正则门槛，无结果就提示，让 LLM 自主判断是否搜索）
         if self._enable_active_learn_hint and not hits:
+            self._active_learn_hinted = True
             parts.append(
                 "[学习提示] 记忆库无相关内容。如果你不确定如何回答，"
                 "可调用 search_and_learn 工具搜索并学习。"
             )
+        else:
+            self._active_learn_hinted = False
 
         # 4. 注入
         if not parts:
@@ -364,8 +370,14 @@ class ActiveLearnerPlugin(Star):
 
         @filter.on_llm_response()  # type: ignore[misc]
         async def on_llm_response(self, event: AstrMessageEvent, response):
-            """no-op：注入内容已用【内部知识】格式标注，LLM 不会复制输出，无需后处理。"""
-            pass
+            """追踪主动学习提示是否被 LLM 调用。"""
+            if getattr(self, "_active_learn_hinted", False):
+                self._active_learn_hinted = False
+                if getattr(self, "_active_learn_was_called", False):
+                    self._active_learn_was_called = False
+                    logger.info("✅ 主动学习已执行并存入记忆库")
+                else:
+                    logger.info("ℹ️ 主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）")
 
     # ---------- v2.6.0：群黑话被动捕获 + 定时批量学习 ----------
 
