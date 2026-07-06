@@ -216,20 +216,27 @@ class ActiveLearnerPlugin(Star):
         return 0.4, 0.6
 
     def _get_admin_ids(self) -> set[str]:
-        """从 AstrBot 全局配置中读取 wl_admin 管理员名单。"""
+        """从 AstrBot 全局配置 + 插件配置中读取管理员名单。"""
         admins: set[str] = set()
-        # 尝试从 context.get_config() 读取全局配置
+        # 1. 从插件配置读取 admin_ids（逗号分隔字符串，可在 Dashboard 设置页修改）
+        cfg = getattr(self, "config", None) or {}
+        raw = (cfg.get("admin_ids") or "").strip()
+        if raw:
+            for part in raw.split(","):
+                pid = part.strip()
+                if pid:
+                    admins.add(pid)
+        # 2. 从 AstrBot 全局配置读取 wl_admin
         if hasattr(self.context, "get_config"):
             try:
-                raw = self.context.get_config()
-                if isinstance(raw, dict):
-                    val = raw.get("wl_admin", [])
+                raw_conf = self.context.get_config()
+                if isinstance(raw_conf, dict):
+                    val = raw_conf.get("wl_admin", [])
                     if isinstance(val, list):
                         admins.update(str(a) for a in val)
             except Exception:
                 pass
-        # 兜底：从注入的 config 读取
-        cfg = getattr(self, "config", None) or {}
+        # 3. 兜底：从当前 config 中读 wl_admin
         extra = cfg.get("wl_admin", [])
         if isinstance(extra, list):
             admins.update(str(a) for a in extra)

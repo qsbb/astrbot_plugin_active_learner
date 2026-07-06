@@ -102,6 +102,12 @@
         "hint": "自动扫描群消息提取候选黑话词（不调 LLM），攒够 batch_size 后定时 1 次 LLM 批量学习。需要 AstrBot 支持 on_message 钩子。",
         "default": false
     },
+    "admin_ids": {
+        "description": "管理员 QQ 号（逗号分隔）",
+        "type": "string",
+        "hint": "只有此名单内的用户消息才会触发主动学习（search_and_learn）。留空则所有人可学。同时会读取 AstrBot 全局配置的 wl_admin。",
+        "default": ""
+    },
     "slang_capture_interval_hours": {
         "description": "黑话批量学习间隔（小时）",
         "type": "int",
