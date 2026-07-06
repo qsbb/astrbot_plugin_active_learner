@@ -1105,9 +1105,18 @@ class ActiveLearnerPlugin(Star):
             if pm is not None:
                 for p in getattr(pm, "providers", None) or []:
                     pm_providers.append(str(getattr(p, "id", "") or getattr(p, "name", "")))
+            # cmd_config 诊断
+            try:
+                plugin_data_dir = str(StarTools.get_data_dir())
+            except Exception:
+                plugin_data_dir = "?"
+            cmd_config_path = self._find_cmd_config()
+            cfg_default_pid, cfg_providers = self._get_providers_from_config()
             logger.warning(
                 f"provider 解析失败: settings_pid={settings_pid!r}, cfg_pid={cfg_pid!r}, "
-                f"pm_providers={pm_providers}"
+                f"pm_providers={pm_providers}, plugin_data_dir={plugin_data_dir}, "
+                f"cmd_config={str(cmd_config_path) if cmd_config_path else 'NOT FOUND'}, "
+                f"cfg_default_pid={cfg_default_pid!r}, cfg_providers={len(cfg_providers)}个"
             )
             return error_response(
                 "无法确定 LLM provider。请在插件配置中设置 llm_provider_id，"
@@ -1157,11 +1166,20 @@ class ActiveLearnerPlugin(Star):
                 for candidate in (
                     parent / "cmd_config.json",
                     parent / "data" / "cmd_config.json",
+                    parent / "config" / "cmd_config.json",
                 ):
                     if candidate.exists():
                         return candidate
-        except Exception:
-            pass
+                # 也尝试 abconf_ 前缀的多配置文件
+                if parent.is_dir():
+                    for ab in parent.glob("abconf_*.json"):
+                        return ab
+                    data_sub = parent / "data"
+                    if data_sub.is_dir():
+                        for ab in data_sub.glob("abconf_*.json"):
+                            return ab
+        except Exception as e:
+            logger.debug(f"_find_cmd_config 异常: {e}")
         return None
 
     def _get_providers_from_config(self) -> tuple[str, list[dict]]:
