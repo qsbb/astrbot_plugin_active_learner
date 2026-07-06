@@ -1149,6 +1149,53 @@ class ActiveLearnerPlugin(Star):
             content_type="application/json",
         )
 
+    def _find_cmd_config(self):
+        """尝试找到 AstrBot 的 cmd_config.json。"""
+        try:
+            plugin_data = StarTools.get_data_dir()
+            for parent in [plugin_data] + list(plugin_data.parents):
+                for candidate in (
+                    parent / "cmd_config.json",
+                    parent / "data" / "cmd_config.json",
+                ):
+                    if candidate.exists():
+                        return candidate
+        except Exception:
+            pass
+        return None
+
+    def _get_providers_from_config(self) -> tuple[str, list[dict]]:
+        """从 cmd_config.json 读取 provider 列表和 default_provider_id。
+
+        AstrBot v4.26.4 的 provider_manager.providers 可能为空（Dashboard 模式下
+        或某些初始化时序下），直接从配置文件读取是最可靠的兜底。
+        """
+        config_path = self._find_cmd_config()
+        if not config_path:
+            return "", []
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            providers_raw = cfg.get("provider", []) or []
+            providers = [
+                {
+                    "id": str(p.get("id", "") or ""),
+                    "type": str(p.get("type", "") or ""),
+                    "model": str(p.get("model", "") or ""),
+                    "enable": bool(p.get("enable", True)),
+                }
+                for p in providers_raw
+                if p.get("id")
+            ]
+            default_pid = str(
+                (cfg.get("provider_settings") or {}).get("default_provider_id", "")
+                or ""
+            )
+            return default_pid, providers
+        except Exception as e:
+            logger.debug(f"读取 cmd_config.json 失败: {e}")
+            return "", []
+
     def _resolve_default_provider_id(self) -> str:
         """尝试从 context 拿默认 provider id，拿不到返回空串。"""
         for method_name in (
@@ -1168,7 +1215,7 @@ class ActiveLearnerPlugin(Star):
             pid = getattr(result, "id", None) or getattr(result, "name", None)
             if pid:
                 return str(pid)
-        # 兜底：从 provider_manager.providers 取第一个
+        # 兜底 1：从 provider_manager.providers 取第一个
         pm = getattr(self.context, "provider_manager", None)
         if pm is not None:
             providers = getattr(pm, "providers", None) or []
@@ -1176,7 +1223,14 @@ class ActiveLearnerPlugin(Star):
                 pid = getattr(p, "id", None) or getattr(p, "name", None)
                 if pid:
                     return str(pid)
-        # 最终兜底：插件配置中的 llm_provider_id（Docker 环境下 provider_manager 为空）
+        # 兜底 2：从 cmd_config.json 读取 default_provider_id
+        default_pid, providers = self._get_providers_from_config()
+        if default_pid:
+            return default_pid
+        for p in providers:
+            if p.get("enable", True):
+                return p["id"]
+        # 兜底 3：插件配置中的 llm_provider_id
         if self._cfg_llm_provider_id:
             return self._cfg_llm_provider_id
         return ""
@@ -1186,14 +1240,22 @@ class ActiveLearnerPlugin(Star):
         if not provider_id:
             return False
         pm = getattr(self.context, "provider_manager", None)
-        if pm is None:
-            return True  # 无法校验时不过滤
-        providers = getattr(pm, "providers", None) or []
-        for p in providers:
-            pid = getattr(p, "id", None) or getattr(p, "name", None)
-            if pid and str(pid) == str(provider_id):
-                return True
-        return False
+        if pm is not None:
+            providers = getattr(pm, "providers", None) or []
+            for p in providers:
+                pid = getattr(p, "id", None) or getattr(p, "name", None)
+                if pid and str(pid) == str(provider_id):
+                    return True
+            # provider_manager 不为空但没找到 → 再用 cmd_config 兜底
+        # 从 cmd_config.json 校验
+        _, cfg_providers = self._get_providers_from_config()
+        if cfg_providers:
+            for p in cfg_providers:
+                if p["id"] == str(provider_id):
+                    return True
+            return False
+        # 都拿不到 → 放行
+        return True
 
     async def _resolve_plugin_provider_id(self, umo: str = "") -> str:
         """4 层 fallback 解析插件使用的 LLM Provider ID。
@@ -1239,6 +1301,15 @@ class ActiveLearnerPlugin(Star):
                     "id": str(getattr(p, "id", "") or ""),
                     "name": str(getattr(p, "name", "") or ""),
                     "type": str(getattr(p, "type", "") or ""),
+                })
+        # 兜底：provider_manager 为空时从 cmd_config.json 读取
+        if not providers_list:
+            _, cfg_providers = self._get_providers_from_config()
+            for p in cfg_providers:
+                providers_list.append({
+                    "id": p["id"],
+                    "name": f"{p['model']} ({p['id']})" if p["model"] else p["id"],
+                    "type": p["type"],
                 })
         current = (
             self._settings.get("llm_provider_id")
