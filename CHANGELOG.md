@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.8.1] - 2026-07-07
+
+### 优化
+
+- **SQLite 启用 WAL 模式**：`PRAGMA journal_mode=WAL` + `synchronous=NORMAL` + `timeout=10.0`
+  - 提升并发写入性能，更好的崩溃恢复
+- **FTS5 查询长度截断**：`_build_match_query` 将查询截断到 100 字符，防止极长查询拖慢全文检索
+- **ConfigManager 注释修正**：None 过滤的注释从歧义的"None 表示清空，保留原值"改为"None 表示不更新该字段（部分更新模式），清空字段应传空字符串"
+
 ## [1.1.8.0] - 2026-07-07
 
 ### 优化

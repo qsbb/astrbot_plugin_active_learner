@@ -130,7 +130,8 @@ class ConfigManager:
         持久化原子性：先写 .tmp 再 os.replace。
         """
         with self._lock:
-            # 过滤 None（None 表示清空，保留原值）
+            # 过滤 None：None 表示调用方不更新该字段（部分更新模式）。
+            # 清空字段应传空字符串 ""（"" 非 None，能正常通过）。
             filtered = {k: v for k, v in kwargs.items() if v is not None}
             self._overlay.update(filtered)
             self._astrbot_cfg.update(filtered)

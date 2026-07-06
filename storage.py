@@ -175,8 +175,9 @@ def _build_match_query(query: str) -> str:
 
     将查询拆分为 token，每个用双引号包裹（短语查询），
     用 OR 连接。FTS5 unicode61 对中文按字分词，可正常匹配。
+    长度截断到 100 字符，避免极长查询拖慢全文检索。
     """
-    cleaned = re.sub(r'["\'\-\*\(\):^\\/]+', ' ', query)
+    cleaned = re.sub(r'["\'\-\*\(\):^\\/]+', ' ', query[:100])
     tokens = [t.strip() for t in cleaned.split() if t.strip()]
     if not tokens:
         return ""
@@ -196,8 +197,12 @@ class MemoryStore:
             str(db_path),
             check_same_thread=False,
             isolation_level=None,  # autocommit
+            timeout=10.0,
         )
         self._conn.row_factory = sqlite3.Row
+        # WAL 模式：提升并发写入性能 + 更好的崩溃恢复
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(SCHEMA_SQL)
         self._schema_version = _migrate_schema(self._conn)
 
