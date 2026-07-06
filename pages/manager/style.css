@@ -318,6 +318,26 @@ table.memory-table {
   margin-top: 16px;
 }
 
+.page-size-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.page-size-control select {
+  background: var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 13px;
+  min-width: auto;
+  width: 60px;
+  cursor: pointer;
+}
+
 #page-info {
   color: var(--text-muted);
   font-size: 13px;

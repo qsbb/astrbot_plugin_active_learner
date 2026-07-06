@@ -176,13 +176,19 @@ async function _batchDelete(ids) {
   if (!ids.length) return;
   const confirmed = confirm(`确定删除选中的 ${ids.length} 条记忆？此操作不可恢复。`);
   if (!confirmed) return;
+  const btn = document.getElementById("btn-batch-delete");
+  if (btn) btn.disabled = true;
   let ok = 0, fail = 0;
   for (const id of ids) {
     try {
       await bridge.apiPost(`memory/${id}/forget`, {});
       ok++;
-    } catch (_) { fail++; }
+    } catch (e) {
+      console.error(`批量删除失败 (id=${id}):`, e);
+      fail++;
+    }
   }
+  if (btn) btn.disabled = false;
   showToast(`批量删除完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
   state.selectedIds.clear();
   await Promise.all([loadMemories(), loadStats()]);
@@ -392,6 +398,14 @@ function bindEvents() {
   document.getElementById("page-prev").addEventListener("click", () => {
     if (state.page > 1) {
       state.page--;
+      loadMemories();
+    }
+  });
+  document.getElementById("page-size")?.addEventListener("change", (e) => {
+    const val = parseInt(e.target.value, 10);
+    if (val > 0 && val !== state.perPage) {
+      state.perPage = val;
+      state.page = 1;
       loadMemories();
     }
   });
