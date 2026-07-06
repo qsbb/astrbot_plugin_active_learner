@@ -289,15 +289,19 @@ class ActiveLearnerPlugin(Star):
 
         for h in hits:
             entry = h.entry
-            tag = "✅已验证" if entry.verified else f"⚠️置信度{entry.confidence:.0%}"
-            parts.append(f"[记忆#{entry.id}] {entry.topic}（{tag}）: {entry.content}")
+            v_tag = "✅已验证" if entry.verified else f"⚠️置信度{entry.confidence:.0%}"
+            parts.append(
+                f"【内部知识 #{entry.id} | {entry.topic} | {v_tag}】{entry.content}"
+            )
 
         if parts:
-            parts.append("（参考即可，不要照搬；如发现错误请指出，可调用 verify_knowledge 验证）")
-            # v2.4.0：References 仅记录到日志，不注入到 LLM 上下文（否则 LLM 会把它输出到回复中）
+            parts.append(
+                "【以上为内部知识参考，请基于上述内容作答，不要在回复中输出【内部知识】标记】"
+            )
+            parts.append("（如发现错误请指出，可调用 verify_knowledge 验证）")
             if not _ON_LLM_RESPONSE_AVAILABLE and hits:
                 logger.info(
-                    "注入记忆参考: " + " | ".join(
+                    "注入记忆: " + " | ".join(
                         f"[{h.entry.id}] {h.entry.topic} ({h.entry.confidence:.0%})"
                         for h in hits
                     )
@@ -360,29 +364,8 @@ class ActiveLearnerPlugin(Star):
 
         @filter.on_llm_response()  # type: ignore[misc]
         async def on_llm_response(self, event: AstrMessageEvent, response):
-            """从 LLM 原始回复中移除 References block（防止 LLM 将其原样输出）。"""
-            try:
-                injected_ids = getattr(event, "_injected_memory_ids", []) or []
-                if not injected_ids:
-                    return
-
-                # 从 LLM 原始回复中删除 "📚 参考资料:" 相关内容（正则匹配到行尾）
-                for attr in ("completion_text", "text"):
-                    raw = getattr(response, attr, None)
-                    if raw is None:
-                        continue
-                    try:
-                        cleaned = re.sub(
-                            r"\n*📚\s*参考资料:.*",
-                            "",
-                            raw,
-                            flags=re.DOTALL,
-                        ).rstrip("\n")
-                        setattr(response, attr, cleaned)
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.debug(f"on_llm_response cleanup 失败: {e}")
+            """no-op：注入内容已用【内部知识】格式标注，LLM 不会复制输出，无需后处理。"""
+            pass
 
     # ---------- v2.6.0：群黑话被动捕获 + 定时批量学习 ----------
 
