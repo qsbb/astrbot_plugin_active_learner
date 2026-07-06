@@ -410,24 +410,23 @@ class ActiveLearnerPlugin(Star):
             )
 
         # 3. 主动学习提示（v2.6.5.4：始终注入工具提醒，不限于无记忆命中）
-        if self._is_admin_user(event) and self._enable_active_learn_hint:
-            if not hits:
-                hint = self._get_learn_prompt()
-                if hint:
-                    self._active_learn_hinted = True
-                    parts.append(hint)
-                else:
-                    logger.info(
-                        f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})"
-                    )
-            else:
-                # v2.6.5.4：即使有记忆命中，也注入简短工具提醒
-                # 让 LLM 始终知道 search_and_learn 可用
-                if self._learn_weight >= 0.5:
+        if self._enable_active_learn_hint:
+            if self._is_admin_user(event):
+                if not hits:
+                    hint = self._get_learn_prompt()
+                    if hint:
+                        self._active_learn_hinted = True
+                        parts.append(hint)
+                    else:
+                        logger.info(
+                            f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})"
+                        )
+                elif self._learn_weight >= 0.5:
+                    # v2.6.5.4：即使有记忆命中，也注入简短工具提醒
                     parts.append(
                         "（如果用户提供了你原本不掌握的新知识点，可调用 search_and_learn 工具学习）"
                     )
-        else:
+            else:
                 logger.info(
                     f"ℹ️ 当前用户非管理员，跳过主动学习 (scope: {scope})"
                 )
