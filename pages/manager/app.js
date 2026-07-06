@@ -231,6 +231,41 @@ async function batchDeleteSelected() {
   await _batchDelete(Array.from(state.selectedIds));
 }
 
+async function batchVerifySelected() {
+  const ids = Array.from(state.selectedIds);
+  if (!ids.length) {
+    showToast("请先选择需要验证的记忆", true);
+    return;
+  }
+  const confirmed = await _confirmModal(
+    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。`
+  );
+  if (!confirmed) return;
+  const btn = document.getElementById("btn-batch-verify");
+  if (btn) btn.disabled = true;
+  const providerSelect = document.getElementById("settings-provider");
+  const providerId = providerSelect ? providerSelect.value : "";
+  let ok = 0, fail = 0;
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (btn) btn.textContent = `验证中… (${i + 1}/${ids.length})`;
+    try {
+      await bridge.apiPost(`memory/${id}/verify`, { provider_id: providerId });
+      ok++;
+    } catch (e) {
+      console.error(`批量验证失败 (id=${id}):`, e);
+      fail++;
+    }
+  }
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "批量验证";
+  }
+  showToast(`批量验证完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
+  state.selectedIds.clear();
+  await Promise.all([loadMemories(), loadStats()]);
+}
+
 function renderPagination() {
   document.getElementById("page-info").textContent = `第 ${state.page} / ${state.totalPages} 页，共 ${state.total} 条`;
   document.getElementById("page-prev").disabled = state.page <= 1;
@@ -540,6 +575,7 @@ function bindEvents() {
   });
 
   document.getElementById("btn-batch-delete")?.addEventListener("click", batchDeleteSelected);
+  document.getElementById("btn-batch-verify")?.addEventListener("click", batchVerifySelected);
 
   document.querySelector(".modal-close").addEventListener("click", closeModal);
   document.querySelector(".modal-backdrop").addEventListener("click", closeModal);
