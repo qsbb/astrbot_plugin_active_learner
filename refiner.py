@@ -244,20 +244,10 @@ class KnowledgeRefiner:
         return self._parse_result(reply, fallback_summary=facts, topic=topic)
 
     async def _safe_generate(self, provider_id: str, prompt: str) -> str:
-        """安全调用 LLM，失败返回空串。复用 plugin.context.llm_generate 调用形式。"""
-        try:
-            resp = await self._plugin.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=prompt,
-            )
-            text = getattr(resp, "completion_text", "") or ""
-            if not text:
-                # 兜底：尝试把整个响应对象转字符串
-                text = str(resp) if resp else ""
-            return text
-        except Exception as e:
-            logger.error(f"LLM 精炼调用失败: {e}")
-            return ""
+        """安全调用 LLM，失败返回空串。复用 LLMService 统一入口。"""
+        return await self._plugin.llm_service.generate(
+            prompt=prompt, provider_id=provider_id
+        )
 
     def _parse_result(
         self,

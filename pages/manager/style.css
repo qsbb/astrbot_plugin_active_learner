@@ -881,6 +881,28 @@ input[type="file"]:hover {
   margin-top: 4px;
 }
 
+#settings-modal .settings-label-sm {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 120px;
+}
+
+#settings-modal .settings-slider {
+  flex: 1;
+  max-width: 200px;
+}
+
+#settings-modal .settings-number {
+  width: 80px;
+  text-align: center;
+}
+
+#settings-modal .settings-text {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ---------- Debug Panel ---------- */
 
 .debug-panel {

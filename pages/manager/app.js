@@ -15,6 +15,13 @@ const state = {
     refine_on_search: true,
     refine_on_import: true,
     refine_on_verify: true,
+    enable_active_learn_hint: true,
+    learn_weight: 0.7,
+    search_top_k: 5,
+    default_confidence: 0.6,
+    chunk_size: 500,
+    chunk_overlap: 50,
+    admin_ids: "",
   },
 };
 
@@ -586,11 +593,26 @@ async function loadSettings() {
       refine_on_search: s.refine_on_search !== false,
       refine_on_import: s.refine_on_import !== false,
       refine_on_verify: s.refine_on_verify !== false,
+      enable_active_learn_hint: s.enable_active_learn_hint !== false,
+      learn_weight: s.learn_weight !== undefined ? s.learn_weight : 0.7,
+      search_top_k: s.search_top_k || 5,
+      default_confidence: s.default_confidence || 0.6,
+      chunk_size: s.chunk_size || 500,
+      chunk_overlap: s.chunk_overlap || 50,
+      admin_ids: s.admin_ids || "",
     };
     document.getElementById("settings-provider").value = state.settings.llm_provider_id || "";
     document.getElementById("settings-refine-search").checked = state.settings.refine_on_search;
     document.getElementById("settings-refine-import").checked = state.settings.refine_on_import;
     document.getElementById("settings-refine-verify").checked = state.settings.refine_on_verify;
+    document.getElementById("settings-enable-learn").checked = state.settings.enable_active_learn_hint;
+    document.getElementById("settings-learn-weight").value = state.settings.learn_weight;
+    document.getElementById("settings-learn-weight-val").textContent = state.settings.learn_weight;
+    document.getElementById("settings-search-top-k").value = state.settings.search_top_k;
+    document.getElementById("settings-default-confidence").value = state.settings.default_confidence;
+    document.getElementById("settings-chunk-size").value = state.settings.chunk_size;
+    document.getElementById("settings-chunk-overlap").value = state.settings.chunk_overlap;
+    document.getElementById("settings-admin-ids").value = state.settings.admin_ids;
     updateNoProviderHint(state.settings.llm_provider_id);
   } catch (e) {
     showToast(`加载设置失败: ${e.message}`, true);
@@ -612,6 +634,13 @@ async function saveSettings() {
     refine_on_search: document.getElementById("settings-refine-search").checked,
     refine_on_import: document.getElementById("settings-refine-import").checked,
     refine_on_verify: document.getElementById("settings-refine-verify").checked,
+    enable_active_learn_hint: document.getElementById("settings-enable-learn").checked,
+    learn_weight: parseFloat(document.getElementById("settings-learn-weight").value),
+    search_top_k: parseInt(document.getElementById("settings-search-top-k").value, 10) || 5,
+    default_confidence: parseFloat(document.getElementById("settings-default-confidence").value) || 0.6,
+    chunk_size: parseInt(document.getElementById("settings-chunk-size").value, 10) || 500,
+    chunk_overlap: parseInt(document.getElementById("settings-chunk-overlap").value, 10) || 50,
+    admin_ids: document.getElementById("settings-admin-ids").value,
   };
   try {
     const result = await bridge.apiPost("settings", payload);
@@ -620,6 +649,13 @@ async function saveSettings() {
       refine_on_search: result.refine_on_search !== false,
       refine_on_import: result.refine_on_import !== false,
       refine_on_verify: result.refine_on_verify !== false,
+      enable_active_learn_hint: result.enable_active_learn_hint !== false,
+      learn_weight: result.learn_weight !== undefined ? result.learn_weight : 0.7,
+      search_top_k: result.search_top_k || 5,
+      default_confidence: result.default_confidence || 0.6,
+      chunk_size: result.chunk_size || 500,
+      chunk_overlap: result.chunk_overlap || 50,
+      admin_ids: result.admin_ids || "",
     };
     showToast("设置已保存");
     closeSettingsModal();
@@ -638,6 +674,9 @@ function bindSettingsEvents() {
   document.getElementById("btn-refresh-providers").addEventListener("click", loadProviders);
   document.getElementById("settings-provider").addEventListener("change", (e) => {
     updateNoProviderHint(e.target.value);
+  });
+  document.getElementById("settings-learn-weight").addEventListener("input", (e) => {
+    document.getElementById("settings-learn-weight-val").textContent = e.target.value;
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeSettingsModal();

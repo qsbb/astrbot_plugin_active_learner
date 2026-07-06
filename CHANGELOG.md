@@ -2,6 +2,26 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.6.0] - 2026-07-06
+
+### 架构重构
+
+- **提取 `llm_service.py`**：统一 LLM 调用抽象，封装 `generate()` 和 `resolve_provider_id()`，自动处理超时/异常降级。消除 `refiner.py` / `verifier.py` / `tools.py` / `main.py` 中分散的 `context.llm_generate` 直接调用
+- **提取 `config_manager.py`**：统一配置管理，封装三层配置源（AstrBot config → Dashboard 设置 → 代码默认值），提供 `get()` / `update()` / `all()` 接口。消除配置读取逻辑分散在 `__init__`、`_apply_config_to_runtime`、`_web_save_settings` 的现状
+- **提取 `importer.py`（~650 行）**：所有导入逻辑（纯文本 / MD / PDF / DOCX / TXT / ZIP / 内置 KB）从 `main.py` 分离到独立模块。`main.py` 的导入 API 层仅保留 ~60 行薄包装
+
+### 优化
+
+- **`_web_get_settings`** 新增返回 7 个字段：`enable_active_learn_hint`、`learn_weight`、`admin_ids`、`search_top_k`、`default_confidence`、`chunk_size`、`chunk_overlap`
+- **Dashboard ⚙ 设置页面** 新增主动学习（开关/权重/搜索条数/置信度/管理员）、文档分块配置分组，支持滑块实时数值显示
+- **`SettingsStore.update()` 与 `save()` 去重**：`ConfigManager.update()` 内联原子写入逻辑，消除重复代码
+- **移除未使用的导入**：`io`、`uuid`、`zipfile`、`chunker` 模块级函数移至 `importer.py`
+- **`_parse_md` 模块级函数移至 `importer.py`**，`main.py` 不再直接依赖
+
+### 版本
+
+主版本 +1（2.6.5.x → 2.6.6.x），表示架构级重构，无破坏性行为变更。
+
 ## [2.6.5.5] - 2026-07-06
 
 ### 新增

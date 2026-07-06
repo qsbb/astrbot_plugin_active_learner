@@ -125,14 +125,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
 
         # 3. LLM 精炼（2 步：抽取事实 + 结构化为知识卡）
         event = _get_event(context)
-        provider_id = ""
-        if event is not None:
-            try:
-                provider_id = await plugin._resolve_plugin_provider_id(
-                    umo=event.unified_msg_origin
-                )
-            except Exception:
-                provider_id = ""
+        provider_id = await plugin.llm_service.resolve_provider_id(event=event)
 
         refine_result = await plugin.refiner.refine_search_results(
             topic=topic, search_text=search_text, sources=sources, provider_id=provider_id,
@@ -292,16 +285,9 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
         # 标记质疑
         plugin.store.inc_challenge(entry.id)
 
-        # 取 LLM provider（4 层 fallback：Dashboard 设置 → schema → 事件 scope → 同步默认）
+        # 取 LLM provider
         event = _get_event(context)
-        provider_id = ""
-        if event is not None:
-            try:
-                provider_id = await plugin._resolve_plugin_provider_id(
-                    umo=event.unified_msg_origin
-                )
-            except Exception:
-                provider_id = ""
+        provider_id = await plugin.llm_service.resolve_provider_id(event=event)
 
         # 执行验证
         logger.info(f"验证「{topic}」(scope: {scope})")
@@ -471,12 +457,7 @@ class SaveMemoryTool(FunctionTool):  # type: ignore[misc]
 
         # 解析 provider_id
         event = _get_event(context)
-        umo = event.unified_msg_origin if event is not None else ""
-        provider_id = ""
-        try:
-            provider_id = await plugin._resolve_plugin_provider_id(umo=umo)
-        except Exception:
-            provider_id = ""
+        provider_id = await plugin.llm_service.resolve_provider_id(event=event)
 
         # 立即返回，异步精炼 + 存储
         asyncio.create_task(

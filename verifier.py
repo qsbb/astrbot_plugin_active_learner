@@ -309,18 +309,15 @@ class Verifier:
         return "verify_inconclusive"
 
     async def _safe_llm_generate(self, provider_id: str, prompt: str) -> str:
-        """LLM 调用容错。"""
+        """LLM 调用容错。复用 LLMService 统一入口。"""
         if not provider_id:
             return "（LLM 不可用）"
-        try:
-            resp = await self._plugin.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=prompt,
-            )
-            return getattr(resp, "completion_text", "") or ""
-        except Exception as e:
-            logger.error(f"LLM 调用失败: {e}")
-            return f"（LLM 调用失败: {e}）"
+        text = await self._plugin.llm_service.generate(
+            prompt=prompt, provider_id=provider_id
+        )
+        if text:
+            return text
+        return "（LLM 调用失败）"
 
 
 class _DebateResult:
