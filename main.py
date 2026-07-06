@@ -416,6 +416,9 @@ class ActiveLearnerPlugin(Star):
                 if hint:
                     self._active_learn_hinted = True
                     parts.append(hint)
+                    logger.info(
+                        f"ℹ️ 已注入学习提示 (weight={self._learn_weight}, scope: {scope})"
+                    )
                 else:
                     logger.info(
                         f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})"
@@ -500,15 +503,18 @@ class ActiveLearnerPlugin(Star):
         """回复完成后，异步分析对话是否包含可学习知识点，自动存入记忆库。"""
         # 1. 开关检查
         if not self._enable_active_learn_hint or self._learn_weight <= 0.0:
+            logger.debug(f"后置学习跳过: enable={self._enable_active_learn_hint}, weight={self._learn_weight}")
             return
 
         # 2. 提取用户消息
         user_msg = ""
         try:
             user_msg = (event.get_message_str() or "").strip()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"后置学习跳过: 提取用户消息失败 {e}")
             return
         if not user_msg or len(user_msg) < 5:
+            logger.debug(f"后置学习跳过: 用户消息过短 ({len(user_msg) if user_msg else 0}字)")
             return
 
         # 3. 管理员：只有包含明确学习意图（记住/学习/保存等）时才分析
@@ -518,6 +524,7 @@ class ActiveLearnerPlugin(Star):
                 user_msg,
             )
             if not learn_intent:
+                logger.debug(f"后置学习跳过: 管理员消息无明确学习意图")
                 return
             # 去掉学习指令，保留真正要学习的内容
             user_msg = re.sub(
@@ -526,7 +533,10 @@ class ActiveLearnerPlugin(Star):
                 user_msg,
             ).strip()
             if not user_msg or len(user_msg) < 2:
+                logger.debug("后置学习跳过: 去掉指令后用户消息为空")
                 return
+        else:
+            logger.debug(f"后置学习分析: 非管理员用户，自动分析")
 
         # 4. 提取 LLM 回复
         llm_text = ""
@@ -537,19 +547,21 @@ class ActiveLearnerPlugin(Star):
         elif isinstance(response, str):
             llm_text = response.strip()
         if not llm_text:
+            logger.debug("后置学习跳过: LLM 回复为空")
             return
 
-        # 4. 节流：每 scope 30 秒最多分析一次
+        # 5. 节流：每 scope 30 秒最多分析一次
         scope = Scope.from_event(event)
         scope_key = f"{scope.type}:{scope.id}"
         now = now_ts()
         last = getattr(self, "_last_post_learn", {})
         if now - last.get(scope_key, 0) < 30:
+            logger.debug(f"后置学习跳过: 节流中 (scope={scope_key})")
             return
         last[scope_key] = now
         self._last_post_learn = last
 
-        # 5. 调用 LLM 分析该对话是否包含新知识点
+        # 6. 调用 LLM 分析该对话是否包含新知识点
         provider_id = ""
         try:
             provider_id = await self._resolve_plugin_provider_id(
@@ -557,6 +569,10 @@ class ActiveLearnerPlugin(Star):
             )
         except Exception:
             pass
+
+        if not provider_id:
+            logger.debug("后置学习跳过: 未解析到 LLM provider")
+            return
 
         prompt = (
             "你是一个知识提取助手。分析以下对话，判断用户是否向机器人传授了新知识。\n\n"
@@ -572,13 +588,16 @@ class ActiveLearnerPlugin(Star):
             "KEYWORDS: <关键词，仅 TYPE=learn 时需要>"
         )
 
+        logger.debug(f"后置学习分析: 调用 LLM 判断 (msg={user_msg[:40]}...)")
         text = await self.refiner._safe_generate(provider_id, prompt)
         if not text:
+            logger.debug("后置学习跳过: LLM 分析无返回")
             return
 
-        # 6. 解析响应
+        # 7. 解析响应
         type_match = re.search(r"TYPE:\s*(\w+)", text)
         if not type_match or type_match.group(1).lower() != "learn":
+            logger.debug(f"后置学习跳过: LLM 判定为 skip (raw={text[:80]})")
             return
 
         topic = ""
@@ -596,9 +615,10 @@ class ActiveLearnerPlugin(Star):
             keywords = [k.strip() for k in keywords_m.group(1).split(",") if k.strip()]
 
         if not topic or not content:
+            logger.debug(f"后置学习跳过: LLM 返回 learn 但缺 topic/content (topic={topic!r}, content={content!r})")
             return
 
-        # 7. 存入记忆
+        # 8. 存入记忆
         try:
             entry = await asyncio.to_thread(
                 self.store.add_or_update,
