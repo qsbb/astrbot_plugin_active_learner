@@ -449,6 +449,7 @@ function showVerifyDetail(result) {
 async function loadLogs() {
   const el = document.getElementById("log-content");
   if (!el) return;
+  const autoScroll = document.getElementById("log-autoscroll")?.checked ?? false;
   try {
     const data = await bridge.apiGet("logs");
     const logs = data.logs || [];
@@ -459,7 +460,7 @@ async function loadLogs() {
     el.innerHTML = logs
       .map((line) => `<div class="log-line">${escapeHtml(line)}</div>`)
       .join("");
-    el.scrollTop = el.scrollHeight;
+    if (autoScroll) el.scrollTop = el.scrollHeight;
   } catch (e) {
     el.textContent = `加载日志失败: ${e.message}`;
   }
