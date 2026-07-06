@@ -59,12 +59,6 @@
         "hint": "验证某条记忆时，LLM 自辩论的轮数。2 表示：支持方→质疑方→仲裁。",
         "default": 2
     },
-    "ddg_fallback": {
-        "description": "无内置搜索时使用 DuckDuckGo",
-        "type": "bool",
-        "hint": "当 AstrBot 未配置 Tavily/BoCha/Brave/百度 时，是否用 DuckDuckGo 兜底",
-        "default": true
-    },
     "llm_provider_id": {
         "description": "插件专用 LLM Provider（留空用当前对话模型）",
         "type": "string",

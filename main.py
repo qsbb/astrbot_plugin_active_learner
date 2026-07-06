@@ -89,7 +89,6 @@ class ActiveLearnerPlugin(Star):
 
         max_entries = int(cfg.get("max_entries", 500))
         min_confidence = float(cfg.get("min_confidence", 0.3))
-        ddg_fallback = bool(cfg.get("ddg_fallback", True))
         self.config = cfg  # 统一保存，供 tools.py 等模块读取
 
         # 存储层
@@ -102,7 +101,7 @@ class ActiveLearnerPlugin(Star):
         )
 
         # 搜索器与验证器
-        self.searcher = WebSearcher(ddg_fallback=ddg_fallback)
+        self.searcher = WebSearcher()
         self.bili_source = BiliSource(context)
         self.verifier = Verifier(self)
 
@@ -1391,9 +1390,6 @@ class ActiveLearnerPlugin(Star):
             self.store._min_confidence = float(cfg.get("min_confidence", 0.3))
         except (TypeError, ValueError):
             pass
-
-        # DuckDuckGo 兜底
-        self.searcher._ddg_fallback = bool(cfg.get("ddg_fallback", True))
 
         # 关键词提示
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))

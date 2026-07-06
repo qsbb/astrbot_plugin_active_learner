@@ -1,7 +1,7 @@
 """质疑验证器。
 
 流程：
-1. 多源搜索（AstrBot web_search 兜底 DuckDuckGo + B 站可选）
+1. 多源搜索（AstrBot web_search 兜底 + B 站可选）
 2. LLM 自辩论 2 轮（支持方 → 质疑方 → 仲裁）
 3. 交叉验证：≥2 个独立来源结论一致才升 verified=True
 4. 版本快照：内容差异 >30 字符或置信度下降 >0.15 时写 memory_versions
