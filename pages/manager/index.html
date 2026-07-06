@@ -52,9 +52,20 @@
     </details>
 
     <section class="table-wrap">
+      <div id="selection-toolbar" class="selection-toolbar hidden">
+        <label class="sel-all">
+          <input type="checkbox" id="select-all-checkbox" />
+          <span>全选本页</span>
+        </label>
+        <button type="button" id="btn-invert">反选</button>
+        <button type="button" id="btn-deselect-all">取消选择</button>
+        <span id="selected-count" class="selected-count"></span>
+        <button type="button" id="btn-batch-delete" class="danger">批量删除</button>
+      </div>
       <table class="memory-table">
         <thead>
           <tr>
+            <th class="col-check"><!-- checkbox via JS --></th>
             <th>主题</th>
             <th>内容预览</th>
             <th>作用域</th>
@@ -65,7 +76,7 @@
           </tr>
         </thead>
         <tbody id="memory-tbody">
-          <tr class="empty-row"><td colspan="7">加载中…</td></tr>
+          <tr class="empty-row"><td colspan="8">加载中…</td></tr>
         </tbody>
       </table>
     </section>

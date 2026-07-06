@@ -9,6 +9,7 @@ const state = {
   total: 0,
   totalPages: 1,
   currentDetailId: null,
+  selectedIds: new Set(),
   settings: {
     llm_provider_id: "",
     refine_on_search: true,
@@ -95,7 +96,7 @@ async function loadStats() {
 
 async function loadMemories() {
   const tbody = document.getElementById("memory-tbody");
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="7">加载中…</td></tr>';
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="8">加载中…</td></tr>';
   try {
     const params = {
       ...scopeParams(),
@@ -113,20 +114,25 @@ async function loadMemories() {
     renderTable(data.items || []);
     renderPagination();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">加载失败：${e.message}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">加载失败：${e.message}</td></tr>`;
   }
 }
 
 function renderTable(items) {
   const tbody = document.getElementById("memory-tbody");
   if (!items.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">记忆库为空</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">记忆库为空</td></tr>';
     return;
   }
   tbody.innerHTML = "";
   for (const e of items) {
     const tr = document.createElement("tr");
+    const checked = state.selectedIds.has(e.id) ? "checked" : "";
+    if (checked) tr.classList.add("selected");
     tr.innerHTML = `
+      <td class="col-check">
+        <input type="checkbox" data-id="${escapeHtml(e.id)}" ${checked} />
+      </td>
       <td class="cell-topic" title="${escapeHtml(e.topic)}">${escapeHtml(e.topic)}</td>
       <td class="cell-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 80))}</td>
       <td class="cell-scope">${escapeHtml(e.scope_type)}:${escapeHtml(e.scope_id)}</td>
@@ -141,6 +147,49 @@ function renderTable(items) {
     `;
     tbody.appendChild(tr);
   }
+  // sync header "select all" checkbox
+  _syncSelectAllCheckbox(items);
+  _updateSelectionToolbar();
+}
+
+// ---------- 多选工具栏 ----------
+
+function _syncSelectAllCheckbox(items) {
+  const cb = document.getElementById("select-all-checkbox");
+  if (!cb) return;
+  if (!items.length) { cb.checked = false; cb.indeterminate = false; return; }
+  const allSelected = items.every((e) => state.selectedIds.has(e.id));
+  const someSelected = items.some((e) => state.selectedIds.has(e.id));
+  cb.checked = allSelected;
+  cb.indeterminate = someSelected && !allSelected;
+}
+
+function _updateSelectionToolbar() {
+  const toolbar = document.getElementById("selection-toolbar");
+  const countEl = document.getElementById("selected-count");
+  const count = state.selectedIds.size;
+  toolbar.classList.toggle("hidden", count === 0);
+  countEl.textContent = count ? `已选 ${count} 条` : "";
+}
+
+async function _batchDelete(ids) {
+  if (!ids.length) return;
+  const confirmed = confirm(`确定删除选中的 ${ids.length} 条记忆？此操作不可恢复。`);
+  if (!confirmed) return;
+  let ok = 0, fail = 0;
+  for (const id of ids) {
+    try {
+      await bridge.apiPost(`memory/${id}/forget`, {});
+      ok++;
+    } catch (_) { fail++; }
+  }
+  showToast(`批量删除完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
+  state.selectedIds.clear();
+  await Promise.all([loadMemories(), loadStats()]);
+}
+
+async function batchDeleteSelected() {
+  await _batchDelete(Array.from(state.selectedIds));
 }
 
 function renderPagination() {
@@ -362,6 +411,85 @@ function bindEvents() {
     else if (act === "verify") verifyMemory(id, btn);
     else if (act === "forget") forgetMemory(id);
   });
+
+  // 多选：行 checkbox 切换
+  document.getElementById("memory-tbody").addEventListener("change", (e) => {
+    const cb = e.target.closest('input[type="checkbox"][data-id]');
+    if (!cb) return;
+    const id = cb.dataset.id;
+    if (cb.checked) {
+      state.selectedIds.add(id);
+    } else {
+      state.selectedIds.delete(id);
+    }
+    cb.closest("tr").classList.toggle("selected", cb.checked);
+    _syncSelectAllCheckbox(
+      Array.from(document.querySelectorAll("#memory-tbody input[data-id]")).map(
+        (c) => ({ id: c.dataset.id })
+      )
+    );
+    _updateSelectionToolbar();
+  });
+
+  // 全选/反选/取消
+  document.getElementById("select-all-checkbox")?.addEventListener("change", (e) => {
+    const checks = Array.from(
+      document.querySelectorAll("#memory-tbody input[data-id]")
+    );
+    if (e.target.checked) {
+      checks.forEach((c) => {
+        state.selectedIds.add(c.dataset.id);
+        c.checked = true;
+        c.closest("tr").classList.add("selected");
+      });
+    } else {
+      checks.forEach((c) => {
+        state.selectedIds.delete(c.dataset.id);
+        c.checked = false;
+        c.closest("tr").classList.remove("selected");
+      });
+    }
+    _updateSelectionToolbar();
+  });
+
+  document.getElementById("btn-invert")?.addEventListener("click", () => {
+    document.querySelectorAll("#memory-tbody input[data-id]").forEach((cb) => {
+      const id = cb.dataset.id;
+      if (state.selectedIds.has(id)) {
+        state.selectedIds.delete(id);
+        cb.checked = false;
+        cb.closest("tr").classList.remove("selected");
+      } else {
+        state.selectedIds.add(id);
+        cb.checked = true;
+        cb.closest("tr").classList.add("selected");
+      }
+    });
+    _syncSelectAllCheckbox(
+      Array.from(document.querySelectorAll("#memory-tbody input[data-id]")).map(
+        (c) => ({ id: c.dataset.id })
+      )
+    );
+    _updateSelectionToolbar();
+  });
+
+  document.getElementById("btn-deselect-all")?.addEventListener("click", () => {
+    state.selectedIds.clear();
+    document
+      .querySelectorAll("#memory-tbody input[type=checkbox]")
+      .forEach((cb) => {
+        cb.checked = false;
+        cb.closest("tr")?.classList.remove("selected");
+      });
+    _syncSelectAllCheckbox(
+      Array.from(document.querySelectorAll("#memory-tbody input[data-id]")).map(
+        (c) => ({ id: c.dataset.id })
+      )
+    );
+    _updateSelectionToolbar();
+  });
+
+  document.getElementById("btn-batch-delete")?.addEventListener("click", batchDeleteSelected);
 
   document.querySelector(".modal-close").addEventListener("click", closeModal);
   document.querySelector(".modal-backdrop").addEventListener("click", closeModal);
