@@ -52,8 +52,6 @@ PLUGIN_NAME = "astrbot_plugin_active_learner"
 
 # 运行时检测 on_llm_response hook 是否可用（不可用时降级为 on_llm_request 内嵌 References）
 _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
-# 运行时检测 on_message hook 是否可用（v2.6.0 群黑话捕获依赖）
-_ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
 
 
 @register(
@@ -163,10 +161,8 @@ class ActiveLearnerPlugin(Star):
         # v2.6.5.5：后置学习节流
         self._last_post_learn: dict[str, float] = {}
 
-        # v2.6.0：群黑话被动捕获 + 定时批量学习
-        self._enable_slang_capture = _ON_MESSAGE_AVAILABLE and bool(
-            cfg.get("enable_slang_capture", False)
-        )
+        # v2.6.0：群黑话被动捕获 + 定时批量学习（通过 on_llm_request 捕获）
+        self._enable_slang_capture = bool(cfg.get("enable_slang_capture", False))
         self._slang_interval_hours = float(cfg.get("slang_capture_interval_hours", 24))
         self._slang_batch_size = int(cfg.get("slang_capture_batch_size", 5))
         self._slang_min_occurrences = int(cfg.get("slang_capture_min_occurrences", 2))
@@ -208,11 +204,6 @@ class ActiveLearnerPlugin(Star):
                 f"batch_size={self._slang_batch_size} | min_occ={self._slang_min_occurrences} | "
                 f"scope_only_group={self._slang_scope_only_group}"
             )
-        elif not _ON_MESSAGE_AVAILABLE and bool(cfg.get("enable_slang_capture", False)):
-            logger.warning(
-                "配置启用了 enable_slang_capture，但当前 AstrBot 不支持 on_message 钩子，特性已禁用"
-            )
-
         # 注册 Dashboard 管理页面后端 API（AstrBot v4.26+）
         if _WEB_AVAILABLE:
             try:
@@ -468,6 +459,22 @@ class ActiveLearnerPlugin(Star):
         except Exception as e:
             logger.error(f"上下文注入失败: {e}")
 
+        # 5. 群黑话被动捕获（v2.6.6.0：通过 on_llm_request 降级，不依赖 on_message 钩子）
+        if self._enable_slang_capture:
+            try:
+                if self._slang_scope_only_group and scope.type != "group":
+                    pass  # 仅捕获群消息
+                else:
+                    candidates = extract_candidates(msg)
+                    if candidates:
+                        for phrase, ctx in candidates:
+                            await asyncio.to_thread(
+                                self.store.add_slang_candidate, scope, phrase, ctx
+                            )
+                        self._maybe_trigger_batch_learn(scope)
+            except Exception as e:
+                logger.debug(f"slang 捕获失败: {e}")
+
     # v2.6.5.5：on_llm_response hook（+ 后置异步学习分析，不依赖 LLM 主动调工具）
     if _ON_LLM_RESPONSE_AVAILABLE:
 
@@ -607,37 +614,7 @@ class ActiveLearnerPlugin(Star):
         except Exception as e:
             logger.error(f"❌ 后置学习存储失败「{topic}」: {e}", exc_info=True)
 
-    # ---------- v2.6.0：群黑话被动捕获 + 定时批量学习 ----------
-
-    if _ON_MESSAGE_AVAILABLE:
-
-        @filter.on_message()  # type: ignore[misc]
-        async def on_message(self, event: AstrMessageEvent):
-            """被动扫描群消息，提取候选黑话词。不调 LLM。"""
-            if not self._enable_slang_capture:
-                return
-            try:
-                scope = Scope.from_event(event)
-                if self._slang_scope_only_group and scope.type != "group":
-                    return
-                text = ""
-                try:
-                    text = event.get_message_str() or ""
-                except Exception:
-                    return
-                if not text or len(text) < 4:
-                    return
-                candidates = extract_candidates(text)
-                if not candidates:
-                    return
-                for phrase, ctx in candidates:
-                    await asyncio.to_thread(
-                        self.store.add_slang_candidate, scope, phrase, ctx
-                    )
-                # 节流检查：每个 scope 5 分钟最多查一次 DB 看是否该触发批量学习
-                self._maybe_trigger_batch_learn(scope)
-            except Exception as e:
-                logger.debug(f"slang 捕获失败: {e}")
+    # ---------- v2.6.0：群黑话定时批量学习（捕获已移至 on_llm_request）----------
 
     def _maybe_trigger_batch_learn(self, scope: Scope) -> None:
         """节流检查：每 scope 5 分钟最多查一次 DB；满足条件则 asyncio.create_task 触发批量学习。"""
