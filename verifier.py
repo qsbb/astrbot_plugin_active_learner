@@ -74,23 +74,22 @@ class Verifier:
     ) -> VerificationResult:
         """对一条记忆执行验证流程。
 
-        根据 verifier_search_source 配置选择搜索源：
-        - auto: 有搜索 API 就用网页+B站，没有则 LLM
-        - web: 仅网页搜索
-        - bilibili: 仅 B 站
-        - web+bilibili: 网页+B 站
-        - llm: 纯 LLM 验证不搜索
+        流程：LLM 提取关键词 → 用关键词搜索 → LLM 交叉验证 → 仲裁。
         """
         claim = claim or entry.content
         topic = entry.topic
         source_cfg = self._get_search_source()
 
-        # 1. 搜索源选择
+        # 1. LLM 提取搜索关键词
+        keywords = await self._extract_keywords(topic, claim, provider_id)
+        logger.info(f"验证关键词提取: {topic} → {keywords}")
+
+        # 2. 搜索源选择
         if source_cfg == "llm":
             sources: list[dict] = []
             llm_only = True
         else:
-            sources = await self._collect_sources(topic, claim, source_cfg)
+            sources = await self._collect_sources(topic, claim, source_cfg, keywords)
             llm_only = len(sources) < 2
 
         if llm_only and source_cfg != "llm":
@@ -100,34 +99,34 @@ class Verifier:
         elif source_cfg == "llm":
             logger.info(f"配置为纯 LLM 验证: {topic}")
 
-        # 2. LLM 自辩论
+        # 3. LLM 交叉验证
         debate_result = await self._llm_debate(
             topic, claim, sources, provider_id, llm_only=llm_only
         )
 
-        # 3. 交叉验证
+        # 4. 交叉验证一致性
         if llm_only:
             sources_consistent = True
         else:
             sources_consistent = self._check_consistency(sources, debate_result)
 
-        # 4. 计算最终置信度
+        # 5. 计算最终置信度
         new_confidence = self._adjust_confidence(
             entry.confidence, debate_result.verdict, sources_consistent,
             llm_only=llm_only,
         )
 
-        # 5. 决定是否更新内容
+        # 6. 决定是否更新内容
         new_content = entry.content
         if debate_result.verdict == "wrong" and debate_result.content:
             new_content = debate_result.content
         elif debate_result.verdict == "partial" and debate_result.content:
             new_content = debate_result.content
 
-        # 6. 版本快照 + 更新记忆
+        # 7. 版本快照 + 更新记忆
         verified = (
-            debate_result.verdict == "correct"
-            and new_confidence >= 0.6
+            debate_result.verdict in ("correct", "partial")
+            and new_confidence >= 0.5
         )
         reason = self._reason_tag(debate_result.verdict, sources_consistent, llm_only=llm_only)
 
@@ -158,18 +157,48 @@ class Verifier:
 
     # ---------- 内部方法 ----------
 
+    async def _extract_keywords(
+        self, topic: str, claim: str, provider_id: str
+    ) -> list[str]:
+        """让 LLM 从记忆内容中提取适合搜索的关键词。"""
+        prompt = (
+            f"从以下知识点中提取 3-5 个适合搜索引擎检索的关键词或短语。\n\n"
+            f"主题: {topic}\n内容: {claim}\n\n"
+            f"要求:\n"
+            f"1. 提取核心实体、术语、人名、概念等\n"
+            f"2. 避免常见词（如\"什么是\"、\"解释\"等）\n"
+            f"3. 输出格式：KEYWORDS: 关键词1, 关键词2, 关键词3\n"
+            f"4. 只输出一行，不要额外解释"
+        )
+        text = await self._safe_llm_generate(provider_id, prompt)
+        m = re.search(r"KEYWORDS:\s*(.+)", text)
+        if m:
+            kws = [k.strip() for k in m.group(1).split(",") if k.strip()]
+            if kws:
+                return kws[:5]
+        # 兜底：用 topic 本身
+        return [topic] if topic else []
+
     async def _collect_sources(
-        self, topic: str, claim: str, source_cfg: str = "auto"
+        self,
+        topic: str,
+        claim: str,
+        source_cfg: str = "auto",
+        keywords: list[str] | None = None,
     ) -> list[dict]:
-        """根据配置从对应搜索源收集证据。"""
+        """根据配置从对应搜索源收集证据。用关键词辅助搜索。"""
         sources: list[dict] = []
+        keywords = keywords or []
 
         use_web = source_cfg in ("auto", "web", "web+bilibili")
         use_bili = source_cfg in ("auto", "bilibili", "web+bilibili")
 
+        # 构建搜索 query：优先用关键词组合
+        search_query = " ".join(keywords[:3]) if keywords else topic
+
         # 网页搜索
         if use_web:
-            results = await self._plugin.searcher.search(topic, max_results=5)
+            results = await self._plugin.searcher.search(search_query, max_results=5)
             for r in results:
                 sources.append({
                     "title": r.get("title", ""),
@@ -178,26 +207,27 @@ class Verifier:
                     "source_type": "web",
                 })
 
-            # 真假验证搜索
-            fact_results = await self._plugin.searcher.search(
-                f"{claim} 真假 验证", max_results=3
-            )
-            for r in fact_results:
-                if r.get("title") and r["title"][:30] not in {
-                    s["title"][:30] for s in sources
-                }:
-                    sources.append({
-                        "title": r.get("title", ""),
-                        "snippet": r.get("snippet", ""),
-                        "url": r.get("url", ""),
-                        "source_type": "web_factcheck",
-                    })
+            # 第二轮搜索：用 topic + 关键词
+            if keywords:
+                alt_query = f"{topic} {keywords[0]}"
+                fact_results = await self._plugin.searcher.search(alt_query, max_results=3)
+                for r in fact_results:
+                    if r.get("title") and r["title"][:30] not in {
+                        s["title"][:30] for s in sources
+                    }:
+                        sources.append({
+                            "title": r.get("title", ""),
+                            "snippet": r.get("snippet", ""),
+                            "url": r.get("url", ""),
+                            "source_type": "web_factcheck",
+                        })
 
         # B 站搜索
         if use_bili and self._plugin.bili_source:
             try:
                 if self._plugin.bili_source.is_available():
-                    bili_results = await self._plugin.bili_source.search(topic, limit=3)
+                    bili_query = keywords[0] if keywords else topic
+                    bili_results = await self._plugin.bili_source.search(bili_query, limit=3)
                     for r in bili_results:
                         sources.append({
                             "title": r.get("title", ""),
@@ -349,14 +379,19 @@ class Verifier:
     def _adjust_confidence(
         self, old: float, verdict: str, consistent: bool, llm_only: bool = False
     ) -> float:
-        """根据验证结果调整置信度。"""
+        """根据验证结果调整置信度。
+
+        策略：correct 提升置信度，wrong 大幅降低，partial 轻微降低，
+        inconclusive 保持不变（避免反复验证导致置信度无意义下降）。
+        """
         if verdict == "correct":
-            boost = 0.10 if llm_only else (0.15 if consistent else 0.05)
+            boost = 0.15 if llm_only else (0.20 if consistent else 0.10)
             return min(1.0, old + boost)
         if verdict == "wrong":
-            return max(0.1, old - 0.3)
+            return max(0.1, old - 0.25)
         if verdict == "partial":
-            return max(0.2, old - 0.1)
+            # partial 不再降，反而轻微提升（说明 LLM 认为部分正确）
+            return min(1.0, old + 0.05)
         return old  # inconclusive 保持不变
 
     def _reason_tag(
