@@ -32,6 +32,7 @@ class VerificationResult:
         reasoning: str,         # 验证推理过程
         sources_count: int,
         sources_consistent: bool,
+        debug_info: dict | None = None,
     ):
         self.verdict = verdict
         self.confidence = confidence
@@ -39,6 +40,7 @@ class VerificationResult:
         self.reasoning = reasoning
         self.sources_count = sources_count
         self.sources_consistent = sources_consistent
+        self.debug_info = debug_info or {}
 
     def to_text(self) -> str:
         verdict_cn = {
@@ -79,9 +81,24 @@ class Verifier:
         claim = claim or entry.content
         topic = entry.topic
         source_cfg = self._get_search_source()
+        debug_info: dict = {
+            "provider_id": provider_id,
+            "topic": topic,
+            "claim": claim,
+            "source_cfg": source_cfg,
+            "keywords": [],
+            "prompts": [],
+            "replies": [],
+            "sources": [],
+        }
 
         # 1. LLM 提取搜索关键词
-        keywords = await self._extract_keywords(topic, claim, provider_id)
+        keywords, kw_prompt, kw_reply = await self._extract_keywords(
+            topic, claim, provider_id
+        )
+        debug_info["keywords"] = keywords
+        debug_info["prompts"].append({"step": "extract_keywords", "text": kw_prompt})
+        debug_info["replies"].append({"step": "extract_keywords", "text": kw_reply})
         logger.info(f"验证关键词提取: {topic} → {keywords}")
 
         # 2. 搜索源选择
@@ -91,6 +108,7 @@ class Verifier:
         else:
             sources = await self._collect_sources(topic, claim, source_cfg, keywords)
             llm_only = len(sources) < 2
+        debug_info["sources"] = sources
 
         if llm_only and source_cfg != "llm":
             logger.info(
@@ -100,9 +118,11 @@ class Verifier:
             logger.info(f"配置为纯 LLM 验证: {topic}")
 
         # 3. LLM 交叉验证
-        debate_result = await self._llm_debate(
+        debate_result, debate_prompts, debate_replies = await self._llm_debate(
             topic, claim, sources, provider_id, llm_only=llm_only
         )
+        debug_info["prompts"].extend(debate_prompts)
+        debug_info["replies"].extend(debate_replies)
 
         # 4. 交叉验证一致性
         if llm_only:
@@ -153,14 +173,18 @@ class Verifier:
             reasoning=debate_result.reasoning,
             sources_count=len(sources),
             sources_consistent=sources_consistent,
+            debug_info=debug_info,
         )
 
     # ---------- 内部方法 ----------
 
     async def _extract_keywords(
         self, topic: str, claim: str, provider_id: str
-    ) -> list[str]:
-        """让 LLM 从记忆内容中提取适合搜索的关键词。"""
+    ) -> tuple[list[str], str, str]:
+        """让 LLM 从记忆内容中提取适合搜索的关键词。
+
+        返回 (keywords, prompt, reply)。
+        """
         prompt = (
             f"从以下知识点中提取 3-5 个适合搜索引擎检索的关键词或短语。\n\n"
             f"主题: {topic}\n内容: {claim}\n\n"
@@ -175,9 +199,9 @@ class Verifier:
         if m:
             kws = [k.strip() for k in m.group(1).split(",") if k.strip()]
             if kws:
-                return kws[:5]
+                return kws[:5], prompt, text
         # 兜底：用 topic 本身
-        return [topic] if topic else []
+        return ([topic] if topic else []), prompt, text
 
     async def _collect_sources(
         self,
@@ -255,11 +279,14 @@ class Verifier:
         sources: list[dict],
         provider_id: str,
         llm_only: bool = False,
-    ) -> "_DebateResult":
+    ) -> tuple["_DebateResult", list[dict], list[dict]]:
         """LLM 自辩论：支持方 → 质疑方 → 仲裁。
 
-        llm_only=True 时无外部搜索源，LLM 基于自身知识判断。
+        返回 (debate_result, prompts, replies)。
         """
+        prompts: list[dict] = []
+        replies: list[dict] = []
+
         if sources:
             sources_text = "\n---\n".join(
                 f"[来源{i+1}] ({s['source_type']}) {s['title']}\n{s['snippet']}"
@@ -292,6 +319,8 @@ class Verifier:
                 f"4. 200 字以内"
             )
         reply_a = await self._safe_llm_generate(provider_id, prompt_a)
+        prompts.append({"step": "debate_round_a_supportive", "text": prompt_a})
+        replies.append({"step": "debate_round_a_supportive", "text": reply_a})
 
         # Round B：质疑方
         prompt_b = (
@@ -307,6 +336,8 @@ class Verifier:
             f"5. 200 字以内"
         )
         reply_b = await self._safe_llm_generate(provider_id, prompt_b)
+        prompts.append({"step": "debate_round_b_skeptical", "text": prompt_b})
+        replies.append({"step": "debate_round_b_skeptical", "text": reply_b})
 
         # Round C：仲裁
         prompt_c = (
@@ -321,8 +352,10 @@ class Verifier:
             f"REASON: 简述仲裁依据（100 字以内）"
         )
         reply_c = await self._safe_llm_generate(provider_id, prompt_c)
+        prompts.append({"step": "debate_round_c_arbiter", "text": prompt_c})
+        replies.append({"step": "debate_round_c_arbiter", "text": reply_c})
 
-        return self._parse_debate_result(reply_c)
+        return self._parse_debate_result(reply_c), prompts, replies
 
     def _parse_debate_result(self, text: str) -> "_DebateResult":
         """解析仲裁结果。"""

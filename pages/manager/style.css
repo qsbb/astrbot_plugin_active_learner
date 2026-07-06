@@ -966,6 +966,45 @@ input[type="file"]:hover {
   margin-bottom: 2px;
 }
 
+/* ---------- 日志面板 & 验证详情 ---------- */
+
+.log-content {
+  max-height: 360px;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.log-line {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.05));
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.verify-step {
+  margin: 8px 0;
+}
+
+.verify-step-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.verify-pre {
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.05));
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
 /* ---------- Builtin KB Modal（内置知识库导入） ---------- */
 
 .modal-card-wide {

@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Optional
@@ -138,6 +140,15 @@ class ActiveLearnerPlugin(Star):
         )
         self.llm_service = LLMService(self)
         self.importer = Importer(self)
+
+        # 日志缓冲区：捕获本插件最近 200 条日志
+        self._log_buffer: collections.deque = collections.deque(maxlen=200)
+        self._log_handler = _BufferHandler(self._log_buffer)
+        self._log_handler.setLevel(logging.INFO)
+        self._log_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
+        )
+        logger.addHandler(self._log_handler)
 
         # v2.4.0：向量混合检索配置
         self._embedding_enabled = bool(cfg.get("embedding_enabled", True))
@@ -1021,6 +1032,9 @@ class ActiveLearnerPlugin(Star):
             f"/{PLUGIN_NAME}/builtin_kb/import",
             self._web_builtin_kb_import, ["POST"], "从内置 KB 批量导入",
         )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/logs", self._web_logs, ["GET"], "获取插件日志",
+        )
 
     async def _web_debug(self):
         """返回数据库和插件诊断信息。"""
@@ -1153,6 +1167,7 @@ class ActiveLearnerPlugin(Star):
             "sources_count": result.sources_count,
             "sources_consistent": result.sources_consistent,
             "text": result.to_text(),
+            "debug_info": result.debug_info,
         })
 
     async def _web_export(self):
@@ -1687,5 +1702,24 @@ class ActiveLearnerPlugin(Star):
             return error_response(result.get("error", "导入失败"), status_code=result.get("status_code", 500))
         return json_response(result)
 
+    async def _web_logs(self):
+        """返回本插件最近的日志。"""
+        logs = list(self._log_buffer)
+        return json_response({"logs": logs, "count": len(logs)})
+
 
 # v2.6.6.0：_parse_md 已移至 importer.py
+
+
+class _BufferHandler(logging.Handler):
+    """将日志写入内存缓冲区，供 Dashboard 查看。"""
+
+    def __init__(self, buffer: collections.deque):
+        super().__init__()
+        self._buffer = buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._buffer.append(self.format(record))
+        except Exception:
+            pass

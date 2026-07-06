@@ -366,6 +366,7 @@ async function verifyMemory(entryId, btn) {
       provider_id: providerId,
     });
     showToast(`验证完成：${result.verdict}（置信度 ${formatConfidence(result.confidence)}）`);
+    showVerifyDetail(result);
     if (state.currentDetailId === entryId) {
       showDetail(entryId);
     }
@@ -404,6 +405,64 @@ async function exportData() {
 
 async function refreshAll() {
   await Promise.all([loadScopes(), loadStats(), loadMemories(), loadDebug()]);
+}
+
+function showVerifyDetail(result) {
+  const panel = document.getElementById("verify-detail-panel");
+  const content = document.getElementById("verify-detail-content");
+  if (!panel || !content) return;
+  const di = result.debug_info || {};
+  const sourcesList = (di.sources || [])
+    .map((s) => `<li>[${escapeHtml(s.source_type || "")}] ${escapeHtml(s.title || "")}<br><small>${escapeHtml((s.snippet || "").slice(0, 120))}</small></li>`)
+    .join("") || "<li>（无）</li>";
+  const promptsList = (di.prompts || [])
+    .map((p, i) => `<div class="verify-step"><div class="verify-step-title">[${i + 1}] ${escapeHtml(p.step || "")}</div><pre class="verify-pre">${escapeHtml(p.text || "")}</pre></div>`)
+    .join("");
+  const repliesList = (di.replies || [])
+    .map((r, i) => `<div class="verify-step"><div class="verify-step-title">[${i + 1}] ${escapeHtml(r.step || "")} 回复</div><pre class="verify-pre">${escapeHtml(r.text || "")}</pre></div>`)
+    .join("");
+  content.innerHTML = `
+    <dl>
+      <dt>使用模型</dt><dd>${escapeHtml(di.provider_id || "—")}</dd>
+      <dt>主题</dt><dd>${escapeHtml(di.topic || "—")}</dd>
+      <dt>搜索源配置</dt><dd>${escapeHtml(di.source_cfg || "—")}</dd>
+      <dt>关键词</dt><dd>${(di.keywords || []).map(escapeHtml).join(", ") || "—"}</dd>
+      <dt>验证结论</dt><dd>${escapeHtml(result.verdict || "—")} (置信度 ${formatConfidence(result.confidence)})</dd>
+    </dl>
+    <div class="debug-section">
+      <dt>搜索来源 (${(di.sources || []).length} 个)</dt>
+      <ul class="debug-scope-list">${sourcesList}</ul>
+    </div>
+    <div class="debug-section">
+      <dt>LLM 提示词 (${(di.prompts || []).length} 轮)</dt>
+      ${promptsList || "（无）"}
+    </div>
+    <div class="debug-section">
+      <dt>LLM 回复 (${(di.replies || []).length} 轮)</dt>
+      ${repliesList || "（无）"}
+    </div>
+  `;
+  panel.style.display = "";
+  panel.open = true;
+}
+
+async function loadLogs() {
+  const el = document.getElementById("log-content");
+  if (!el) return;
+  try {
+    const data = await bridge.apiGet("logs");
+    const logs = data.logs || [];
+    if (!logs.length) {
+      el.textContent = "（暂无日志）";
+      return;
+    }
+    el.innerHTML = logs
+      .map((line) => `<div class="log-line">${escapeHtml(line)}</div>`)
+      .join("");
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.textContent = `加载日志失败: ${e.message}`;
+  }
 }
 
 async function loadDebug() {
@@ -576,6 +635,13 @@ function bindEvents() {
 
   document.getElementById("btn-batch-delete")?.addEventListener("click", batchDeleteSelected);
   document.getElementById("btn-batch-verify")?.addEventListener("click", batchVerifySelected);
+  document.getElementById("btn-refresh-logs")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    loadLogs();
+  });
+  document.getElementById("log-panel")?.addEventListener("toggle", (e) => {
+    if (e.target.open) loadLogs();
+  });
 
   document.querySelector(".modal-close").addEventListener("click", closeModal);
   document.querySelector(".modal-backdrop").addEventListener("click", closeModal);
