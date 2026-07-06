@@ -12,10 +12,40 @@
         "default": 0.3
     },
     "enable_active_learn_hint": {
-        "description": "启用关键词主动学习提示",
+        "description": "启用主动学习提示",
         "type": "bool",
-        "hint": "当消息命中'什么是/不懂/解释一下'等关键词且记忆库无答案时，提示 LLM 调用 search_and_learn 工具",
+        "hint": "当消息命中'什么是/不懂/解释一下'等关键词且记忆库无答案时，提示 LLM 学习",
         "default": true
+    },
+    "learn_weight": {
+        "description": "主动学习强度 (0~1)",
+        "type": "float",
+        "hint": "0=关闭；0.1~0.4=温和提示（\"可考虑调用\"）；0.5~0.7=默认（\"建议调用\"）；0.8~1.0=强提示（\"请立即调用\"）。值越大 LLM 越倾向执行 search_and_learn。",
+        "default": 0.7
+    },
+    "search_top_k": {
+        "description": "工具搜索返回条数",
+        "type": "int",
+        "hint": "search_and_learn / memory_search 返回的最大搜索结果数（1~20）。越多 LLM 看的信息越全，但占用上下文也越多。",
+        "default": 5
+    },
+    "default_confidence": {
+        "description": "新条目标置信度",
+        "type": "float",
+        "hint": "手动导入或未经 LLM 精炼时，新记忆的默认置信度（0.1~1.0）。精炼后会用 LLM 评估值覆盖。",
+        "default": 0.6
+    },
+    "chunk_size": {
+        "description": "导入分块大小（字符）",
+        "type": "int",
+        "hint": "导入长文档时每块的最大字符数。越大上下文越完整但可能超过模型窗口。",
+        "default": 500
+    },
+    "chunk_overlap": {
+        "description": "导入分块重叠（字符）",
+        "type": "int",
+        "hint": "相邻分块之间重叠的字符数，避免切分导致断裂。",
+        "default": 50
     },
     "enable_bilibili": {
         "description": "启用 B 站搜索源",

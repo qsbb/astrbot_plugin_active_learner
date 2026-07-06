@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.5.2",
+    "2.6.5.3",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -137,6 +137,15 @@ class ActiveLearnerPlugin(Star):
 
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
+        # v2.6.5.3：学习权重
+        self._learn_weight = max(0.0, min(1.0, float(cfg.get("learn_weight", 0.7))))
+        # v2.6.5.3：搜索返回条数
+        self._search_top_k = max(1, min(20, int(cfg.get("search_top_k", 5))))
+        # v2.6.5.3：默认置信度
+        self._default_confidence = max(0.1, min(1.0, float(cfg.get("default_confidence", 0.6))))
+        # v2.6.5.3：分块参数
+        self._chunk_size = max(100, min(5000, int(cfg.get("chunk_size", 500))))
+        self._chunk_overlap = max(0, min(1000, int(cfg.get("chunk_overlap", 50))))
         # 主动学习追踪标记（on_llm_request ↔ on_llm_response）
         self._active_learn_hinted = False
         self._active_learn_was_called = False
@@ -168,9 +177,13 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v2.6.5.3 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
-                f"db={db_path} | 记忆={total}条 | schema=v{self.store._schema_version}"
+                f"db={db_path} | 记忆={total}条 | "
+                f"schema=v{self.store._schema_version} | "
+                f"learn_weight={self._learn_weight} | "
+                f"search_top_k={self._search_top_k} | "
+                f"default_conf={self._default_confidence}"
             )
         except Exception as e:
             logger.warning(f"数据库状态检查失败: {e}")
@@ -252,6 +265,23 @@ class ActiveLearnerPlugin(Star):
             return bool(uid) and str(uid) in admins
         except Exception:
             return True
+
+    def _get_learn_prompt(self) -> str | None:
+        """根据 learn_weight 返回对应强度的学习提示。None=不注入。"""
+        w = self._learn_weight
+        if w <= 0.0 or not self._enable_active_learn_hint:
+            return None
+        if w < 0.4:
+            return ("[学习提示] 如果这是你原本不掌握的新知识点（对方在科普），"
+                    "可考虑调用 search_and_learn 工具学习。")
+        if w < 0.7:
+            return ("[学习提示] 如果这是对方在科普新知识，"
+                    "建议调用 search_and_learn 工具存入记忆库，以免以后遗忘。")
+        # 0.7 ~ 1.0（含默认值 0.7）
+        return ("[学习提示] 你刚刚收到了一条新信息。如果这是你原本不掌握的知识点"
+                "（即对方在向你科普/教你新东西），请立即调用 search_and_learn"
+                " 工具将其存入记忆库，以免以后遗忘。"
+                "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。")
 
     def _hits_match_priority(self, hits) -> bool:
         """检查检索结果中是否有任一记忆命中关心领域。"""
@@ -362,16 +392,17 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
-        # 3. 主动学习提示（v2.6.5：仅管理员可触发，非管理员静默跳过）
+        # 3. 主动学习提示（v2.6.5.3：由 learn_weight 控制强度，仅管理员可触发）
         if self._enable_active_learn_hint and not hits:
             if self._is_admin_user(event):
-                self._active_learn_hinted = True
-                parts.append(
-                    "[学习提示] 你刚刚收到了一条新信息。如果这是你原本不掌握的知识点"
-                    "（即对方在向你科普/教你新东西），请立即调用 search_and_learn"
-                    " 工具将其存入记忆库，以免以后遗忘。"
-                    "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。"
-                )
+                hint = self._get_learn_prompt()
+                if hint:
+                    self._active_learn_hinted = True
+                    parts.append(hint)
+                else:
+                    logger.info(
+                        f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})"
+                    )
             else:
                 logger.info(
                     f"ℹ️ 当前用户非管理员，跳过主动学习 (scope: {scope})"
@@ -590,7 +621,7 @@ class ActiveLearnerPlugin(Star):
     async def memory_search(self, event: AstrMessageEvent, keyword: str):
         """搜索记忆"""
         scope = Scope.from_event(event)
-        hits = self.store.search(scope, keyword, top_k=5)
+        hits = self.store.search(scope, keyword, top_k=self._search_top_k)
         if not hits:
             yield event.plain_result(f"🔍 未找到与「{keyword}」相关的记忆")
             return
@@ -1278,7 +1309,7 @@ class ActiveLearnerPlugin(Star):
         try:
             final_content = content
             final_keywords = keywords
-            final_confidence = 0.6
+            final_confidence = self._default_confidence
             source_tag = "手动导入"
             if refine:
                 provider_id = await self._resolve_plugin_provider_id()
@@ -1311,8 +1342,8 @@ class ActiveLearnerPlugin(Star):
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
         refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
-        chunk_size = int(payload.get("chunk_size", 500))
-        chunk_overlap = int(payload.get("chunk_overlap", 50))
+        chunk_size = int(payload.get("chunk_size", self._chunk_size))
+        chunk_overlap = int(payload.get("chunk_overlap", self._chunk_overlap))
         if not content or not scope_type:
             return error_response("content, scope_type required", status_code=400)
 
@@ -1332,7 +1363,7 @@ class ActiveLearnerPlugin(Star):
             try:
                 final_content = chunks[0]
                 final_keywords = None
-                final_confidence = 0.6
+                final_confidence = self._default_confidence
                 base_source = f"MD导入 ({filename})" if filename else "MD导入"
                 source_tag = base_source
                 if refine:
@@ -1489,8 +1520,8 @@ class ActiveLearnerPlugin(Star):
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
         refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
-        chunk_size = int(payload.get("chunk_size", 500))
-        chunk_overlap = int(payload.get("chunk_overlap", 50))
+        chunk_size = int(payload.get("chunk_size", self._chunk_size))
+        chunk_overlap = int(payload.get("chunk_overlap", self._chunk_overlap))
 
         if not b64 or not scope_type:
             return error_response("base64, scope_type required", status_code=400)
@@ -1530,8 +1561,8 @@ class ActiveLearnerPlugin(Star):
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
         refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
-        chunk_size = int(payload.get("chunk_size", 500))
-        chunk_overlap = int(payload.get("chunk_overlap", 50))
+        chunk_size = int(payload.get("chunk_size", self._chunk_size))
+        chunk_overlap = int(payload.get("chunk_overlap", self._chunk_overlap))
 
         if not b64 or not scope_type:
             return error_response("base64, scope_type required", status_code=400)
@@ -1571,8 +1602,8 @@ class ActiveLearnerPlugin(Star):
         scope_type = (payload.get("scope_type") or "").strip()
         scope_id = (payload.get("scope_id") or "").strip()
         refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
-        chunk_size = int(payload.get("chunk_size", 500))
-        chunk_overlap = int(payload.get("chunk_overlap", 50))
+        chunk_size = int(payload.get("chunk_size", self._chunk_size))
+        chunk_overlap = int(payload.get("chunk_overlap", self._chunk_overlap))
 
         if not b64 or not scope_type:
             return error_response("base64, scope_type required", status_code=400)
@@ -1639,7 +1670,7 @@ class ActiveLearnerPlugin(Star):
                 topic = extracted_topic or name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
                 final_content = md_clean
                 final_keywords = None
-                final_confidence = 0.6
+                final_confidence = self._default_confidence
                 base_source = f"ZIP导入 ({name})"
                 source_tag = base_source
                 if refine:
@@ -1811,8 +1842,8 @@ class ActiveLearnerPlugin(Star):
         scope_id = (payload.get("scope_id") or "").strip()
         refine = bool(payload.get("refine", True)) and bool(self._settings.get("refine_on_import", True))
         try:
-            chunk_size = int(payload.get("chunk_size", 500))
-            chunk_overlap = int(payload.get("chunk_overlap", 50))
+            chunk_size = int(payload.get("chunk_size", self._chunk_size))
+            chunk_overlap = int(payload.get("chunk_overlap", self._chunk_overlap))
         except (TypeError, ValueError):
             return error_response("chunk_size / chunk_overlap 必须是整数", status_code=400)
 

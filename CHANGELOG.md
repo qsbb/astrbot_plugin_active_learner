@@ -2,6 +2,28 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.5.3] - 2026-07-06
+
+### 新增
+
+- **配置统一管理**：新增 `learn_weight`（学习强度 0~1）、`search_top_k`（搜索返回条数）、`default_confidence`（默认置信度）、`chunk_size`/`chunk_overlap`（文档分块参数）配置项，全部可在 Dashboard「⚙ 设置」页面修改
+- **主动学习权限管理**：`_is_admin_user()` 从 AstrBot 全局配置 `wl_admin` 和插件配置 `admin_ids` 读取管理员名单，仅管理员可触发 `search_and_learn`
+- **管理员配置入口**：`_conf_schema.json` 新增 `admin_ids`（逗号分隔 QQ 号），可在 Dashboard 设置页直接编辑，无需手动改 `config.yml`
+- **确认弹窗**：删除记忆时使用自定义模态框替代浏览器原生 `confirm()`，避免 Docker CSP 拦截
+
+### 优化
+
+- **主动学习提示强度**：`learn_weight` 控制提示语力度（0=关闭 / 0.1~0.4 温和 / 0.5~0.7 建议 / 0.8~1.0 强提示），`on_llm_request` 内根据权重选择提示模板
+- **硬编码参数可配置**：`search_top_k` 替代 `memory_search` 中的 `top_k=5`；`default_confidence` 替代所有导入方法的 `final_confidence=0.6`；`chunk_size`/`chunk_overlap` 替代文档分块的 `500`/`50`
+- **LLM 不调用工具时记录**：`on_llm_response` 输出 `ℹ️ 主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）`
+
+### 修复
+
+- **知识库 500 错误**：`float(d.created_at)` 改为 `float(d.created_at.timestamp())`，修复 datetime 类型无法 `float()` 转换的问题
+- **LLM 回复中泄露参考资料**：`on_llm_response` 中 `content_part` 的 References 标签被删除，改用 `extra_assistant_content_parts` 注入
+- **主动学习不存储**：`SearchAndLearnTool.call()` 中的 `store.add_or_update()` 改为 `await asyncio.to_thread()`，避免线程池死锁
+- **Docker 中 LLM Provider 获取失败**：`_resolve_default_provider_id()` 增加兜底读取插件配置 `llm_provider_id`
+
 ## [2.6.5.2] - 2026-07-06
 
 ### 新增
