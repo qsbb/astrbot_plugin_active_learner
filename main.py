@@ -1193,11 +1193,38 @@ class ActiveLearnerPlugin(Star):
         return None
 
     def _get_providers_from_config(self) -> tuple[str, list[dict]]:
-        """从 cmd_config.json 读取 provider 列表和 default_provider_id。
+        """读取 provider 列表和 default_provider_id。
 
-        AstrBot v4.26.4 的 provider_manager.providers 可能为空（Dashboard 模式下
-        或某些初始化时序下），直接从配置文件读取是最可靠的兜底。
+        优先从 self.config（AstrBot 传入的 cfg，包含全局配置）读取，
+        兜底从 cmd_config.json 文件读取。
         """
+        # 1. 优先从 self.config（AstrBot 传入的 cfg）读取
+        try:
+            cfg = self.config or {}
+            providers_raw = cfg.get("provider", []) or []
+            if providers_raw:
+                providers = [
+                    {
+                        "id": str(p.get("id", "") or ""),
+                        "type": str(p.get("type", "") or ""),
+                        "model": str(p.get("model", "") or ""),
+                        "enable": bool(p.get("enable", True)),
+                    }
+                    for p in providers_raw
+                    if p.get("id")
+                ]
+                default_pid = str(
+                    (cfg.get("provider_settings") or {}).get(
+                        "default_provider_id", ""
+                    )
+                    or ""
+                )
+                if providers or default_pid:
+                    return default_pid, providers
+        except Exception as e:
+            logger.debug(f"从 self.config 读取 provider 失败: {e}")
+
+        # 2. 兜底：从 cmd_config.json 文件读取
         config_path = self._find_cmd_config()
         if not config_path:
             return "", []
