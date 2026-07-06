@@ -100,6 +100,14 @@ class ActiveLearnerPlugin(Star):
 
         # 搜索器与验证器
         self.searcher = WebSearcher()
+        # 从 AstrBot 配置读取搜索 API（Tavily / BoCha / Brave）
+        provider_settings = cfg.get("provider_settings") or {}
+        if isinstance(provider_settings, dict):
+            self.searcher.configure_from_settings(provider_settings)
+        if self.searcher.is_available:
+            logger.info(f"搜索器已就绪: provider={self.searcher._provider}")
+        else:
+            logger.info("搜索器未配置 API key，验证将使用 LLM-only 模式")
         self.bili_source = BiliSource(context)
         self.verifier = Verifier(self)
 
