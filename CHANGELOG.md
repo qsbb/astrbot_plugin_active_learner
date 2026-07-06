@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.5.5] - 2026-07-06
+
+### 新增
+
+- **后置异步学习分析**：不再依赖 LLM 主动调用 `search_and_learn` 工具（LLM 始终不调），改为**回复完成后**由插件自动分析用户消息+LLM 回复，判断是否包含值得记忆的新知识点。如检测到新知识，自动精炼后存入记忆库。
+  - 调用链路：`用户发消息 → LLM 回复 → on_llm_response → _post_learn_analysis → LLM 分析对话 → 存入记忆库`
+  - 节流：每 scope 30 秒最多分析一次，避免高频 LLM 调用
+  - 解析：LLM 输出 `TYPE: learn/skip + TOPIC/CONTENT/KEYWORDS` 结构化格式
+  - 仅在管理员且 `learn_weight > 0` 时生效
+
 ## [2.6.5.4] - 2026-07-06
 
 ### 新增

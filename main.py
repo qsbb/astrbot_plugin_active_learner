@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.5.4",
+    "2.6.5.5",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -153,6 +153,8 @@ class ActiveLearnerPlugin(Star):
         # 主动学习追踪标记（on_llm_request ↔ on_llm_response）
         self._active_learn_hinted = False
         self._active_learn_was_called = False
+        # v2.6.5.5：后置学习节流
+        self._last_post_learn: dict[str, float] = {}
 
         # v2.6.0：群黑话被动捕获 + 定时批量学习
         self._enable_slang_capture = _ON_MESSAGE_AVAILABLE and bool(
@@ -181,7 +183,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v2.6.5.4 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v2.6.5.5 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -464,12 +466,13 @@ class ActiveLearnerPlugin(Star):
         except Exception as e:
             logger.error(f"上下文注入失败: {e}")
 
-    # v2.4.0：on_llm_response hook（仅在 AstrBot 支持时启用）
+    # v2.6.5.5：on_llm_response hook（+ 后置异步学习分析，不依赖 LLM 主动调工具）
     if _ON_LLM_RESPONSE_AVAILABLE:
 
         @filter.on_llm_response()  # type: ignore[misc]
         async def on_llm_response(self, event: AstrMessageEvent, response):
-            """追踪主动学习提示是否被 LLM 调用。"""
+            """追踪主动学习提示 + 回复完成后置学习分析。"""
+            # v2.4.0：追踪主动学习提示是否被 LLM 调用
             if getattr(self, "_active_learn_hinted", False):
                 self._active_learn_hinted = False
                 if getattr(self, "_active_learn_was_called", False):
@@ -477,6 +480,115 @@ class ActiveLearnerPlugin(Star):
                     logger.info("✅ 主动学习已执行并存入记忆库")
                 else:
                     logger.info("ℹ️ 主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）")
+
+            # v2.6.5.5：后置异步学习分析（回复完后自动分析是否需要记忆）
+            try:
+                await self._post_learn_analysis(event, response)
+            except Exception as e:
+                logger.debug(f"后置学习分析异常: {e}")
+
+    async def _post_learn_analysis(self, event: AstrMessageEvent, response) -> None:
+        """回复完成后，异步分析对话是否包含可学习知识点，自动存入记忆库。"""
+        # 1. 权限与开关检查
+        if not self._enable_active_learn_hint or self._learn_weight <= 0.0:
+            return
+        if not self._is_admin_user(event):
+            return
+
+        # 2. 提取用户消息
+        user_msg = ""
+        try:
+            user_msg = (event.get_message_str() or "").strip()
+        except Exception:
+            return
+        if not user_msg or len(user_msg) < 5:
+            return
+
+        # 3. 提取 LLM 回复
+        llm_text = ""
+        if hasattr(response, "completion_text"):
+            llm_text = (getattr(response, "completion_text") or "").strip()
+        elif hasattr(response, "text"):
+            llm_text = (getattr(response, "text") or "").strip()
+        elif isinstance(response, str):
+            llm_text = response.strip()
+        if not llm_text:
+            return
+
+        # 4. 节流：每 scope 30 秒最多分析一次
+        scope = Scope.from_event(event)
+        scope_key = f"{scope.type}:{scope.id}"
+        now = now_ts()
+        last = getattr(self, "_last_post_learn", {})
+        if now - last.get(scope_key, 0) < 30:
+            return
+        last[scope_key] = now
+        self._last_post_learn = last
+
+        # 5. 调用 LLM 分析该对话是否包含新知识点
+        provider_id = ""
+        try:
+            provider_id = await self._resolve_plugin_provider_id(
+                umo=getattr(event, "unified_msg_origin", "")
+            )
+        except Exception:
+            pass
+
+        prompt = (
+            "你是一个知识提取助手。分析以下对话，判断用户是否向机器人传授了新知识。\n\n"
+            f"用户消息：{user_msg}\n"
+            f"你的回复：{llm_text}\n\n"
+            "【要求】\n"
+            "1. TYPE=learn（有新知识点）或 skip（无新知识点，如闲聊、问候、已有知识确认等）\n"
+            "2. 如果是 learn，给出 TOPIC（主题，10字内）、CONTENT（要记忆的内容，50字内）、KEYWORDS（逗号分隔）\n\n"
+            "【输出格式（严格按此格式，不要额外内容）】\n"
+            "TYPE: <learn 或 skip>\n"
+            "TOPIC: <主题，仅 TYPE=learn 时需要>\n"
+            "CONTENT: <记忆内容，仅 TYPE=learn 时需要>\n"
+            "KEYWORDS: <关键词，仅 TYPE=learn 时需要>"
+        )
+
+        text = await self.refiner._safe_generate(provider_id, prompt)
+        if not text:
+            return
+
+        # 6. 解析响应
+        type_match = re.search(r"TYPE:\s*(\w+)", text)
+        if not type_match or type_match.group(1).lower() != "learn":
+            return
+
+        topic = ""
+        content = ""
+        keywords: list[str] = []
+
+        topic_m = re.search(r"TOPIC:\s*(.+)", text)
+        if topic_m:
+            topic = topic_m.group(1).strip()
+        content_m = re.search(r"CONTENT:\s*(.+)", text)
+        if content_m:
+            content = content_m.group(1).strip()
+        keywords_m = re.search(r"KEYWORDS:\s*(.+)", text)
+        if keywords_m:
+            keywords = [k.strip() for k in keywords_m.group(1).split(",") if k.strip()]
+
+        if not topic or not content:
+            return
+
+        # 7. 存入记忆
+        try:
+            entry = await asyncio.to_thread(
+                self.store.add_or_update,
+                scope=scope,
+                topic=topic,
+                content=content,
+                keywords=keywords or [topic],
+                source="后置学习分析",
+                sources_detail=None,
+                confidence=self._default_confidence,
+            )
+            logger.info(f"✅ 后置学习已存入记忆: {topic} (id: {entry.id}, scope: {scope})")
+        except Exception as e:
+            logger.error(f"❌ 后置学习存储失败「{topic}」: {e}", exc_info=True)
 
     # ---------- v2.6.0：群黑话被动捕获 + 定时批量学习 ----------
 
