@@ -46,7 +46,11 @@ class LLMService:
         if not provider_id:
             provider_id = await self.resolve_provider_id(event=event, umo=umo)
         if not provider_id:
+            logger.warning("LLMService: 无法解析 provider，跳过 LLM 调用")
             return ""
+
+        prompt_preview = prompt.replace("\n", " ")[:60]
+        logger.info(f"LLM 调用 [model={provider_id}] prompt={prompt_preview!r}")
 
         try:
             resp = await self._plugin.context.llm_generate(
@@ -56,6 +60,7 @@ class LLMService:
             text = getattr(resp, "completion_text", "") or ""
             if not text:
                 text = str(resp) if resp else ""
+            logger.info(f"LLM 回复 [model={provider_id}] len={len(text)} preview={text[:60]!r}")
             return text
         except asyncio.TimeoutError:
             logger.warning(f"LLMService: provider {provider_id} 超时")
