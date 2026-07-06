@@ -2,6 +2,50 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.0.1] - 2026-07-07
+
+### 首个正式发布版本
+
+#### 主动学习
+
+- **后置学习分析**：LLM 回复完成后，插件自动分析对话内容，判断是否包含值得记忆的知识点。不再依赖 LLM 主动调用工具
+- **全员学习触发**：所有用户按 `learn_weight` 概率触发学习提示注入；管理员明确要求学习时才学习
+- **节流控制**：每 scope 30 秒最多分析一次，避免高频 LLM 调用
+
+#### 验证系统
+
+- **LLM 关键词提取**：验证前先让 LLM 从记忆内容中提取 3-5 个搜索关键词，用关键词组合构建搜索 query
+- **多搜索源支持**：Tavily / BoCha / Brave 网页搜索 + B 站搜索，从 AstrBot 配置读取 API key
+- **验证搜索源配置**：新增 `verifier_search_source` 配置项（auto / web / bilibili / web+bilibili / llm）
+- **LLM-only 降级模式**：无外部搜索源时自动降级为纯 LLM 3 轮自辩论
+- **置信度修复**：`partial` 不再降低置信度（改为轻微提升），`inconclusive` 保持不变，避免反复验证导致死亡螺旋
+- **验证标准放宽**：`correct` 或 `partial` + 置信度 ≥ 0.5 即标记为已验证
+
+#### 群黑话捕获
+
+- **无钩子依赖**：通过 `on_llm_request` 实现群黑话捕获，不依赖 `on_message` 钩子，兼容所有 AstrBot 版本
+
+#### Dashboard
+
+- **批量验证**：选择多条记忆后一键批量验证，带进度显示
+- **插件日志面板**：展示本插件最近 200 条日志，支持手动刷新和展开自动加载
+- **验证详情面板**：验证后展示使用模型、关键词、搜索来源、所有 LLM 提示词和回复全文
+- **设置页增强**：新增主动学习、文档分块、验证搜索源等配置分组
+
+#### 架构
+
+- **LLMService**：统一 LLM 调用抽象，封装 provider 解析、超时、异常降级
+- **ConfigManager**：三层配置管理（AstrBot config → Dashboard → 默认值），原子写入
+- **Importer**：导入逻辑分离（~650 行从 main.py 剥离）
+- **移除 DuckDuckGo**：不再内置搜索引擎，网页搜索依赖 AstrBot 配置的 Tavily/BoCha/Brave
+
+#### Provider 解析
+
+- **多级 fallback**：Dashboard 设置 → AstrBot 配置 → provider_manager → cmd_config.json → cfg 全局配置
+- **兼容 AstrBot v4.26.4**：`provider_manager.providers` 为空时从 `data/cmd_config.json` 兜底读取
+
+
+
 ## [2.6.6.0] - 2026-07-06
 
 ### 架构重构
