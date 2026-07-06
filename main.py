@@ -17,10 +17,11 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
+
+from .plugin_logger import logger
 
 try:
     from astrbot.api.web import error_response, file_response, json_response, request
@@ -45,7 +46,7 @@ from .triggers import ACTIVE_LEARN_PATTERNS, CHALLENGE_PATTERNS
 from .tools import create_tools
 from .verifier import Verifier
 
-# v2.6.6.0：架构重构 —— 统一服务层
+# v1.1.5.0：架构重构 —— 统一服务层
 from .config_manager import ConfigManager
 from .llm_service import LLMService
 from .importer import Importer  # noqa: F811
@@ -60,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.7.1",
+    "1.1.6.5",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -129,12 +130,12 @@ class ActiveLearnerPlugin(Star):
         self._settings = SettingsStore(
             StarTools.get_data_dir() / "active_learner_settings.json"
         )
-        # v2.6.5.4：Dashboard 设置覆盖 AstrBot 配置，确保两边修改都生效
+        # v1.1.4.8：Dashboard 设置覆盖 AstrBot 配置，确保两边修改都生效
         dash_cfg = self._settings.all()
         if isinstance(dash_cfg, dict):
             cfg.update({k: v for k, v in dash_cfg.items() if v is not None})
 
-        # v2.6.6.0：统一服务层
+        # v1.1.5.0：统一服务层
         self.config_manager = ConfigManager(
             StarTools.get_data_dir(), cfg
         )
@@ -142,15 +143,30 @@ class ActiveLearnerPlugin(Star):
         self.importer = Importer(self)
 
         # 日志缓冲区：捕获本插件最近 200 条日志
+        # 严格隔离：清除可能被 AstrBot 框架挂到本 logger 上的 handler，
+        # 防止插件日志泄漏到 AstrBot 主日志界面，也防止 AstrBot 日志反向污染本插件缓冲区。
         self._log_buffer: collections.deque = collections.deque(maxlen=200)
         self._log_handler = _BufferHandler(self._log_buffer)
         self._log_handler.setLevel(logging.INFO)
         self._log_handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
         )
+        # 诊断：记录清除前的 handler 状态，便于排查 AstrBot 是否往本 logger 挂了 handler
+        _before_handlers = list(logger.handlers)
+        # 仅保留 NullHandler（兜底），移除所有其他 handler（含 AstrBot 可能挂的 StreamHandler 等）
+        logger.handlers = [
+            h for h in logger.handlers if isinstance(h, logging.NullHandler)
+        ]
+        # 强制不传播：防止 AstrBot 框架重置 propagate 导致插件日志泄漏到根 logger
+        logger.propagate = False
         logger.addHandler(self._log_handler)
+        if len(_before_handlers) > 1:
+            logger.info(
+                f"日志隔离：已移除 {len(_before_handlers) - 1} 个非本插件 handler，"
+                f"当前仅保留 _BufferHandler + NullHandler，propagate={logger.propagate}"
+            )
 
-        # v2.4.0：向量混合检索配置
+        # v1.1.2.0：向量混合检索配置
         self._embedding_enabled = bool(cfg.get("embedding_enabled", True))
         self._hybrid_weights = self._parse_hybrid_weights(
             cfg.get("hybrid_search_weight", "0.4,0.6")
@@ -175,22 +191,22 @@ class ActiveLearnerPlugin(Star):
 
         # 关键词提示开关
         self._enable_active_learn_hint = bool(cfg.get("enable_active_learn_hint", True))
-        # v2.6.5.3：学习权重
+        # v1.1.4.7：学习权重
         self._learn_weight = max(0.0, min(1.0, float(cfg.get("learn_weight", 0.7))))
-        # v2.6.5.3：搜索返回条数
+        # v1.1.4.7：搜索返回条数
         self._search_top_k = max(1, min(20, int(cfg.get("search_top_k", 5))))
-        # v2.6.5.3：默认置信度
+        # v1.1.4.7：默认置信度
         self._default_confidence = max(0.1, min(1.0, float(cfg.get("default_confidence", 0.6))))
-        # v2.6.5.3：分块参数
+        # v1.1.4.7：分块参数
         self._chunk_size = max(100, min(5000, int(cfg.get("chunk_size", 500))))
         self._chunk_overlap = max(0, min(1000, int(cfg.get("chunk_overlap", 50))))
         # 主动学习追踪标记（on_llm_request ↔ on_llm_response）
         self._active_learn_hinted = False
         self._active_learn_was_called = False
-        # v2.6.5.5：后置学习节流
+        # v1.1.4.9：后置学习节流
         self._last_post_learn: dict[str, float] = {}
 
-        # v2.6.0：群黑话被动捕获 + 定时批量学习（通过 on_llm_request 捕获）
+        # v1.1.4.0：群黑话被动捕获 + 定时批量学习（通过 on_llm_request 捕获）
         self._enable_slang_capture = bool(cfg.get("enable_slang_capture", False))
         self._slang_interval_hours = float(cfg.get("slang_capture_interval_hours", 24))
         self._slang_batch_size = int(cfg.get("slang_capture_batch_size", 5))
@@ -215,7 +231,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v2.6.7.1 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.6.5 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -226,7 +242,7 @@ class ActiveLearnerPlugin(Star):
         except Exception as e:
             logger.warning(f"数据库状态检查失败: {e}")
 
-        # v2.6.0：群黑话捕获特性状态
+        # v1.1.4.0：群黑话捕获特性状态
         if self._enable_slang_capture:
             logger.info(
                 f"群黑话捕获已启用 | interval={self._slang_interval_hours}h | "
@@ -356,7 +372,7 @@ class ActiveLearnerPlugin(Star):
         scope = Scope.from_event(event)
         parts: list[str] = []
 
-        # 1. 检索记忆（v2.4.0：混合检索 FTS5 + 向量）
+        # 1. 检索记忆（v1.1.2.0：混合检索 FTS5 + 向量）
         try:
             query_vec = None
             if self.embedder is not None:
@@ -438,7 +454,7 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
-        # 3. 主动学习提示（v2.6.6.0：所有用户按 learn_weight 触发，不限于管理员）
+        # 3. 主动学习提示（v1.1.5.0：所有用户按 learn_weight 触发，不限于管理员）
         if self._enable_active_learn_hint:
             if not hits:
                 hint = self._get_learn_prompt()
@@ -491,7 +507,7 @@ class ActiveLearnerPlugin(Star):
         except Exception as e:
             logger.error(f"上下文注入失败: {e}")
 
-        # 5. 群黑话被动捕获（v2.6.6.0：通过 on_llm_request 降级，不依赖 on_message 钩子）
+        # 5. 群黑话被动捕获（v1.1.5.0：通过 on_llm_request 降级，不依赖 on_message 钩子）
         if self._enable_slang_capture:
             try:
                 if self._slang_scope_only_group and scope.type != "group":
@@ -507,13 +523,13 @@ class ActiveLearnerPlugin(Star):
             except Exception as e:
                 logger.debug(f"slang 捕获失败: {e}")
 
-    # v2.6.5.5：on_llm_response hook（+ 后置异步学习分析，不依赖 LLM 主动调工具）
+    # v1.1.4.9：on_llm_response hook（+ 后置异步学习分析，不依赖 LLM 主动调工具）
     if _ON_LLM_RESPONSE_AVAILABLE:
 
         @filter.on_llm_response()  # type: ignore[misc]
         async def on_llm_response(self, event: AstrMessageEvent, response):
             """追踪主动学习提示 + 回复完成后置学习分析。"""
-            # v2.4.0：追踪主动学习提示是否被 LLM 调用
+            # v1.1.2.0：追踪主动学习提示是否被 LLM 调用
             if getattr(self, "_active_learn_hinted", False):
                 self._active_learn_hinted = False
                 if getattr(self, "_active_learn_was_called", False):
@@ -522,7 +538,7 @@ class ActiveLearnerPlugin(Star):
                 else:
                     logger.info("ℹ️ 主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）")
 
-            # v2.6.5.5：后置异步学习分析（回复完后自动分析是否需要记忆）
+            # v1.1.4.9：后置异步学习分析（回复完后自动分析是否需要记忆）
             try:
                 await self._post_learn_analysis(event, response)
             except Exception as e:
@@ -649,6 +665,7 @@ class ActiveLearnerPlugin(Star):
 
         # 8. 存入记忆
         try:
+            umo = getattr(event, "unified_msg_origin", "") or ""
             entry = await asyncio.to_thread(
                 self.store.add_or_update,
                 scope=scope,
@@ -658,12 +675,13 @@ class ActiveLearnerPlugin(Star):
                 source="后置学习分析",
                 sources_detail=None,
                 confidence=self._default_confidence,
+                origin=f"conversation:{umo}" if umo else "conversation",
             )
             logger.info(f"✅ 后置学习已存入记忆: {topic} (id: {entry.id}, scope: {scope})")
         except Exception as e:
             logger.error(f"❌ 后置学习存储失败「{topic}」: {e}", exc_info=True)
 
-    # ---------- v2.6.0：群黑话定时批量学习（捕获已移至 on_llm_request）----------
+    # ---------- v1.1.4.0：群黑话定时批量学习（捕获已移至 on_llm_request）----------
 
     def _maybe_trigger_batch_learn(self, scope: Scope) -> None:
         """节流检查：每 scope 5 分钟最多查一次 DB；满足条件则 asyncio.create_task 触发批量学习。"""
@@ -722,6 +740,7 @@ class ActiveLearnerPlugin(Star):
                         keywords=item["keywords"],
                         source="群黑话自动学习",
                         confidence=item["confidence"],
+                        origin="slang",
                     )
                     success += 1
                 except Exception as e:
@@ -1126,8 +1145,14 @@ class ActiveLearnerPlugin(Star):
             return error_response("memory not found", status_code=404)
         payload = await request.json(default={}) or {}
         provider_id = (payload.get("provider_id") or "").strip()
+        provider_source = "frontend"
         if not provider_id:
             provider_id = await self._resolve_plugin_provider_id()
+            provider_source = "fallback"
+        logger.info(
+            f"验证 memory={entry_id} topic={entry.topic!r} provider={provider_id!r} "
+            f"source={provider_source}"
+        )
         if not provider_id:
             # 诊断信息：列出当前可用的解析路径状态
             settings_pid = self._settings.get("llm_provider_id") or ""
@@ -1347,25 +1372,36 @@ class ActiveLearnerPlugin(Star):
         """
         # 1. Dashboard 设置
         pid = self._settings.get("llm_provider_id") or ""
-        if pid and self._provider_exists(pid):
-            return pid
+        if pid:
+            if self._provider_exists(pid):
+                logger.info(f"provider 解析 [1/4 Dashboard]: {pid!r}")
+                return pid
+            logger.warning(f"provider 解析 [1/4 Dashboard] 命中但校验失败: {pid!r}")
 
         # 2. schema 字段
-        if self._cfg_llm_provider_id and self._provider_exists(self._cfg_llm_provider_id):
-            return self._cfg_llm_provider_id
+        if self._cfg_llm_provider_id:
+            if self._provider_exists(self._cfg_llm_provider_id):
+                logger.info(f"provider 解析 [2/4 Schema]: {self._cfg_llm_provider_id!r}")
+                return self._cfg_llm_provider_id
+            logger.warning(f"provider 解析 [2/4 Schema] 命中但校验失败: {self._cfg_llm_provider_id!r}")
 
         # 3. 事件 scope 默认（async），尝试调用 get_current_chat_provider_id
         method = getattr(self.context, "get_current_chat_provider_id", None)
         if callable(method):
             try:
                 pid = await method(umo=umo) if umo else await method()
-                if pid and self._provider_exists(pid):
-                    return pid
-            except Exception:
-                pass
+                if pid:
+                    if self._provider_exists(pid):
+                        logger.info(f"provider 解析 [3/4 当前对话默认]: {pid!r} (umo={umo!r})")
+                        return pid
+                    logger.warning(f"provider 解析 [3/4 当前对话默认] 命中但校验失败: {pid!r}")
+            except Exception as e:
+                logger.debug(f"provider 解析 [3/4 当前对话默认] 调用异常: {e}")
 
         # 4. 同步兜底
-        return self._resolve_default_provider_id()
+        fallback = self._resolve_default_provider_id()
+        logger.info(f"provider 解析 [4/4 兜底]: {fallback!r} (settings_pid={self._settings.get('llm_provider_id')!r}, cfg_pid={self._cfg_llm_provider_id!r})")
+        return fallback
 
     # ---------- 设置与 Provider API ----------
 
@@ -1397,8 +1433,12 @@ class ActiveLearnerPlugin(Star):
         return json_response({"providers": providers_list, "current": current})
 
     async def _web_get_settings(self):
-        """返回当前插件设置（含默认值填充）。v2.6.6.0 改为从 config_manager 读取。"""
-        data = self.config_manager.overlay_all()
+        """返回当前插件设置（含默认值填充）。
+
+        使用 all() 而非 overlay_all()，确保 AstrBot 插件配置页（_conf_schema.json）
+        中设置的 llm_provider_id 等字段也能被前端读到。
+        """
+        data = self.config_manager.all()
         return json_response({
             "llm_provider_id": data.get("llm_provider_id", ""),
             "refine_on_search": bool(data.get("refine_on_search", True)),
@@ -1629,7 +1669,7 @@ class ActiveLearnerPlugin(Star):
             except Exception:
                 pass
 
-    # ---------- 导入功能（v2.6.6.0：委托 importer.py） ----------
+    # ---------- 导入功能（v1.1.5.0：委托 importer.py） ----------
 
     async def _web_import_text(self):
         payload = await request.json(default={}) or {}
@@ -1708,17 +1748,22 @@ class ActiveLearnerPlugin(Star):
         return json_response({"logs": logs, "count": len(logs)})
 
 
-# v2.6.6.0：_parse_md 已移至 importer.py
+# v1.1.5.0：_parse_md 已移至 importer.py
 
 
 class _BufferHandler(logging.Handler):
     """将日志写入内存缓冲区，供 Dashboard 查看。"""
+
+    PLUGIN_LOGGER_PREFIX = "astrbot_plugin_active_learner"
 
     def __init__(self, buffer: collections.deque):
         super().__init__()
         self._buffer = buffer
 
     def emit(self, record: logging.LogRecord) -> None:
+        # 严格过滤：只接受本插件 logger 的日志，避免被根 logger / AstrBot 日志污染
+        if not record.name or not record.name.startswith(self.PLUGIN_LOGGER_PREFIX):
+            return
         try:
             self._buffer.append(self.format(record))
         except Exception:

@@ -17,16 +17,16 @@ from pydantic import Field
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 try:
-    from astrbot.api import logger
     from astrbot.core.agent.tool import FunctionTool, ToolExecResult
     from astrbot.core.agent.run_context import ContextWrapper
     from astrbot.core.astr_agent_context import AstrAgentContext
 except ImportError:  # 允许脱离 AstrBot 做语法检查
-    logger = None
     FunctionTool = object  # type: ignore
     ToolExecResult = str  # type: ignore
     ContextWrapper = object  # type: ignore
     AstrAgentContext = object  # type: ignore
+
+from .plugin_logger import logger
 
 from .models import Scope
 
@@ -150,6 +150,8 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         source_tag = f"网络搜索 ({len(sources)}个来源)"
         if refine_result.refined:
             source_tag += "+精炼"
+        _evt = _get_event(context)
+        _umo = getattr(_evt, "unified_msg_origin", "") if _evt else ""
         try:
             entry = await asyncio.to_thread(
                 plugin.store.add_or_update,
@@ -158,6 +160,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
                 source=source_tag,
                 sources_detail=sources,
                 confidence=confidence,
+                origin=f"conversation:{_umo}" if _umo else "conversation",
             )
         except Exception as e:
             logger.error(f"❌ 搜索学习存储失败「{topic}」: {e}", exc_info=True)
@@ -455,17 +458,18 @@ class SaveMemoryTool(FunctionTool):  # type: ignore[misc]
         if scope is None:
             return ("无法识别会话作用域")
 
-        # 解析 provider_id
+        # 解析 provider_id + 会话标识
         event = _get_event(context)
         provider_id = await plugin.llm_service.resolve_provider_id(event=event)
+        umo = getattr(event, "unified_msg_origin", "") if event else ""
 
         # 立即返回，异步精炼 + 存储
         asyncio.create_task(
-            self._async_refine_and_save(plugin, scope, topic, snippet, provider_id)
+            self._async_refine_and_save(plugin, scope, topic, snippet, provider_id, umo)
         )
         return (f"已标记「{topic}」，正在后台分析并存储。")
 
-    async def _async_refine_and_save(self, plugin, scope, topic, snippet, provider_id):
+    async def _async_refine_and_save(self, plugin, scope, topic, snippet, provider_id, umo=""):
         """异步：LLM 精炼对话片段 → 存入记忆库 → 日志确认。"""
         try:
             logger.info(f"save_memory 开始精炼「{topic}」(scope: {scope}, provider: {'有' if provider_id else '无'})")
@@ -478,6 +482,7 @@ class SaveMemoryTool(FunctionTool):  # type: ignore[misc]
                 keywords=result.keywords,
                 source="对话推理" + ("（精炼）" if result.refined else "（原始）"),
                 confidence=result.confidence,
+                origin=f"conversation:{umo}" if umo else "conversation",
             )
             # 3. 失效向量缓存
             if plugin.embedder is not None:

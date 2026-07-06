@@ -11,11 +11,7 @@
 
 from __future__ import annotations
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger("active_learner")
+from .plugin_logger import logger
 
 
 # 尝试导入 bilibili-api-python（第二降级路径）

@@ -2,14 +2,76 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [2.6.7.1] - 2026-07-07
+## [1.1.6.5] - 2026-07-07
+
+### 新增
+
+- **记忆来源（origin）属性**：每条知识点新增 `origin` 字段，记录该条记忆的创建来源，便于追溯
+  - **数据库**：新增 `origin` 列（schema v2 迁移，ALTER TABLE 增量添加，老数据自动补默认值 `""`）
+  - **来源类型**：
+    - `manual` — 手动输入（导入文本）
+    - `import:<filename>` — 文件导入（MD / PDF / DOCX / TXT / ZIP）
+    - `kb:<kb_name>/<doc_name>` — 内置知识库导入
+    - `conversation[:<umo>]` — 会话学习（后置学习 / search_and_learn / save_memory 工具，含 unified_msg_origin）
+    - `slang` — 群黑话自动学习
+  - **存储层**：`add_or_update` 已有 origin 时不覆盖（保留首次来源），`add_chunk` 写入时携带 origin
+  - **前端展示**：
+    - 记忆列表表格新增「来源」列，按类型友好显示（手动输入 / 导入 / 知识库 / 会话 / 群黑话）
+    - 详情页新增「创建来源」字段（与已有的「来源」字段区分，后者记录导入/学习的处理方式）
+
+### 修复
+
+- **插件日志双向隔离失效**：用户报告插件日志界面出现了 AstrBot 主日志，AstrBot 主日志界面也出现了插件日志
+  - 根因：AstrBot 框架在加载插件时可能往 `astrbot_plugin_active_learner` logger 上挂载了自身的 handler，或重置了 `propagate` 标记，导致 `propagate=False` 失效
+  - **`_BufferHandler.emit` 加 logger 名前缀过滤**：只接受 `record.name` 以 `astrbot_plugin_active_learner` 开头的日志，彻底杜绝 AstrBot 日志反向污染插件日志缓冲区
+  - **`__init__` 中显式清除非本插件 handler**：在挂载 `_BufferHandler` 前，仅保留 `NullHandler`，移除所有可能被 AstrBot 框架添加的 handler，防止插件日志被同步推送到 AstrBot 主日志
+  - **强制 `propagate=False`**：在 `__init__` 中再次显式设置，防止被框架重置
+
+## [1.1.6.4] - 2026-07-07
+
+### 新增
+
+- **选择工具栏增强**：
+  - 「全选本页」从 checkbox 改为按钮（更直观，配合「取消选择」使用）
+  - 新增「选择已验证」按钮：一键选中本页所有已验证记忆
+  - 新增「选择未验证」按钮：一键选中本页所有未验证记忆
+  - 「选择已验证/未验证」会先清空当前选择再选中（语义清晰，便于批量验证未验证项）
+
+## [1.1.6.3] - 2026-07-07
+
+### 变更
+
+- **插件日志隔离**：插件日志不再输出到 AstrBot 自带日志界面，只显示在插件页面的「📜 插件日志」面板
+  - 新增 [plugin_logger.py](file:///d:/软件开发垃圾堆/astrbot/plugin/astrbot_plugin_active_learner/plugin_logger.py) 模块，提供独立的 `logging.getLogger("astrbot_plugin_active_learner")` logger
+  - 设置 `propagate=False`，日志不传播到 AstrBot 根 logger
+  - 所有 10 个插件模块（main/config_manager/llm_service/searcher/verifier/refiner/importer/embedder/bili_source/tools）统一改用 `from .plugin_logger import logger`
+  - `_BufferHandler` 挂载到独立 logger，仅捕获插件自身日志
+
+### 新增
+
+- **插件日志自动滚动**：展开「📜 插件日志」面板时启动 2 秒轮询，自动加载新日志
+  - 智能滚动：仅当用户当前在底部附近（或首次加载）时自动滚动到底部，向上查看历史时不打断
+  - 关闭面板时自动停止轮询
+  - 自动滚动开关变化时立即响应（开启则立即滚动到底部）
+
+## [1.1.6.2] - 2026-07-07
+
+### 修复
+
+- **验证调用错误模型**：用户报告"调用的模型不是插件配置的模型"。根因是前端 `settings-provider` 下拉框在页面初始化时未加载（只在打开设置 modal 时才加载），导致验证时发送空 `provider_id`，后端 fallback 到当前对话默认 provider 而非用户在插件配置页选择的模型
+  - **前端 `refreshAll()`** 新增 `loadProviders()` 和 `loadSettings()`，让下拉框在页面初始化时就有值
+  - **`_web_get_settings`** 改用 `config_manager.all()` 替代 `overlay_all()`，确保 AstrBot 插件配置页（_conf_schema.json 的 select_provider）设置的 `llm_provider_id` 也能被前端读到
+  - **`_resolve_plugin_provider_id`** 每一层 fallback 命中/失败均输出诊断日志（如 `provider 解析 [2/4 Schema]: 'xxx'`）
+  - **`_web_memory_verify`** 记录最终使用的 provider_id 和来源（frontend / fallback），方便排查
+
+## [1.1.6.1] - 2026-07-07
 
 ### 新增
 
 - **插件日志面板自动滚动开关**：刷新按钮右侧添加复选框，可关闭自动滚动
 - **LLM 调用日志显示模型**：每次 LLM 调用和回复日志中包含 `[model=provider_id]` 标记
 
-## [2.6.7.0] - 2026-07-07
+## [1.1.6.0] - 2026-07-07
 
 ### 首个正式发布版本
 
@@ -53,7 +115,7 @@
 
 
 
-## [2.6.6.0] - 2026-07-06
+## [1.1.5.0] - 2026-07-06
 
 ### 架构重构
 
@@ -71,9 +133,9 @@
 
 ### 版本
 
-主版本 +1（2.6.5.x → 2.6.6.x），表示架构级重构，无破坏性行为变更。
+主版本 +1（1.1.4.x → 1.1.5.0），表示架构级重构，无破坏性行为变更。
 
-## [2.6.5.5] - 2026-07-06
+## [1.1.4.9] - 2026-07-06
 
 ### 新增
 
@@ -83,7 +145,7 @@
   - 解析：LLM 输出 `TYPE: learn/skip + TOPIC/CONTENT/KEYWORDS` 结构化格式
   - 仅在管理员且 `learn_weight > 0` 时生效
 
-## [2.6.5.4] - 2026-07-06
+## [1.1.4.8] - 2026-07-06
 
 ### 新增
 
@@ -96,7 +158,7 @@
 
 - **`search_and_learn` 工具描述**：改为结构化列表（4 种必须调用的情况），标题标注「必用工具」，提高 LLM 调用意愿
 
-## [2.6.5.3] - 2026-07-06
+## [1.1.4.7] - 2026-07-06
 
 ### 新增
 
@@ -118,38 +180,38 @@
 - **主动学习不存储**：`SearchAndLearnTool.call()` 中的 `store.add_or_update()` 改为 `await asyncio.to_thread()`，避免线程池死锁
 - **Docker 中 LLM Provider 获取失败**：`_resolve_default_provider_id()` 增加兜底读取插件配置 `llm_provider_id`
 
-## [2.6.5.2] - 2026-07-06
+## [1.1.4.6] - 2026-07-06
 
 ### 新增
 
 - **记忆批量操作**：记忆表格新增多选框、全选/反选/取消选择、选中后批量删除。表格第一列为 checkbox，选中行高亮；顶部出现操作工具栏（显示已选条数 + 批量删除按钮）；分页切换后自动清空选择
 
-## [2.6.5] - 2026-07-06
+## [1.1.4.5] - 2026-07-06
 
 ### 修复
 
 - **LLM 将记忆参考输出到回复中**：改用 `【内部知识 #{id}】{topic} | {置信度}` 格式标注注入记忆，明确告诉 LLM 这是内部参考不要输出。末尾加指令「不要在回复中输出【内部知识】标记」。`on_llm_response` 清理逻辑不再需要，简化为 no-op
 
-## [2.6.4] - 2026-07-06
+## [1.1.4.4] - 2026-07-06
 
 ### 修复
 
 - **Dashboard 验证 400 错误（续）**：改用 `_resolve_plugin_provider_id()`（4 层 fallback 链路）解析 provider，替代原有的简化 fallback。包含：Dashboard 设置 → `_conf_schema.json` → 事件默认 → provider_manager 首条 → 配置字段
 
-## [2.6.3] - 2026-07-06
+## [1.1.4.3] - 2026-07-06
 
 ### 修复
 
 - **Dashboard 验证 400 错误**：Docker 部署下 `provider_manager.providers` 为空，`_resolve_default_provider_id()` 返回空串导致 400。增加最终兜底：直接取 `_conf_schema.json` 中的 `llm_provider_id` 配置
 - 前端验证时把 Provider 下拉框的选值传给后端
 
-## [2.6.2] - 2026-07-06
+## [1.1.4.2] - 2026-07-06
 
 ### 修复
 
 - **内置知识库文档列表 500 错误**：`d.created_at` 是 `datetime.datetime` 对象，直接 `float()` 抛 `TypeError`。改为 `float(d.created_at.timestamp())`
 
-## [2.6.1] - 2026-07-06
+## [1.1.4.1] - 2026-07-06
 
 ### 修复
 
@@ -159,7 +221,7 @@
   - `_web_builtin_kb_import`：`km.get_kb(kb_id)` 移入独立 try/except + `logger.error(exc_info=True)`
 - **前端错误提示增强**：list / documents / import 三个端点检测到 5xx 错误时，提示用户"详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看"
 
-## [2.6.0] - 2026-07-06
+## [1.1.4.0] - 2026-07-06
 
 ### 新增
 
@@ -179,7 +241,7 @@
 - LLM 无响应 → 候选词保留 `learned=0`，下次批量重试
 - 未配置 LLM Provider → 复用 `_resolve_plugin_provider_id` 4 层 fallback 链路
 
-## [2.5.0] - 2026-07-06
+## [1.1.3.0] - 2026-07-06
 
 ### 新增
 
@@ -204,13 +266,13 @@
 - `kb_manager` 不可用（旧版 AstrBot）→ 返回 501 + 友好错误提示
 - `vec_db.document_storage` 不可用 → 自动降级直接读 SQLite `<kb_id>/doc.db`
 
-## [2.4.12] - 2026-07-06
+## [1.1.2.12] - 2026-07-06
 
 ### 修复
 
-- **修复 `is_learn_trigger` 未定义导致插件加载/调用崩溃**：v2.4.6 去掉主动学习正则门槛时漏清理 tags 汇总逻辑，第 313 行仍引用已被删除的 `is_learn_trigger` 变量，触发 `NameError`。改为与第 290 行注入条件一致的 `self._enable_active_learn_hint and not hits` 判断
+- **修复 `is_learn_trigger` 未定义导致插件加载/调用崩溃**：1.1.2.6 去掉主动学习正则门槛时漏清理 tags 汇总逻辑，第 313 行仍引用已被删除的 `is_learn_trigger` 变量，触发 `NameError`。改为与第 290 行注入条件一致的 `self._enable_active_learn_hint and not hits` 判断
 
-## [2.4.11] - 2026-07-06
+## [1.1.2.11] - 2026-07-06
 
 ### 新增
 
@@ -219,7 +281,7 @@
   - 留空（默认）则回退到当前对话模型，行为与之前一致
   - 参考 `menglimi/astrbot_plugin_private_companion` 的实现约定
 
-## [2.4.10] - 2026-07-06
+## [1.1.2.10] - 2026-07-06
 
 ### 新增
 
@@ -231,7 +293,7 @@
   - 「↺ 恢复默认」一键填入所有 schema 默认值（仅填入表单，需点击「保存」才生效）
   - 原「⚙ 设置」按钮保留作为 Provider + 精炼开关的快速切换入口
 
-## [2.4.9] - 2026-07-06
+## [1.1.2.9] - 2026-07-06
 
 ### 重构
 
@@ -242,7 +304,7 @@
   - 移除 `enable_scope_fallback` 硬过滤开关——不再需要回退，所有结果一律保留
 - **设计理念**：知识本就不需要隐私隔离（个人信息归 livingmemory 管）。A 学的"量子纠缠"，B 问时也能检索到，只是权重稍低。更像人类记忆——不会"换了房间就忘记"
 
-## [2.4.8] - 2026-07-06
+## [1.1.2.8] - 2026-07-06
 
 ### 重构
 
@@ -251,20 +313,20 @@
 - 工具参数从 `content`（需要 LLM 自己组织）改为 `snippet`（传对话原文即可）
 - 异步存储全流程日志可追踪：`save_memory 开始精炼` → `✅ save_memory 已存储`
 
-## [2.4.7] - 2026-07-06
+## [1.1.2.7] - 2026-07-06
 
 ### 新增
 
 - **`save_memory` 工具**：LLM 可在对话中直接存储知识性内容到记忆库，无需搜索网络。当 LLM 通过推理、综合信息产生值得记录的知识时调用。明确标注"仅存通用知识（概念、原理、事实），不存个人信息/偏好/日程"——避免与 `astrbot_plugin_livingmemory` 的生活记忆功能冲突
 
-## [2.4.6] - 2026-07-06
+## [1.1.2.6] - 2026-07-06
 
 ### 变更
 
 - **主动学习不再依赖关键词匹配**：去掉 `ACTIVE_LEARN_PATTERNS` 正则门槛，当记忆库无结果时一律注入 `[学习提示]`，让 LLM 自主判断是否调用 `search_and_learn`。覆盖自然对话中用户提及不熟悉话题的场景（如"昨天看了量子纠缠的论文"），不再要求显式问"什么是X"
 - `search_and_learn` 工具描述改为"当用户提及你不熟悉的话题、或你不确定如何回答时直接调用"，鼓励 LLM 主动搜索
 
-## [2.4.5] - 2026-07-06
+## [1.1.2.5] - 2026-07-06
 
 ### 新增
 
@@ -273,21 +335,21 @@
 - **启动日志增强**：启动时打印记忆总数和 schema 版本（`记忆=N条 | schema=v1`）
 - **检索日志增强**：`on_llm_request` 每次检索后打印 `记忆检索: N hits`，检索异常从 debug 提升到 warning
 
-## [2.4.4] - 2026-07-06
+## [1.1.2.4] - 2026-07-06
 
 ### 新增
 
 - **关心领域动态衰减**：priority boost 现在按检索次数衰减。命中关心领域时重置到 `priority_boost_max`，未命中时每次乘以 `priority_boost_decay` 衰减到 `priority_boost_min`。连续问非关心领域时逐步淡化优先，回到关心领域时立即恢复
 - 3 个新配置项：`priority_boost_max`（初始/重置，默认 1.3）、`priority_boost_min`（下限，默认 1.0）、`priority_boost_decay`（每次衰减系数，默认 0.85）
 
-## [2.4.3] - 2026-07-06
+## [1.1.2.3] - 2026-07-06
 
 ### 变更
 
 - **抑制 LLM 预告话术**：注入上下文时附带 `[行为规范]` 指令，要求 LLM 有记忆直接答、需调用工具时直接调用，不要预告"让我查查看"、"我搜一下"、"让我想想"等话术
 - 4 个 LLM 工具描述统一改为"直接调用"措辞，移除"当你不确定时使用"等鼓励 LLM 先表达不确定性的表述
 
-## [2.4.2] - 2026-07-06
+## [1.1.2.2] - 2026-07-06
 
 ### 变更
 
@@ -296,7 +358,7 @@
 - 接口（`is_available()` / `search()` / `search_fallback()`）保持不变，[tools.py](file:///tools.py) 和 [verifier.py](file:///verifier.py) 无需改动
 - 懒查找：首次调用 `search()` 或 `is_available()` 时才遍历已加载插件，避免加载顺序依赖
 
-## [2.4.1] - 2026-07-06
+## [1.1.2.1] - 2026-07-06
 
 ### 新增
 
@@ -307,7 +369,7 @@
 
 - 修复空数据库首次加载时 `schema_version` 表为空导致 `MAX(version)` 返回 NULL，触发 `'<' not supported between instances of 'NoneType' and 'int'` 的加载失败
 
-## [2.4.0] - 2026-07-06
+## [1.1.2.0] - 2026-07-06
 
 ### 新增
 
@@ -332,7 +394,7 @@
 
 ### 变更
 
-- 版本号 `2.3.0 → 2.4.0`
+- 版本号 `1.1.1.4 → 1.1.2.0`
 - `on_llm_request` 检索从 `store.search`（纯 FTS5）改为 `store.search_hybrid`（FTS5 + 向量 + 衰减 + scope 回退）
 - `_web_import_md` 长文档支持分块：单 chunk 走原路径（向后兼容），多 chunk 走批量路径
 - 数据库 schema 迁移：新增 `schema_version` 表、`memories_embedding` 表、`memories` 表加 `parent_doc_id` / `last_accessed_at` 列
@@ -350,7 +412,7 @@
 - 新增 `pypdf>=4.0.0`（PDF 文本提取）
 - 新增 `python-docx>=1.1.0`（Word 文档提取）
 
-## [2.3.0] - 2026-07-06
+## [1.1.1.4] - 2026-07-06
 
 ### 新增
 
@@ -368,7 +430,7 @@
 
 ### 变更
 
-- 版本号 `2.2.0 → 2.3.0`
+- 版本号 `1.1.1.3 → 1.1.1.4`
 - 搜索学习流程：搜索结果 → LLM 2 步精炼（抽取事实 + 结构化）→ 存库；无 Provider 时降级为原搜索摘要
 - 3 个导入 handler（text/md/zip）：增加 `refine` 参数，默认 True；调用 `refiner.refine_import` 蒸馏后存库；source 字段追加 `+精炼`/`+未精炼` 标记
 - 3 个导入表单前端各加「LLM 精炼后入库」复选框
@@ -383,7 +445,7 @@
 - 每个 Provider 候选都先经 `_provider_exists` 校验，避免选了已删除的 provider
 - 设置存储与 `_conf_schema.json` 解耦：AstrBot 无 schema 写回 API，使用插件自管 JSON 文件
 
-## [2.2.0] - 2026-07-06
+## [1.1.1.3] - 2026-07-06
 
 ### 新增
 
@@ -397,7 +459,7 @@
 
 ### 变更
 
-- 版本号 `2.1.0 → 2.2.0`
+- 版本号 `1.1.1.2 → 1.1.1.3`
 - 前端 `app.js` 新增 `bindImportEvents()`、3 个表单提交处理、Tab 切换逻辑
 - `style.css` 新增 `.tabs` / `.tab-btn` / `.tab-panel` / `.scope-row` / `.hint` / `button.primary` / `textarea` / `.import-result` 样式
 
@@ -406,7 +468,7 @@
 - **运行时日志升级**：上下文注入日志从 `debug` 升级到 `info`，并汇总标签如 `注入上下文 [3条记忆/质疑提示/学习提示] (scope: private:u123)`，方便在 AstrBot 主面板直接看到插件运行情况
 - `tools.py` 中 4 个 LLM 工具的关键节点都改为 `info` 级别输出：`搜索「xxx」` / `不知道「xxx」` / `知道「xxx」` / `已学习「xxx」` / `验证「xxx」` / `搜索 B站: xxx` 等
 
-## [2.1.0] - 2026-07-06
+## [1.1.1.2] - 2026-07-06
 
 ### 新增
 
@@ -419,7 +481,7 @@
 
 ### 变更
 
-- 版本号 `2.0.0 → 2.1.0`
+- 版本号 `1.1.1.1 → 1.1.1.2`
 - `from astrbot.api.web` 用 `try/except` 防御导入，老版本 AstrBot（< v4.26）可正常加载插件，只是没有 Dashboard 页面
 
 ### 修复
@@ -428,7 +490,7 @@
 - **修复工具调用返回值崩溃**：`ToolExecResult` 在 AstrBot 中是类型别名（`str | 其他`）而非 class，不能 `ToolExecResult("文本")` 构造调用，会抛 `TypeError: 'types.UnionType' object is not callable`。改为直接返回 string
 - `BiliSource` 补 `is_available()` 实例方法，与 `main.py` / `tools.py` / `verifier.py` 中的 `self.bili_source.is_available()` 调用方式一致
 
-## [2.0.0] - 2026-07-05
+## [1.1.1.1] - 2026-07-05
 
 ### 新增
 
@@ -448,7 +510,7 @@
 - 配置项从原版的扁平结构改为 `_conf_schema.json` 声明式
 - 数据库表 `memories` + `memories_fts`（FTS5 虚拟表）+ 3 个同步触发器
 
-## [1.0.0] - 2026-07-04
+## [1.1.1.0] - 2026-07-04
 
 ### 新增
 

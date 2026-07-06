@@ -10,6 +10,7 @@ const state = {
   totalPages: 1,
   currentDetailId: null,
   selectedIds: new Set(),
+  currentItems: [],
   settings: {
     llm_provider_id: "",
     refine_on_search: true,
@@ -104,7 +105,7 @@ async function loadStats() {
 
 async function loadMemories() {
   const tbody = document.getElementById("memory-tbody");
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="8">加载中…</td></tr>';
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="9">加载中…</td></tr>';
   try {
     const params = {
       ...scopeParams(),
@@ -122,14 +123,34 @@ async function loadMemories() {
     renderTable(data.items || []);
     renderPagination();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">加载失败：${e.message}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">加载失败：${e.message}</td></tr>`;
   }
 }
 
+function formatOrigin(origin) {
+  if (!origin) return "—";
+  // origin 格式：manual / import:<filename> / kb:<kb>/<doc> / conversation[:<umo>] / slang
+  if (origin === "manual") return "手动输入";
+  if (origin === "slang") return "群黑话";
+  if (origin === "conversation") return "会话";
+  if (origin.startsWith("conversation:")) {
+    const umo = origin.slice("conversation:".length);
+    return umo ? `会话:${umo}` : "会话";
+  }
+  if (origin.startsWith("import:")) {
+    const fn = origin.slice("import:".length);
+    return fn ? `导入:${fn}` : "导入";
+  }
+  if (origin.startsWith("kb:")) return `知识库:${origin.slice(3)}`;
+  return escapeHtml(origin);
+}
+
 function renderTable(items) {
+  state.currentItems = items;
   const tbody = document.getElementById("memory-tbody");
   if (!items.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">记忆库为空</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">记忆库为空</td></tr>';
+    _updateSelectionToolbar();
     return;
   }
   tbody.innerHTML = "";
@@ -144,6 +165,7 @@ function renderTable(items) {
       <td class="cell-topic" title="${escapeHtml(e.topic)}">${escapeHtml(e.topic)}</td>
       <td class="cell-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 80))}</td>
       <td class="cell-scope">${escapeHtml(e.scope_type)}:${escapeHtml(e.scope_id)}</td>
+      <td class="cell-origin" title="${escapeHtml(e.origin || "")}">${formatOrigin(e.origin)}</td>
       <td>${formatConfidence(e.confidence)}</td>
       <td>${verifiedBadge(e)}</td>
       <td>${formatTime(e.updated_at)}</td>
@@ -155,22 +177,10 @@ function renderTable(items) {
     `;
     tbody.appendChild(tr);
   }
-  // sync header "select all" checkbox
-  _syncSelectAllCheckbox(items);
   _updateSelectionToolbar();
 }
 
 // ---------- 多选工具栏 ----------
-
-function _syncSelectAllCheckbox(items) {
-  const cb = document.getElementById("select-all-checkbox");
-  if (!cb) return;
-  if (!items.length) { cb.checked = false; cb.indeterminate = false; return; }
-  const allSelected = items.every((e) => state.selectedIds.has(e.id));
-  const someSelected = items.some((e) => state.selectedIds.has(e.id));
-  cb.checked = allSelected;
-  cb.indeterminate = someSelected && !allSelected;
-}
 
 function _updateSelectionToolbar() {
   const toolbar = document.getElementById("selection-toolbar");
@@ -178,6 +188,37 @@ function _updateSelectionToolbar() {
   const count = state.selectedIds.size;
   toolbar.classList.toggle("hidden", count === 0);
   countEl.textContent = count ? `已选 ${count} 条` : "";
+}
+
+function _applySelectionToUI() {
+  document.querySelectorAll("#memory-tbody input[data-id]").forEach((cb) => {
+    const id = cb.dataset.id;
+    const sel = state.selectedIds.has(id);
+    cb.checked = sel;
+    cb.closest("tr")?.classList.toggle("selected", sel);
+  });
+  _updateSelectionToolbar();
+}
+
+function selectAllCurrent() {
+  state.currentItems.forEach((e) => state.selectedIds.add(e.id));
+  _applySelectionToUI();
+}
+
+function selectAllVerified() {
+  state.selectedIds.clear();
+  state.currentItems.forEach((e) => {
+    if (e.verified) state.selectedIds.add(e.id);
+  });
+  _applySelectionToUI();
+}
+
+function selectAllUnverified() {
+  state.selectedIds.clear();
+  state.currentItems.forEach((e) => {
+    if (!e.verified) state.selectedIds.add(e.id);
+  });
+  _applySelectionToUI();
 }
 
 function _confirmModal(msg, okText = "确认删除") {
@@ -307,6 +348,7 @@ async function showDetail(entryId) {
         <div class="detail-row"><div class="detail-label">被质疑</div><div class="detail-value">${entry.challenge_count || 0} 次</div></div>
         <div class="detail-row"><div class="detail-label">访问次数</div><div class="detail-value">${entry.access_count || 0}</div></div>
         <div class="detail-row"><div class="detail-label">来源</div><div class="detail-value">${escapeHtml(entry.source || "—")}</div></div>
+        <div class="detail-row"><div class="detail-label">创建来源</div><div class="detail-value">${formatOrigin(entry.origin)}</div></div>
         <div class="detail-row"><div class="detail-label">关键词</div><div class="detail-value">${escapeHtml(kw)}</div></div>
         <div class="detail-row"><div class="detail-label">创建时间</div><div class="detail-value">${formatTime(entry.created_at)}</div></div>
         <div class="detail-row"><div class="detail-label">更新时间</div><div class="detail-value">${formatTime(entry.updated_at)}</div></div>
@@ -404,7 +446,14 @@ async function exportData() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadScopes(), loadStats(), loadMemories(), loadDebug()]);
+  await Promise.all([
+    loadScopes(),
+    loadStats(),
+    loadMemories(),
+    loadDebug(),
+    loadProviders(),
+    loadSettings(),
+  ]);
 }
 
 function showVerifyDetail(result) {
@@ -446,10 +495,13 @@ function showVerifyDetail(result) {
   panel.open = true;
 }
 
-async function loadLogs() {
+async function loadLogs(forceScroll = false) {
   const el = document.getElementById("log-content");
   if (!el) return;
   const autoScroll = document.getElementById("log-autoscroll")?.checked ?? false;
+  // 记录加载前用户是否在底部附近（仅在 panel 展开时有效）
+  const wasAtBottom = el.clientHeight > 0
+    && (el.scrollHeight - el.scrollTop - el.clientHeight) < 40;
   try {
     const data = await bridge.apiGet("logs");
     const logs = data.logs || [];
@@ -460,9 +512,30 @@ async function loadLogs() {
     el.innerHTML = logs
       .map((line) => `<div class="log-line">${escapeHtml(line)}</div>`)
       .join("");
-    if (autoScroll) el.scrollTop = el.scrollHeight;
+    // 自动滚动：开关开启 + (强制滚动 或 用户之前在底部)
+    // forceScroll=true 用于展开面板/手动刷新；轮询时 false，避免打断向上查看历史
+    if (autoScroll && (forceScroll || wasAtBottom)) {
+      // 用 requestAnimationFrame 等浏览器重新计算布局后再设置 scrollTop
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    }
   } catch (e) {
     el.textContent = `加载日志失败: ${e.message}`;
+  }
+}
+
+let _logPollTimer = null;
+
+function startLogPolling() {
+  stopLogPolling();
+  _logPollTimer = setInterval(() => loadLogs(false), 2000);
+}
+
+function stopLogPolling() {
+  if (_logPollTimer) {
+    clearInterval(_logPollTimer);
+    _logPollTimer = null;
   }
 }
 
@@ -568,80 +641,50 @@ function bindEvents() {
       state.selectedIds.delete(id);
     }
     cb.closest("tr").classList.toggle("selected", cb.checked);
-    _syncSelectAllCheckbox(
-      Array.from(document.querySelectorAll("#memory-tbody input[data-id]")).map(
-        (c) => ({ id: c.dataset.id })
-      )
-    );
     _updateSelectionToolbar();
   });
 
-  // 全选/反选/取消
-  document.getElementById("select-all-checkbox")?.addEventListener("change", (e) => {
-    const checks = Array.from(
-      document.querySelectorAll("#memory-tbody input[data-id]")
-    );
-    if (e.target.checked) {
-      checks.forEach((c) => {
-        state.selectedIds.add(c.dataset.id);
-        c.checked = true;
-        c.closest("tr").classList.add("selected");
-      });
-    } else {
-      checks.forEach((c) => {
-        state.selectedIds.delete(c.dataset.id);
-        c.checked = false;
-        c.closest("tr").classList.remove("selected");
-      });
-    }
-    _updateSelectionToolbar();
-  });
+  // 全选/选择已验证/选择未验证/反选/取消
+  document.getElementById("btn-select-all")?.addEventListener("click", selectAllCurrent);
+  document.getElementById("btn-select-verified")?.addEventListener("click", selectAllVerified);
+  document.getElementById("btn-select-unverified")?.addEventListener("click", selectAllUnverified);
 
   document.getElementById("btn-invert")?.addEventListener("click", () => {
-    document.querySelectorAll("#memory-tbody input[data-id]").forEach((cb) => {
-      const id = cb.dataset.id;
-      if (state.selectedIds.has(id)) {
-        state.selectedIds.delete(id);
-        cb.checked = false;
-        cb.closest("tr").classList.remove("selected");
+    state.currentItems.forEach((e) => {
+      if (state.selectedIds.has(e.id)) {
+        state.selectedIds.delete(e.id);
       } else {
-        state.selectedIds.add(id);
-        cb.checked = true;
-        cb.closest("tr").classList.add("selected");
+        state.selectedIds.add(e.id);
       }
     });
-    _syncSelectAllCheckbox(
-      Array.from(document.querySelectorAll("#memory-tbody input[data-id]")).map(
-        (c) => ({ id: c.dataset.id })
-      )
-    );
-    _updateSelectionToolbar();
+    _applySelectionToUI();
   });
 
   document.getElementById("btn-deselect-all")?.addEventListener("click", () => {
     state.selectedIds.clear();
-    document
-      .querySelectorAll("#memory-tbody input[type=checkbox]")
-      .forEach((cb) => {
-        cb.checked = false;
-        cb.closest("tr")?.classList.remove("selected");
-      });
-    _syncSelectAllCheckbox(
-      Array.from(document.querySelectorAll("#memory-tbody input[data-id]")).map(
-        (c) => ({ id: c.dataset.id })
-      )
-    );
-    _updateSelectionToolbar();
+    _applySelectionToUI();
   });
 
   document.getElementById("btn-batch-delete")?.addEventListener("click", batchDeleteSelected);
   document.getElementById("btn-batch-verify")?.addEventListener("click", batchVerifySelected);
   document.getElementById("btn-refresh-logs")?.addEventListener("click", (e) => {
     e.preventDefault();
-    loadLogs();
+    loadLogs(true);
   });
   document.getElementById("log-panel")?.addEventListener("toggle", (e) => {
-    if (e.target.open) loadLogs();
+    if (e.target.open) {
+      loadLogs(true);
+      startLogPolling();
+    } else {
+      stopLogPolling();
+    }
+  });
+  document.getElementById("log-autoscroll")?.addEventListener("change", (e) => {
+    if (e.target.checked) {
+      // 开启时立即滚动到底部
+      const el = document.getElementById("log-content");
+      if (el) el.scrollTop = el.scrollHeight;
+    }
   });
 
   document.querySelector(".modal-close").addEventListener("click", closeModal);
@@ -867,7 +910,7 @@ async function submitImportMd(form) {
       chunk_overlap: parseInt(form.chunk_overlap?.value || "50", 10),
     };
     const result = await bridge.apiPost("import_md", payload);
-    // v2.4.0：MD 可能返回单条 entry 或批量 chunks
+    // v1.1.2.0：MD 可能返回单条 entry 或批量 chunks
     if (result.entry) {
       showImportResult(`✅ 已导入：<strong>${escapeHtml(result.entry.topic)}</strong>`);
     } else if (result.total != null) {

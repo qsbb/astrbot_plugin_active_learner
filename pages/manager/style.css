@@ -261,14 +261,6 @@ table.memory-table {
   font-size: 13px;
 }
 
-.selection-toolbar .sel-all {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  margin-right: 4px;
-}
-
 .selection-toolbar .selected-count {
   margin-left: auto;
   color: var(--text-muted);

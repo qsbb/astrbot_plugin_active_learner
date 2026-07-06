@@ -21,11 +21,7 @@ except ImportError:
     _NUMPY_AVAILABLE = False
     np = None  # type: ignore
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger("active_learner")
+from .plugin_logger import logger
 
 
 # 单条查询缓存上限

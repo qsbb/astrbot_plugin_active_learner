@@ -63,10 +63,9 @@
 
     <section class="table-wrap">
       <div id="selection-toolbar" class="selection-toolbar hidden">
-        <label class="sel-all">
-          <input type="checkbox" id="select-all-checkbox" />
-          <span>全选本页</span>
-        </label>
+        <button type="button" id="btn-select-all">全选本页</button>
+        <button type="button" id="btn-select-verified">选择已验证</button>
+        <button type="button" id="btn-select-unverified">选择未验证</button>
         <button type="button" id="btn-invert">反选</button>
         <button type="button" id="btn-deselect-all">取消选择</button>
         <span id="selected-count" class="selected-count"></span>
@@ -80,6 +79,7 @@
             <th>主题</th>
             <th>内容预览</th>
             <th>作用域</th>
+            <th>来源</th>
             <th>置信度</th>
             <th>状态</th>
             <th>更新时间</th>
@@ -87,7 +87,7 @@
           </tr>
         </thead>
         <tbody id="memory-tbody">
-          <tr class="empty-row"><td colspan="8">加载中…</td></tr>
+          <tr class="empty-row"><td colspan="9">加载中…</td></tr>
         </tbody>
       </table>
     </section>

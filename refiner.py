@@ -13,11 +13,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger("active_learner")
+from .plugin_logger import logger
 
 
 @dataclass

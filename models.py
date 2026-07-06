@@ -64,6 +64,7 @@ class MemoryEntry:
     keywords: list[str] = field(default_factory=list)
     source: str = ""
     sources_detail: list[str] = field(default_factory=list)
+    origin: str = ""
     confidence: float = 0.3
     verified: bool = False
     challenge_count: int = 0
@@ -71,7 +72,7 @@ class MemoryEntry:
     created_at: float = 0.0
     updated_at: float = 0.0
     last_challenged_at: float = 0.0
-    # v2.4.0 新增字段
+    # v1.1.2.0 新增字段
     parent_doc_id: Optional[str] = None
     last_accessed_at: float = 0.0
 
@@ -85,6 +86,7 @@ class MemoryEntry:
             "keywords": self.keywords,
             "source": self.source,
             "sources_detail": self.sources_detail,
+            "origin": self.origin,
             "confidence": self.confidence,
             "verified": self.verified,
             "challenge_count": self.challenge_count,
@@ -121,6 +123,7 @@ class MemoryEntry:
             keywords=keywords,
             source=get("source") or "",
             sources_detail=sources_detail,
+            origin=get("origin") or "",
             confidence=float(get("confidence") or 0.0),
             verified=bool(get("verified")),
             challenge_count=int(get("challenge_count") or 0),

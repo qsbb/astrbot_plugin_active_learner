@@ -15,11 +15,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger("active_learner")
+from .plugin_logger import logger
 
 from .chunker import chunk_docx, chunk_markdown, chunk_pdf, chunk_text
 from .models import Scope, make_chunk_id
@@ -65,6 +61,7 @@ class Importer:
                 scope=scope, topic=topic, content=final_content,
                 keywords=final_keywords, source=source_tag,
                 sources_detail=None, confidence=final_confidence,
+                origin="manual",
             )
         except Exception as e:
             return {"ok": False, "error": f"导入失败: {e}", "status_code": 500}
@@ -116,6 +113,7 @@ class Importer:
                     scope=scope, topic=topic, content=final_content,
                     keywords=final_keywords, source=source_tag,
                     sources_detail=None, confidence=final_confidence,
+                    origin=f"import:{filename}" if filename else "import:md",
                 )
             except Exception as e:
                 return {"ok": False, "error": f"导入失败: {e}", "status_code": 500}
@@ -128,6 +126,7 @@ class Importer:
         batch = await self._import_chunks_batch_data(
             chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
             base_topic=topic, source_label=source_label, refine=refine,
+            origin=f"import:{filename}" if filename else "import:md",
         )
         return {"ok": True, "batch": batch}
 
@@ -170,6 +169,7 @@ class Importer:
         batch = await self._import_chunks_batch_data(
             chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
             base_topic=base_topic, source_label=source_label, refine=refine,
+            origin=f"import:{filename}" if filename else "import:pdf",
         )
         return {"ok": True, "batch": batch}
 
@@ -212,6 +212,7 @@ class Importer:
         batch = await self._import_chunks_batch_data(
             chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
             base_topic=base_topic, source_label=source_label, refine=refine,
+            origin=f"import:{filename}" if filename else "import:docx",
         )
         return {"ok": True, "batch": batch}
 
@@ -253,6 +254,7 @@ class Importer:
         batch = await self._import_chunks_batch_data(
             chunks=chunks, scope=scope, parent_doc_id=parent_doc_id,
             base_topic=base_topic, source_label=source_label, refine=refine,
+            origin=f"import:{filename}" if filename else "import:txt",
         )
         return {"ok": True, "batch": batch}
 
@@ -308,6 +310,7 @@ class Importer:
                     scope=scope, topic=topic, content=final_content,
                     keywords=final_keywords, source=source_tag,
                     sources_detail=None, confidence=final_confidence,
+                    origin=f"import:{name}",
                 )
                 success_count += 1
                 results.append({"file": name, "topic": topic, "entry_id": entry.id, "ok": True})
@@ -449,6 +452,7 @@ class Importer:
                 batch_data = await self._import_chunks_batch_data(
                     chunks=new_chunks, scope=scope, parent_doc_id=parent_doc_id,
                     base_topic=base_topic, source_label=source_label, refine=refine,
+                    origin=f"kb:{kb_helper.kb.kb_name}/{doc.doc_name}",
                 )
                 success_count += 1
                 results.append({
@@ -474,6 +478,7 @@ class Importer:
         self, chunks: list[str], scope: Scope,
         parent_doc_id: str, base_topic: str,
         source_label: str, refine: bool,
+        origin: str = "",
     ) -> dict:
         """共享的批量 chunk 入库逻辑。
 
@@ -528,7 +533,7 @@ class Importer:
                     chunk_id=chunk_id, scope=scope, topic=topic,
                     content=final_content, keywords=final_keywords,
                     source=source_tag, confidence=final_confidence,
-                    parent_doc_id=parent_doc_id,
+                    parent_doc_id=parent_doc_id, origin=origin,
                 )
 
                 if embed_vecs and i < len(embed_vecs) and embed_vecs[i]:

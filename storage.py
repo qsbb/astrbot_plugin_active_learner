@@ -109,13 +109,13 @@ CREATE INDEX IF NOT EXISTS idx_slang_pending
   ON slang_candidates(scope_type, scope_id, learned, occurrences DESC);
 """
 
-# 查询用列顺序（与 MemoryEntry.from_row 对齐，含 keywords + v2.4 新字段）
+# 查询用列顺序（与 MemoryEntry.from_row 对齐，含 keywords + v1.1.2 新字段 + v1.1.6.5 origin）
 SELECT_COLS = (
     "id, scope_type, scope_id, topic, content, "
     "source, sources_detail, keywords, confidence, verified, "
     "challenge_count, access_count, "
     "created_at, updated_at, last_challenged_at, "
-    "parent_doc_id, last_accessed_at"
+    "parent_doc_id, last_accessed_at, origin"
 )
 
 
@@ -150,6 +150,12 @@ def _migrate_schema(conn) -> int:
         conn.execute("UPDATE memories SET last_accessed_at = created_at WHERE last_accessed_at = 0 OR last_accessed_at IS NULL")
         conn.execute("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (1, ?)", (_time.time(),))
         current = 1
+    if current < 2:
+        # v2: 加 origin 列（来源：manual/kb/import/conversation/slang）
+        if not _column_exists(conn, "memories", "origin"):
+            conn.execute("ALTER TABLE memories ADD COLUMN origin TEXT DEFAULT ''")
+        conn.execute("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (2, ?)", (_time.time(),))
+        current = 2
     return current
 
 
@@ -202,6 +208,7 @@ class MemoryStore:
         source: str = "",
         sources_detail: Optional[list[str]] = None,
         confidence: float = 0.3,
+        origin: str = "",
     ) -> MemoryEntry:
         """添加或更新记忆。同 scope 同 topic 命中则合并。"""
         keywords = keywords or []
@@ -225,11 +232,12 @@ class MemoryStore:
                 self._conn.execute(
                     """UPDATE memories
                        SET content = ?, keywords = ?, source = ?, sources_detail = ?,
-                           confidence = ?, updated_at = ?, access_count = access_count + 1
+                           confidence = ?, updated_at = ?, access_count = access_count + 1,
+                           origin = CASE WHEN origin = '' OR origin IS NULL THEN ? ELSE origin END
                        WHERE id = ?""",
                     (
                         content, merged_keywords_str, source, sources_json,
-                        new_confidence, now, entry_id,
+                        new_confidence, now, origin, entry_id,
                     ),
                 )
                 return self.get_entry_by_id(entry_id)  # type: ignore[return-value]
@@ -238,11 +246,12 @@ class MemoryStore:
                     """INSERT INTO memories
                        (id, scope_type, scope_id, topic, content, keywords,
                         source, sources_detail, confidence, verified,
-                        challenge_count, access_count, created_at, updated_at, last_challenged_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, ?, ?, 0)""",
+                        challenge_count, access_count, created_at, updated_at, last_challenged_at,
+                        origin)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, ?, ?, 0, ?)""",
                     (
                         entry_id, scope.type, scope.id, topic, content, keywords_str,
-                        source, sources_json, confidence, now, now,
+                        source, sources_json, confidence, now, now, origin,
                     ),
                 )
                 self._evict_if_needed_locked(scope)
@@ -391,7 +400,7 @@ class MemoryStore:
     def search(self, scope: Scope, query: str, top_k: int = 3) -> list[SearchHit]:
         """FTS5 全文检索 + scope 过滤 + 置信度加权排序。
 
-        v2.4.0 起推荐用 search_hybrid 替代（带向量检索）。
+        v1.1.2.0 起推荐用 search_hybrid 替代（带向量检索）。
         本方法保留作为降级路径和无 embedding provider 时的兜底。
         """
         match_expr = _build_match_query(query)
@@ -431,7 +440,7 @@ class MemoryStore:
             self.inc_access(h.entry.id)
         return hits[:top_k]
 
-    # ---------- v2.4.0 向量检索 ----------
+    # ---------- v1.1.2.0 向量检索 ----------
 
     def _search_fts(
         self,
@@ -441,7 +450,7 @@ class MemoryStore:
     ) -> list[tuple[MemoryEntry, float]]:
         """FTS5 检索 + bm25 分数。返回 [(entry, bm25_score), ...]。
 
-        v2.4.9：不再按 scope 硬过滤，检索所有记忆——scope 退化为软权重，在 search_hybrid 里施加。
+        v1.1.2.9：不再按 scope 硬过滤，检索所有记忆——scope 退化为软权重，在 search_hybrid 里施加。
         bm25 分数越小越好（FTS5 默认），调用方需取负转为"越大越好"。
         """
         match_expr = _build_match_query(query)
@@ -474,7 +483,7 @@ class MemoryStore:
     ) -> tuple[Any, list[str]]:
         """加载所有记忆的向量到 numpy 矩阵。带内存缓存。
 
-        v2.4.9：不再按 scope 过滤——所有记忆的向量统一加载，scope 退化为软权重。
+        v1.1.2.9：不再按 scope 过滤——所有记忆的向量统一加载，scope 退化为软权重。
         必须在 self._lock 内调用。
         """
         import numpy as np
@@ -560,7 +569,7 @@ class MemoryStore:
         now = _time.time()
 
         with self._lock:
-            # 1. FTS5 检索（v2.4.9：检索所有记忆，不按 scope 过滤）
+            # 1. FTS5 检索（v1.1.2.9：检索所有记忆，不按 scope 过滤）
             fts_results = self._search_fts(scope, query, top_k * 5)
 
             # 2. 向量检索（如有 query_vec 和 embedder）
@@ -614,7 +623,7 @@ class MemoryStore:
                 entry = entries[mid]
                 # 加权混合分数
                 hybrid = fts_weight * fts_norm[i] + vec_weight * vec_norm[i]
-                # scope penalty（v2.4.9：软权重，不硬过滤）
+                # scope penalty（v1.1.2.9：软权重，不硬过滤）
                 scope_tag = scope_map.get(mid, "other")
                 if scope_tag == "current":
                     penalty = 1.0
@@ -717,6 +726,7 @@ class MemoryStore:
         confidence: float = 0.5,
         parent_doc_id: str = "",
         now: float = 0.0,
+        origin: str = "",
     ) -> MemoryEntry:
         """直接插入 chunk 条目（用调用方提供的 chunk_id，不走 add_or_update 的 topic 哈希）。
 
@@ -733,10 +743,10 @@ class MemoryStore:
                    (id, scope_type, scope_id, topic, content, keywords,
                     source, sources_detail, confidence, verified,
                     challenge_count, access_count, created_at, updated_at, last_challenged_at,
-                    parent_doc_id, last_accessed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, 0, ?, ?)""",
+                    parent_doc_id, last_accessed_at, origin)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, 0, ?, ?, ?)""",
                 (chunk_id, scope.type, scope.id, topic, content, keywords_str,
-                 source, sources_json, confidence, now, now, parent_doc_id, now),
+                 source, sources_json, confidence, now, now, parent_doc_id, now, origin),
             )
             return self.get_entry_by_id(chunk_id)  # type: ignore[return-value]
 
@@ -936,7 +946,7 @@ class MemoryStore:
                 ).fetchall()
             return [MemoryEntry.from_row(r) for r in rows], total, total_pages
 
-    # ---------- 群黑话候选 v2.6.0 ----------
+    # ---------- 群黑话候选 v1.1.4.0 ----------
 
     def add_slang_candidate(self, scope: Scope, phrase: str, context: str) -> None:
         """新增或累加候选词出现次数。UNIQUE 冲突时累加 occurrences 并刷新 last_seen/context。"""

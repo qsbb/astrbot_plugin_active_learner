@@ -12,11 +12,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger("active_learner")
+from .plugin_logger import logger
 
 from .models import MemoryEntry
 

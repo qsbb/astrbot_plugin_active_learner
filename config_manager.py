@@ -16,11 +16,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger("active_learner")
+from .plugin_logger import logger
 
 
 class ConfigManager:
