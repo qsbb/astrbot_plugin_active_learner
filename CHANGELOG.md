@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.5.4] - 2026-07-06
+
+### 新增
+
+- **配置双向同步**：`__init__` 现在合并 `_settings`（Dashboard 存储）到 `cfg`，覆盖 AstrBot 插件配置页的值。无论从哪边修改，运行时都使用最新值
+- **`_apply_config_to_runtime` 补全**：新增 `learn_weight`、`search_top_k`、`default_confidence`、`chunk_size`、`chunk_overlap` 的运行时即时生效
+- **工具提醒始终注入**：管理员对话中 `learn_weight >= 0.5` 时，即使记忆命中也会注入简短工具提醒 `（如果用户提供了你原本不掌握的新知识点，可调用 search_and_learn 工具学习）`
+- **`learn_weight=1.0` 激进模式**：提示词包含结构化判断标准（不熟悉术语/纠正表述/主动科普 → 立即调用），force LLM 更积极调用工具
+
+### 优化
+
+- **`search_and_learn` 工具描述**：改为结构化列表（4 种必须调用的情况），标题标注「必用工具」，提高 LLM 调用意愿
+
 ## [2.6.5.3] - 2026-07-06
 
 ### 新增

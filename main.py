@@ -59,7 +59,7 @@ _ON_MESSAGE_AVAILABLE = callable(getattr(filter, "on_message", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "2.6.5.3",
+    "2.6.5.4",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -111,6 +111,10 @@ class ActiveLearnerPlugin(Star):
         self._settings = SettingsStore(
             StarTools.get_data_dir() / "active_learner_settings.json"
         )
+        # v2.6.5.4：Dashboard 设置覆盖 AstrBot 配置，确保两边修改都生效
+        dash_cfg = self._settings.all()
+        if isinstance(dash_cfg, dict):
+            cfg.update({k: v for k, v in dash_cfg.items() if v is not None})
 
         # v2.4.0：向量混合检索配置
         self._embedding_enabled = bool(cfg.get("embedding_enabled", True))
@@ -177,7 +181,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v2.6.5.3 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v2.6.5.4 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -277,11 +281,24 @@ class ActiveLearnerPlugin(Star):
         if w < 0.7:
             return ("[学习提示] 如果这是对方在科普新知识，"
                     "建议调用 search_and_learn 工具存入记忆库，以免以后遗忘。")
-        # 0.7 ~ 1.0（含默认值 0.7）
-        return ("[学习提示] 你刚刚收到了一条新信息。如果这是你原本不掌握的知识点"
-                "（即对方在向你科普/教你新东西），请立即调用 search_and_learn"
-                " 工具将其存入记忆库，以免以后遗忘。"
-                "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。")
+        # 0.7 ~ 0.9（默认 0.7）
+        if w < 1.0:
+            return ("[学习提示] 你刚刚收到了一条新信息。如果这是你原本不掌握的知识点"
+                    "（即对方在向你科普/教你新东西），请立即调用 search_and_learn"
+                    " 工具将其存入记忆库，以免以后遗忘。"
+                    "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。")
+        # 1.0：激进模式
+        return (
+            "[学习提示] **重要指令**：请判断以下对话是否包含新知识点"
+            "（用户可能在科普、纠正或教你新东西）。如果是，请**立即调用** "
+            "search_and_learn 工具搜索并存入记忆库。\n"
+            "判断标准：\n"
+            "- 出现你不熟悉的人名/术语/概念 → 调用\n"
+            "- 用户说"其实是"、"是XX不是XX"等纠正性表述 → 调用\n"
+            "- 用户主动介绍某个知识 → 调用\n"
+            "- 你自己完全确定且明确知道的内容 → 不调用\n"
+            "调用后无需告知用户，直接继续回复即可。"
+        )
 
     def _hits_match_priority(self, hits) -> bool:
         """检查检索结果中是否有任一记忆命中关心领域。"""
@@ -392,9 +409,9 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
-        # 3. 主动学习提示（v2.6.5.3：由 learn_weight 控制强度，仅管理员可触发）
-        if self._enable_active_learn_hint and not hits:
-            if self._is_admin_user(event):
+        # 3. 主动学习提示（v2.6.5.4：始终注入工具提醒，不限于无记忆命中）
+        if self._is_admin_user(event) and self._enable_active_learn_hint:
+            if not hits:
                 hint = self._get_learn_prompt()
                 if hint:
                     self._active_learn_hinted = True
@@ -404,6 +421,13 @@ class ActiveLearnerPlugin(Star):
                         f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})"
                     )
             else:
+                # v2.6.5.4：即使有记忆命中，也注入简短工具提醒
+                # 让 LLM 始终知道 search_and_learn 可用
+                if self._learn_weight >= 0.5:
+                    parts.append(
+                        "（如果用户提供了你原本不掌握的新知识点，可调用 search_and_learn 工具学习）"
+                    )
+        else:
                 logger.info(
                     f"ℹ️ 当前用户非管理员，跳过主动学习 (scope: {scope})"
                 )
@@ -1282,6 +1306,28 @@ class ActiveLearnerPlugin(Star):
             self._context_inject_count = max(
                 1, min(10, int(cfg.get("context_inject_count", 3)))
             )
+        except (TypeError, ValueError):
+            pass
+
+        # 学习权重
+        try:
+            self._learn_weight = max(0.0, min(1.0, float(cfg.get("learn_weight", 0.7))))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self._search_top_k = max(1, min(20, int(cfg.get("search_top_k", 5))))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self._default_confidence = max(0.1, min(1.0, float(cfg.get("default_confidence", 0.6))))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self._chunk_size = max(100, min(5000, int(cfg.get("chunk_size", 500))))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self._chunk_overlap = max(0, min(1000, int(cfg.get("chunk_overlap", 50))))
         except (TypeError, ValueError):
             pass
 
