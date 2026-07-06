@@ -1201,16 +1201,15 @@ class ActiveLearnerPlugin(Star):
         if self._cfg_llm_provider_id and self._provider_exists(self._cfg_llm_provider_id):
             return self._cfg_llm_provider_id
 
-        # 3. 事件 scope 默认（async）
-        if umo:
-            method = getattr(self.context, "get_current_chat_provider_id", None)
-            if callable(method):
-                try:
-                    pid = await method(umo=umo)
-                    if pid and self._provider_exists(pid):
-                        return pid
-                except Exception:
-                    pass
+        # 3. 事件 scope 默认（async），尝试调用 get_current_chat_provider_id
+        method = getattr(self.context, "get_current_chat_provider_id", None)
+        if callable(method):
+            try:
+                pid = await method(umo=umo) if umo else await method()
+                if pid and self._provider_exists(pid):
+                    return pid
+            except Exception:
+                pass
 
         # 4. 同步兜底
         return self._resolve_default_provider_id()
