@@ -53,6 +53,13 @@
         "hint": "需要自行 pip install bilibili-api-python。不可用时 search_bilibili 工具会回退到普通网页搜索（site:bilibili.com）",
         "default": false
     },
+    "verifier_search_source": {
+        "description": "验证搜索源",
+        "type": "string",
+        "options": ["auto", "web", "bilibili", "web+bilibili", "llm"],
+        "hint": "验证记忆时使用的搜索源。auto=有API就用网页搜索+B站，没API则LLM；web=仅网页搜索(Tavily/BoCha/Brave)；bilibili=仅B站；web+bilibili=网页+B站；llm=纯LLM验证不搜索。",
+        "default": "auto"
+    },
     "debate_rounds": {
         "description": "质疑验证的自辩论轮数",
         "type": "int",

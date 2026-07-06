@@ -22,6 +22,7 @@ const state = {
     chunk_size: 500,
     chunk_overlap: 50,
     admin_ids: "",
+    verifier_search_source: "auto",
   },
 };
 
@@ -602,6 +603,7 @@ async function loadSettings() {
       chunk_size: s.chunk_size || 500,
       chunk_overlap: s.chunk_overlap || 50,
       admin_ids: s.admin_ids || "",
+      verifier_search_source: s.verifier_search_source || "auto",
     };
     document.getElementById("settings-provider").value = state.settings.llm_provider_id || "";
     document.getElementById("settings-refine-search").checked = state.settings.refine_on_search;
@@ -615,6 +617,7 @@ async function loadSettings() {
     document.getElementById("settings-chunk-size").value = state.settings.chunk_size;
     document.getElementById("settings-chunk-overlap").value = state.settings.chunk_overlap;
     document.getElementById("settings-admin-ids").value = state.settings.admin_ids;
+    document.getElementById("settings-verifier-search-source").value = state.settings.verifier_search_source;
     updateNoProviderHint(state.settings.llm_provider_id);
   } catch (e) {
     showToast(`加载设置失败: ${e.message}`, true);
@@ -643,6 +646,7 @@ async function saveSettings() {
     chunk_size: parseInt(document.getElementById("settings-chunk-size").value, 10) || 500,
     chunk_overlap: parseInt(document.getElementById("settings-chunk-overlap").value, 10) || 50,
     admin_ids: document.getElementById("settings-admin-ids").value,
+    verifier_search_source: document.getElementById("settings-verifier-search-source").value,
   };
   try {
     const result = await bridge.apiPost("settings", payload);
@@ -658,6 +662,7 @@ async function saveSettings() {
       chunk_size: result.chunk_size || 500,
       chunk_overlap: result.chunk_overlap || 50,
       admin_ids: result.admin_ids || "",
+      verifier_search_source: result.verifier_search_source || "auto",
     };
     showToast("设置已保存");
     closeSettingsModal();

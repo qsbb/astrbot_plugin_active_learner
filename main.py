@@ -1396,6 +1396,7 @@ class ActiveLearnerPlugin(Star):
             "default_confidence": float(data.get("default_confidence", 0.6)),
             "chunk_size": int(data.get("chunk_size", 500)),
             "chunk_overlap": int(data.get("chunk_overlap", 50)),
+            "verifier_search_source": str(data.get("verifier_search_source", "auto") or "auto"),
         })
 
     def _load_schema(self) -> dict:

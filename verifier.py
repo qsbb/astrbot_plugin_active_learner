@@ -62,6 +62,10 @@ class Verifier:
     def __init__(self, plugin):
         self._plugin = plugin
 
+    def _get_search_source(self) -> str:
+        """读取验证搜索源配置。"""
+        return str(self._plugin.config.get("verifier_search_source", "auto") or "auto").lower()
+
     async def run(
         self,
         entry: MemoryEntry,
@@ -70,29 +74,40 @@ class Verifier:
     ) -> VerificationResult:
         """对一条记忆执行验证流程。
 
-        当外部搜索源充足（≥2）时，使用多源交叉验证。
-        当外部搜索源不足时，降级为纯 LLM 验证（基于模型自身知识判断）。
+        根据 verifier_search_source 配置选择搜索源：
+        - auto: 有搜索 API 就用网页+B站，没有则 LLM
+        - web: 仅网页搜索
+        - bilibili: 仅 B 站
+        - web+bilibili: 网页+B 站
+        - llm: 纯 LLM 验证不搜索
         """
         claim = claim or entry.content
         topic = entry.topic
+        source_cfg = self._get_search_source()
 
-        # 1. 多源搜索
-        sources = await self._collect_sources(topic, claim)
-        llm_only = len(sources) < 2
+        # 1. 搜索源选择
+        if source_cfg == "llm":
+            sources: list[dict] = []
+            llm_only = True
+        else:
+            sources = await self._collect_sources(topic, claim, source_cfg)
+            llm_only = len(sources) < 2
 
-        if llm_only:
+        if llm_only and source_cfg != "llm":
             logger.info(
-                f"外部搜索源不足({len(sources)}个)，降级为纯 LLM 验证: {topic}"
+                f"搜索源不足({len(sources)}个, cfg={source_cfg})，降级为纯 LLM 验证: {topic}"
             )
+        elif source_cfg == "llm":
+            logger.info(f"配置为纯 LLM 验证: {topic}")
 
-        # 2. LLM 自辩论（纯 LLM 模式下 sources 传空，LLM 用自身知识判断）
+        # 2. LLM 自辩论
         debate_result = await self._llm_debate(
             topic, claim, sources, provider_id, llm_only=llm_only
         )
 
-        # 3. 交叉验证：检查来源一致性
+        # 3. 交叉验证
         if llm_only:
-            sources_consistent = True  # 无外部源，以 LLM 判断为准
+            sources_consistent = True
         else:
             sources_consistent = self._check_consistency(sources, debate_result)
 
@@ -143,42 +158,53 @@ class Verifier:
 
     # ---------- 内部方法 ----------
 
-    async def _collect_sources(self, topic: str, claim: str) -> list[dict]:
-        """从多个搜索源收集证据。"""
+    async def _collect_sources(
+        self, topic: str, claim: str, source_cfg: str = "auto"
+    ) -> list[dict]:
+        """根据配置从对应搜索源收集证据。"""
         sources: list[dict] = []
 
-        # 主搜索
-        results = await self._plugin.searcher.search(topic, max_results=5)
-        for r in results:
-            sources.append({
-                "title": r.get("title", ""),
-                "snippet": r.get("snippet", ""),
-                "url": r.get("url", ""),
-                "source_type": "web",
-            })
+        use_web = source_cfg in ("auto", "web", "web+bilibili")
+        use_bili = source_cfg in ("auto", "bilibili", "web+bilibili")
 
-        # 真假验证搜索
-        fact_results = await self._plugin.searcher.search(f"{claim} 真假 验证", max_results=3)
-        for r in fact_results:
-            if r.get("title") and r["title"][:30] not in {s["title"][:30] for s in sources}:
+        # 网页搜索
+        if use_web:
+            results = await self._plugin.searcher.search(topic, max_results=5)
+            for r in results:
                 sources.append({
                     "title": r.get("title", ""),
                     "snippet": r.get("snippet", ""),
                     "url": r.get("url", ""),
-                    "source_type": "web_factcheck",
+                    "source_type": "web",
                 })
 
-        # B 站搜索（可选）
-        if self._plugin.bili_source and self._plugin.bili_source.is_available():
-            try:
-                bili_results = await self._plugin.bili_source.search(topic, limit=3)
-                for r in bili_results:
+            # 真假验证搜索
+            fact_results = await self._plugin.searcher.search(
+                f"{claim} 真假 验证", max_results=3
+            )
+            for r in fact_results:
+                if r.get("title") and r["title"][:30] not in {
+                    s["title"][:30] for s in sources
+                }:
                     sources.append({
                         "title": r.get("title", ""),
                         "snippet": r.get("snippet", ""),
                         "url": r.get("url", ""),
-                        "source_type": "bilibili",
+                        "source_type": "web_factcheck",
                     })
+
+        # B 站搜索
+        if use_bili and self._plugin.bili_source:
+            try:
+                if self._plugin.bili_source.is_available():
+                    bili_results = await self._plugin.bili_source.search(topic, limit=3)
+                    for r in bili_results:
+                        sources.append({
+                            "title": r.get("title", ""),
+                            "snippet": r.get("snippet", ""),
+                            "url": r.get("url", ""),
+                            "source_type": "bilibili",
+                        })
             except Exception as e:
                 logger.debug(f"B 站搜索失败: {e}")
 

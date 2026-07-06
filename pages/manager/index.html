@@ -173,6 +173,20 @@
         </div>
 
         <div class="settings-section">
+          <div class="settings-label">验证搜索源</div>
+          <div class="settings-row">
+            <span class="settings-label-sm">验证记忆时使用的搜索源</span>
+            <select id="settings-verifier-search-source" class="settings-text">
+              <option value="auto">自动（有API用网页+B站，没API用LLM）</option>
+              <option value="web">仅网页搜索（Tavily/BoCha/Brave）</option>
+              <option value="bilibili">仅 B 站搜索</option>
+              <option value="web+bilibili">网页 + B 站</option>
+              <option value="llm">纯 LLM 验证（不搜索）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <div class="settings-label">文档分块</div>
           <div class="settings-row">
             <span class="settings-label-sm">分块大小（字符数）</span>
