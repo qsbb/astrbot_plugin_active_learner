@@ -1097,8 +1097,21 @@ class ActiveLearnerPlugin(Star):
         if not provider_id:
             provider_id = await self._resolve_plugin_provider_id()
         if not provider_id:
+            # 诊断信息：列出当前可用的解析路径状态
+            settings_pid = self._settings.get("llm_provider_id") or ""
+            cfg_pid = self._cfg_llm_provider_id or ""
+            pm = getattr(self.context, "provider_manager", None)
+            pm_providers = []
+            if pm is not None:
+                for p in getattr(pm, "providers", None) or []:
+                    pm_providers.append(str(getattr(p, "id", "") or getattr(p, "name", "")))
+            logger.warning(
+                f"provider 解析失败: settings_pid={settings_pid!r}, cfg_pid={cfg_pid!r}, "
+                f"pm_providers={pm_providers}"
+            )
             return error_response(
-                "无法确定 LLM provider，请在请求体中指定 provider_id",
+                "无法确定 LLM provider。请在插件配置中设置 llm_provider_id，"
+                "或在 Dashboard 设置页选择一个模型。",
                 status_code=400,
             )
         try:

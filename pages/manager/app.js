@@ -259,7 +259,9 @@ async function showDetail(entryId) {
       bridge.apiGet(`memory/${entryId}/versions`),
     ]);
     title.textContent = `详情：${entry.topic}`;
-    const kw = (entry.keywords || "").split(/\s+/).filter(Boolean).join(", ") || "—";
+    const rawKw = entry.keywords || [];
+    const kwArr = Array.isArray(rawKw) ? rawKw : String(rawKw).split(/\s+/).filter(Boolean);
+    const kw = kwArr.join(", ") || "—";
     const versions = versionsResp.items || [];
     body.innerHTML = `
       <div class="detail-grid">
