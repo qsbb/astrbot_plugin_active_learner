@@ -68,31 +68,38 @@ class Verifier:
         provider_id: str,
         claim: Optional[str] = None,
     ) -> VerificationResult:
-        """对一条记忆执行验证流程。"""
+        """对一条记忆执行验证流程。
+
+        当外部搜索源充足（≥2）时，使用多源交叉验证。
+        当外部搜索源不足时，降级为纯 LLM 验证（基于模型自身知识判断）。
+        """
         claim = claim or entry.content
         topic = entry.topic
 
         # 1. 多源搜索
         sources = await self._collect_sources(topic, claim)
-        if len(sources) < 2:
-            return VerificationResult(
-                verdict="inconclusive",
-                confidence=entry.confidence,
-                content=entry.content,
-                reasoning="无法收集到足够的独立来源进行验证，建议稍后重试或换用更强的搜索源。",
-                sources_count=len(sources),
-                sources_consistent=False,
+        llm_only = len(sources) < 2
+
+        if llm_only:
+            logger.info(
+                f"外部搜索源不足({len(sources)}个)，降级为纯 LLM 验证: {topic}"
             )
 
-        # 2. LLM 自辩论
-        debate_result = await self._llm_debate(topic, claim, sources, provider_id)
+        # 2. LLM 自辩论（纯 LLM 模式下 sources 传空，LLM 用自身知识判断）
+        debate_result = await self._llm_debate(
+            topic, claim, sources, provider_id, llm_only=llm_only
+        )
 
         # 3. 交叉验证：检查来源一致性
-        sources_consistent = self._check_consistency(sources, debate_result)
+        if llm_only:
+            sources_consistent = True  # 无外部源，以 LLM 判断为准
+        else:
+            sources_consistent = self._check_consistency(sources, debate_result)
 
         # 4. 计算最终置信度
         new_confidence = self._adjust_confidence(
-            entry.confidence, debate_result.verdict, sources_consistent
+            entry.confidence, debate_result.verdict, sources_consistent,
+            llm_only=llm_only,
         )
 
         # 5. 决定是否更新内容
@@ -105,10 +112,9 @@ class Verifier:
         # 6. 版本快照 + 更新记忆
         verified = (
             debate_result.verdict == "correct"
-            and sources_consistent
             and new_confidence >= 0.6
         )
-        reason = self._reason_tag(debate_result.verdict, sources_consistent)
+        reason = self._reason_tag(debate_result.verdict, sources_consistent, llm_only=llm_only)
 
         self._plugin.store.update_content(
             entry_id=entry.id,
@@ -186,36 +192,55 @@ class Verifier:
         claim: str,
         sources: list[dict],
         provider_id: str,
+        llm_only: bool = False,
     ) -> "_DebateResult":
-        """LLM 自辩论：支持方 → 质疑方 → 仲裁。"""
-        sources_text = "\n---\n".join(
-            f"[来源{i+1}] ({s['source_type']}) {s['title']}\n{s['snippet']}"
-            for i, s in enumerate(sources[:8])
-        )
+        """LLM 自辩论：支持方 → 质疑方 → 仲裁。
+
+        llm_only=True 时无外部搜索源，LLM 基于自身知识判断。
+        """
+        if sources:
+            sources_text = "\n---\n".join(
+                f"[来源{i+1}] ({s['source_type']}) {s['title']}\n{s['snippet']}"
+                for i, s in enumerate(sources[:8])
+            )
+        else:
+            sources_text = "（无外部搜索源，请基于你的知识库判断）"
 
         # Round A：支持方
-        prompt_a = (
-            f"你是一个严谨的事实核查员，现在需要为以下说法**寻找支持证据**。\n\n"
-            f"主题: {topic}\n说法: {claim}\n\n"
-            f"搜索来源:\n{sources_text}\n\n"
-            f"请基于以上来源，论证该说法是否成立。\n"
-            f"要求:\n"
-            f"1. 引用具体来源编号（如 [来源1]）\n"
-            f"2. 给出置信度评分（0-100）\n"
-            f"3. 不要编造来源中不存在的信息\n"
-            f"4. 200 字以内"
-        )
+        if llm_only:
+            prompt_a = (
+                f"你是一个严谨的事实核查员。请基于你的知识，判断以下说法是否成立。\n\n"
+                f"主题: {topic}\n说法: {claim}\n\n"
+                f"请从你的知识出发，论证该说法是否成立。\n"
+                f"要求:\n"
+                f"1. 给出置信度评分（0-100）\n"
+                f"2. 如果不确定，请明确说明\n"
+                f"3. 200 字以内"
+            )
+        else:
+            prompt_a = (
+                f"你是一个严谨的事实核查员，现在需要为以下说法**寻找支持证据**。\n\n"
+                f"主题: {topic}\n说法: {claim}\n\n"
+                f"搜索来源:\n{sources_text}\n\n"
+                f"请基于以上来源，论证该说法是否成立。\n"
+                f"要求:\n"
+                f"1. 引用具体来源编号（如 [来源1]）\n"
+                f"2. 给出置信度评分（0-100）\n"
+                f"3. 不要编造来源中不存在的信息\n"
+                f"4. 200 字以内"
+            )
         reply_a = await self._safe_llm_generate(provider_id, prompt_a)
 
         # Round B：质疑方
         prompt_b = (
             f"你是一个挑刺的质疑者，请反驳以下『支持方论证』。\n\n"
-            f"主题: {topic}\n原说法: {claim}\n搜索来源:\n{sources_text}\n\n"
-            f"支持方论证:\n{reply_a}\n\n"
+            f"主题: {topic}\n原说法: {claim}\n"
+            + (f"搜索来源:\n{sources_text}\n\n" if not llm_only else "")
+            + f"支持方论证:\n{reply_a}\n\n"
             f"请指出支持方论证中的:\n"
             f"1. 事实错误或偷换概念\n"
-            f"2. 来源不足或引用偏差\n"
-            f"3. 逻辑漏洞\n"
+            + ("2. 来源不足或引用偏差\n" if not llm_only else "2. 知识盲区或过时信息\n")
+            + f"3. 逻辑漏洞\n"
             f"4. 给出你的置信度评分（0-100，越低越怀疑）\n"
             f"5. 200 字以内"
         )
@@ -289,19 +314,24 @@ class Verifier:
             return True
         return False
 
-    def _adjust_confidence(self, old: float, verdict: str, consistent: bool) -> float:
+    def _adjust_confidence(
+        self, old: float, verdict: str, consistent: bool, llm_only: bool = False
+    ) -> float:
         """根据验证结果调整置信度。"""
         if verdict == "correct":
-            return min(1.0, old + (0.15 if consistent else 0.05))
+            boost = 0.10 if llm_only else (0.15 if consistent else 0.05)
+            return min(1.0, old + boost)
         if verdict == "wrong":
             return max(0.1, old - 0.3)
         if verdict == "partial":
             return max(0.2, old - 0.1)
         return old  # inconclusive 保持不变
 
-    def _reason_tag(self, verdict: str, consistent: bool) -> str:
+    def _reason_tag(
+        self, verdict: str, consistent: bool, llm_only: bool = False
+    ) -> str:
         if verdict == "correct" and consistent:
-            return "verify_passed"
+            return "verify_passed_llm" if llm_only else "verify_passed"
         if verdict == "wrong":
             return "challenge_corrected"
         if verdict == "partial":
