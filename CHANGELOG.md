@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.0.1] - 2026-07-07
+## [2.6.7.0] - 2026-07-07
 
 ### 首个正式发布版本
 
