@@ -478,6 +478,20 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <!-- 确认弹窗 -->
+  <div id="confirm-modal" class="modal hidden" role="alertdialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card" style="max-width:420px">
+      <div class="modal-body">
+        <p id="confirm-msg" style="margin:0;font-size:14px;line-height:1.6"></p>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="confirm-cancel">取消</button>
+        <button type="button" id="confirm-ok" class="danger">确认删除</button>
+      </footer>
+    </div>
+  </div>
+
   <script src="/api/plugin/page/bridge-sdk.js"></script>
   <script type="module" src="./app.js"></script>
 </body>

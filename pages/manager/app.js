@@ -172,9 +172,34 @@ function _updateSelectionToolbar() {
   countEl.textContent = count ? `已选 ${count} 条` : "";
 }
 
+function _confirmModal(msg, okText = "确认删除") {
+  return new Promise((resolve) => {
+    const modal = document.getElementById("confirm-modal");
+    const msgEl = document.getElementById("confirm-msg");
+    const okBtn = document.getElementById("confirm-ok");
+    const cancelBtn = document.getElementById("confirm-cancel");
+    msgEl.textContent = msg;
+    okBtn.textContent = okText;
+    modal.classList.remove("hidden");
+
+    const cleanup = () => {
+      modal.classList.add("hidden");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      modal.querySelector(".modal-backdrop").removeEventListener("click", onCancel);
+    };
+    function onOk() { cleanup(); resolve(true); }
+    function onCancel() { cleanup(); resolve(false); }
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    modal.querySelector(".modal-backdrop").addEventListener("click", onCancel);
+  });
+}
+
 async function _batchDelete(ids) {
   if (!ids.length) return;
-  const confirmed = confirm(`确定删除选中的 ${ids.length} 条记忆？此操作不可恢复。`);
+  const confirmed = await _confirmModal(`确定删除选中的 ${ids.length} 条记忆？此操作不可恢复。`);
   if (!confirmed) return;
   const btn = document.getElementById("btn-batch-delete");
   if (btn) btn.disabled = true;
@@ -311,7 +336,8 @@ async function verifyMemory(entryId, btn) {
 }
 
 async function forgetMemory(entryId) {
-  if (!confirm("确认删除该条记忆？此操作不可撤销（版本会留痕）。")) return;
+  const confirmed = await _confirmModal("确认删除该条记忆？此操作不可撤销，版本会留痕。");
+  if (!confirmed) return;
   try {
     await bridge.apiPost(`memory/${entryId}/forget`, {});
     showToast("已删除");
