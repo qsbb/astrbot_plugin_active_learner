@@ -126,6 +126,12 @@ class Verifier:
             snapshot=True,
         )
 
+        mode_tag = "LLM-only" if llm_only else f"{len(sources)}源"
+        logger.info(
+            f"✅ 验证完成 [{mode_tag}]: {topic} → {debate_result.verdict} "
+            f"(置信度: {new_confidence:.0%}, verified={verified})"
+        )
+
         return VerificationResult(
             verdict=debate_result.verdict,
             confidence=new_confidence,
