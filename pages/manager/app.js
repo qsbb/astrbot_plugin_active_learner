@@ -278,8 +278,9 @@ async function batchVerifySelected() {
     showToast("请先选择需要验证的记忆", true);
     return;
   }
+  const CONCURRENCY = 3;
   const confirmed = await _confirmModal(
-    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。`,
+    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。\n将并发执行（最多 ${CONCURRENCY} 条同时验证）。`,
     "确认验证"
   );
   if (!confirmed) return;
@@ -287,18 +288,33 @@ async function batchVerifySelected() {
   if (btn) btn.disabled = true;
   const providerSelect = document.getElementById("settings-provider");
   const providerId = providerSelect ? providerSelect.value : "";
-  let ok = 0, fail = 0;
-  for (let i = 0; i < ids.length; i++) {
-    const id = ids[i];
-    if (btn) btn.textContent = `验证中… (${i + 1}/${ids.length})`;
-    try {
-      await bridge.apiPost(`memory/${id}/verify`, { provider_id: providerId });
-      ok++;
-    } catch (e) {
-      console.error(`批量验证失败 (id=${id}):`, e);
-      fail++;
+
+  const total = ids.length;
+  let ok = 0, fail = 0, done = 0;
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < ids.length) {
+      const idx = nextIndex++;
+      const id = ids[idx];
+      try {
+        await bridge.apiPost(`memory/${id}/verify`, { provider_id: providerId });
+        ok++;
+      } catch (e) {
+        console.error(`批量验证失败 (id=${id}):`, e);
+        fail++;
+      }
+      done++;
+      if (btn) btn.textContent = `验证中… (${done}/${total})`;
     }
   }
+
+  const workers = [];
+  for (let i = 0; i < Math.min(CONCURRENCY, ids.length); i++) {
+    workers.push(worker());
+  }
+  await Promise.all(workers);
+
   if (btn) {
     btn.disabled = false;
     btn.textContent = "批量验证";
