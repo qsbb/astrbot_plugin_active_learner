@@ -107,6 +107,17 @@ CREATE TABLE IF NOT EXISTS slang_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_slang_pending
   ON slang_candidates(scope_type, scope_id, learned, occurrences DESC);
+
+CREATE TABLE IF NOT EXISTS llm_token_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts REAL NOT NULL,
+  provider_id TEXT NOT NULL,
+  prompt_tokens INTEGER DEFAULT 0,
+  completion_tokens INTEGER DEFAULT 0,
+  total_tokens INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_token_ts ON llm_token_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_token_provider ON llm_token_usage(provider_id);
 """
 
 # 查询用列顺序（与 MemoryEntry.from_row 对齐，含 keywords + v1.1.2 新字段 + v1.1.6.5 origin）
@@ -903,6 +914,98 @@ class MemoryStore:
                 "scope_type": None,
                 "scope_id": None,
             }
+
+    # ---------- LLM token 用量统计 ----------
+
+    def record_token_usage(
+        self, provider_id: str, prompt_tokens: int, completion_tokens: int
+    ) -> None:
+        """记录一次 LLM 调用的 token 用量。"""
+        total = prompt_tokens + completion_tokens
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO llm_token_usage (ts, provider_id, prompt_tokens, completion_tokens, total_tokens) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (now_ts(), provider_id, prompt_tokens, completion_tokens, total),
+            )
+
+    def get_token_usage_stats(self) -> dict:
+        """返回按时间窗口（1天/3天/7天/总计）的 token 用量统计。
+
+        每个窗口含：prompt_tokens / completion_tokens / total_tokens / calls。
+        另返回 per_provider：近7天按 provider 分组统计。
+        """
+        now = now_ts()
+        windows = {"1d": 86400, "3d": 86400 * 3, "7d": 86400 * 7}
+        result = {}
+        with self._lock:
+            for label, secs in windows.items():
+                cutoff = now - secs
+                row = self._conn.execute(
+                    """SELECT
+                        COALESCE(SUM(prompt_tokens), 0) AS prompt,
+                        COALESCE(SUM(completion_tokens), 0) AS completion,
+                        COALESCE(SUM(total_tokens), 0) AS total,
+                        COUNT(*) AS calls
+                       FROM llm_token_usage WHERE ts >= ?""",
+                    (cutoff,),
+                ).fetchone()
+                result[label] = {
+                    "prompt_tokens": row["prompt"],
+                    "completion_tokens": row["completion"],
+                    "total_tokens": row["total"],
+                    "calls": row["calls"],
+                }
+            # 总计（全部记录）
+            row = self._conn.execute(
+                """SELECT
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt,
+                    COALESCE(SUM(completion_tokens), 0) AS completion,
+                    COALESCE(SUM(total_tokens), 0) AS total,
+                    COUNT(*) AS calls
+                   FROM llm_token_usage""",
+            ).fetchone()
+            result["total"] = {
+                "prompt_tokens": row["prompt"],
+                "completion_tokens": row["completion"],
+                "total_tokens": row["total"],
+                "calls": row["calls"],
+            }
+            # 近7天按 provider 分组
+            cutoff_7d = now - 86400 * 7
+            rows = self._conn.execute(
+                """SELECT
+                    provider_id,
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt,
+                    COALESCE(SUM(completion_tokens), 0) AS completion,
+                    COALESCE(SUM(total_tokens), 0) AS total,
+                    COUNT(*) AS calls
+                   FROM llm_token_usage
+                   WHERE ts >= ?
+                   GROUP BY provider_id
+                   ORDER BY total DESC""",
+                (cutoff_7d,),
+            ).fetchall()
+            result["per_provider"] = [
+                {
+                    "provider_id": r["provider_id"],
+                    "prompt_tokens": r["prompt"],
+                    "completion_tokens": r["completion"],
+                    "total_tokens": r["total"],
+                    "calls": r["calls"],
+                }
+                for r in rows
+            ]
+        return result
+
+    def cleanup_old_token_usage(self, days: int = 30) -> int:
+        """删除超过 N 天的 token 用量记录，返回删除条数。"""
+        cutoff = now_ts() - days * 86400
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM llm_token_usage WHERE ts < ?", (cutoff,)
+            )
+            return cur.rowcount or 0
 
     def list_all_memories(
         self,

@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.6.5",
+    "1.1.7.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -231,7 +231,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.6.5 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.7.0 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -241,6 +241,14 @@ class ActiveLearnerPlugin(Star):
             )
         except Exception as e:
             logger.warning(f"数据库状态检查失败: {e}")
+
+        # 清理超过 30 天的 token 用量记录，防止无限增长
+        try:
+            deleted = self.store.cleanup_old_token_usage(days=30)
+            if deleted > 0:
+                logger.info(f"已清理 {deleted} 条过期 token 用量记录（>30天）")
+        except Exception as e:
+            logger.debug(f"token 用量清理失败（不影响运行）: {e}")
 
         # v1.1.4.0：群黑话捕获特性状态
         if self._enable_slang_capture:
@@ -1075,6 +1083,7 @@ class ActiveLearnerPlugin(Star):
             "priority_topics": self._priority_topics,
             "priority_boost": round(self._priority_boost, 2),
             "tools_registered": [t.name for t in self._tools],
+            "token_stats": self.llm_service.get_token_stats(),
         })
 
     @staticmethod

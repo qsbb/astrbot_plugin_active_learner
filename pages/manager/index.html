@@ -46,11 +46,6 @@
       <div class="stat-card"><div class="stat-label">总访问次数</div><div class="stat-value" data-stat="access_total">—</div></div>
     </section>
 
-    <details id="debug-panel" class="debug-panel">
-      <summary>🔧 诊断信息</summary>
-      <div id="debug-content" class="debug-content">加载中…</div>
-    </details>
-
     <details id="verify-detail-panel" class="debug-panel" style="display:none;">
       <summary>🔬 上次验证详情</summary>
       <div id="verify-detail-content" class="debug-content"></div>
@@ -210,8 +205,24 @@
         </div>
       </div>
       <footer class="modal-footer">
+        <button type="button" id="btn-diagnostic">🔧 诊断信息</button>
         <button type="button" id="settings-cancel">取消</button>
         <button type="button" id="settings-save" class="primary">保存</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="diagnostic-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2>🔧 诊断信息</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div id="diagnostic-content" class="modal-body debug-content">加载中…</div>
+      <footer class="modal-footer">
+        <button type="button" id="diagnostic-refresh">刷新</button>
+        <button type="button" id="diagnostic-close" class="primary">关闭</button>
       </footer>
     </div>
   </div>

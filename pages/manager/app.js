@@ -450,7 +450,6 @@ async function refreshAll() {
     loadScopes(),
     loadStats(),
     loadMemories(),
-    loadDebug(),
     loadProviders(),
     loadSettings(),
   ]);
@@ -540,14 +539,70 @@ function stopLogPolling() {
 }
 
 async function loadDebug() {
-  const el = document.getElementById("debug-content");
+  const el = document.getElementById("diagnostic-content");
   if (!el) return;
+  el.innerHTML = '<span class="muted">加载中…</span>';
   try {
     const d = await bridge.apiGet("debug");
     const scopesList = (d.scopes || [])
       .map((s) => `<li>${escapeHtml(s.scope_type)}:${escapeHtml(s.scope_id)} — ${s.count} 条</li>`)
       .join("");
     const toolsList = (d.tools_registered || []).join(", ") || "（无）";
+    // token 统计：1天 / 3天 / 7天 / 总计 + 近7天按 provider 分组
+    const ts = d.token_stats || {};
+    const fmtNum = (n) => (n ?? 0).toLocaleString("en-US");
+    const w1 = ts["1d"] || { total_tokens: 0, calls: 0 };
+    const w3 = ts["3d"] || { total_tokens: 0, calls: 0 };
+    const w7 = ts["7d"] || { total_tokens: 0, calls: 0 };
+    const wt = ts["total"] || { total_tokens: 0, calls: 0 };
+    const hasData = (wt.calls || 0) > 0;
+    const tokenHtml = hasData ? `
+      <div class="debug-section">
+        <dt>📊 Token 用量统计</dt>
+        <dd class="token-stats-box">
+          <div class="token-windows">
+            <div class="token-window">
+              <div class="token-window-label">近 1 天</div>
+              <div class="token-window-value">${fmtNum(w1.total_tokens)}</div>
+              <div class="token-window-sub">${fmtNum(w1.calls)} 次调用</div>
+            </div>
+            <div class="token-window">
+              <div class="token-window-label">近 3 天</div>
+              <div class="token-window-value">${fmtNum(w3.total_tokens)}</div>
+              <div class="token-window-sub">${fmtNum(w3.calls)} 次调用</div>
+            </div>
+            <div class="token-window">
+              <div class="token-window-label">近 7 天</div>
+              <div class="token-window-value">${fmtNum(w7.total_tokens)}</div>
+              <div class="token-window-sub">${fmtNum(w7.calls)} 次调用</div>
+            </div>
+            <div class="token-window token-window-total">
+              <div class="token-window-label">总计</div>
+              <div class="token-window-value">${fmtNum(wt.total_tokens)}</div>
+              <div class="token-window-sub">${fmtNum(wt.calls)} 次调用</div>
+            </div>
+          </div>
+          ${ts.estimated_calls > 0 ? `<p class="token-hint">⚠ 本轮运行中 ${ts.estimated_calls} 次为字符估算（provider 未返回 usage）</p>` : ""}
+          ${(ts.per_provider || []).length ? `
+            <div class="token-provider-title">近 7 天按 Provider 明细</div>
+            <table class="token-table">
+              <thead><tr><th>Provider</th><th>输入</th><th>输出</th><th>合计</th><th>调用</th></tr></thead>
+              <tbody>
+                ${ts.per_provider.map((p) => `
+                  <tr>
+                    <td>${escapeHtml(p.provider_id || "—")}</td>
+                    <td>${fmtNum(p.prompt_tokens)}</td>
+                    <td>${fmtNum(p.completion_tokens)}</td>
+                    <td>${fmtNum(p.total_tokens)}</td>
+                    <td>${fmtNum(p.calls)}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          ` : ""}
+        </dd>
+      </div>
+    ` : `<div class="debug-section"><dt>📊 Token 用量统计</dt><dd>尚无 LLM 调用记录</dd></div>`;
     el.innerHTML = `
       <dl>
         <dt>数据库路径</dt><dd>${escapeHtml(d.db_path || "—")}</dd>
@@ -558,11 +613,21 @@ async function loadDebug() {
         <dt>关心领域</dt><dd>${d.priority_topics && d.priority_topics.length ? escapeHtml(d.priority_topics.join(", ")) : "（未设置）"}</dd>
         <dt>当前 Boost</dt><dd>${d.priority_boost ?? "—"}</dd>
       </dl>
+      ${tokenHtml}
       ${scopesList ? `<div class="debug-section"><dt>Scope 列表</dt><ul class="debug-scope-list">${scopesList}</ul></div>` : ""}
     `;
   } catch (e) {
     el.innerHTML = `<span class="error-msg">诊断加载失败：${escapeHtml(e.message)}</span>`;
   }
+}
+
+function openDiagnosticModal() {
+  document.getElementById("diagnostic-modal").classList.remove("hidden");
+  loadDebug();
+}
+
+function closeDiagnosticModal() {
+  document.getElementById("diagnostic-modal").classList.add("hidden");
 }
 
 function bindEvents() {
@@ -832,8 +897,25 @@ function bindSettingsEvents() {
     document.getElementById("settings-learn-weight-val").textContent = e.target.value;
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeSettingsModal();
+    if (e.key === "Escape") {
+      const diag = document.getElementById("diagnostic-modal");
+      if (diag && !diag.classList.contains("hidden")) {
+        closeDiagnosticModal();
+      } else {
+        closeSettingsModal();
+      }
+    }
   });
+
+  // 诊断信息：设置页内按钮 → 打开诊断 modal
+  document.getElementById("btn-diagnostic").addEventListener("click", openDiagnosticModal);
+  // 诊断 modal 的关闭按钮 / 背景点击 / 关闭按钮
+  document
+    .querySelectorAll("#diagnostic-modal .modal-close, #diagnostic-modal .modal-backdrop, #diagnostic-close")
+    .forEach((el) => {
+      el.addEventListener("click", closeDiagnosticModal);
+    });
+  document.getElementById("diagnostic-refresh").addEventListener("click", loadDebug);
 }
 
 // ---------- Import Modal ----------

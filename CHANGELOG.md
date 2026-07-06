@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.7.0] - 2026-07-07
+
+### 新增
+
+- **诊断信息弹窗化**：诊断信息从页面内联面板改为设置页内的按钮触发弹窗
+  - 设置 modal footer 新增「🔧 诊断信息」按钮，点击弹出独立诊断弹窗
+  - 弹窗显示数据库路径、schema 版本、记忆数、Embedder 状态、已注册工具、关心领域等
+  - 支持 ✕ / 背景点击 / 「关闭」按钮 / Escape 键关闭
+  - 「刷新」按钮可手动重新加载诊断数据
+- **LLM token 用量统计（持久化 + 时间窗口）**：统计插件所有 LLM 调用的 token 消耗
+  - **数据库**：新增 `llm_token_usage` 表，记录每次 LLM 调用的时间戳、provider、prompt/completion token 数
+  - **时间窗口显示**：诊断弹窗显示 4 个时间窗口卡片——近 1 天 / 近 3 天 / 近 7 天 / 总计
+  - **Provider 明细**：近 7 天按 provider 分组的 token 用量表（输入/输出/合计/调用次数）
+  - **token 提取策略**：优先从 LLM 响应对象读取真实 usage（`resp.usage` / `resp.prompt_tokens` / `resp.total_tokens`），读取不到时按字符估算（中文 ~1.5 字符/token，英文 ~4 字符/token）
+  - **自动清理**：启动时自动删除超过 30 天的旧记录，防止无限增长
+  - 诊断弹窗中显示估算调用次数提示（如有）
+
+### 变更
+
+- **`refreshAll()` 不再自动加载诊断信息**：改为按钮点击触发，避免页面加载时不必要的 API 调用
+
 ## [1.1.6.5] - 2026-07-07
 
 ### 新增
