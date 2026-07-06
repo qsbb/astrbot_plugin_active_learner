@@ -419,26 +419,21 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
-        # 3. 主动学习提示（v2.6.5.4：始终注入工具提醒，不限于无记忆命中）
+        # 3. 主动学习提示（v2.6.6.0：所有用户按 learn_weight 触发，不限于管理员）
         if self._enable_active_learn_hint:
-            if self._is_admin_user(event):
-                if not hits:
-                    hint = self._get_learn_prompt()
-                    if hint:
-                        self._active_learn_hinted = True
-                        parts.append(hint)
-                    else:
-                        logger.info(
-                            f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})"
-                        )
-                elif self._learn_weight >= 0.5:
-                    # v2.6.5.4：即使有记忆命中，也注入简短工具提醒
-                    parts.append(
-                        "（如果用户提供了你原本不掌握的新知识点，可调用 search_and_learn 工具学习）"
+            if not hits:
+                hint = self._get_learn_prompt()
+                if hint:
+                    self._active_learn_hinted = True
+                    parts.append(hint)
+                else:
+                    logger.info(
+                        f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})"
                     )
-            else:
-                logger.info(
-                    f"ℹ️ 当前用户非管理员，跳过主动学习 (scope: {scope})"
+            elif self._learn_weight >= 0.5:
+                # 即使有记忆命中，也注入简短工具提醒
+                parts.append(
+                    "（如果用户提供了你原本不掌握的新知识点，可调用 search_and_learn 工具学习）"
                 )
         else:
             self._active_learn_hinted = False
@@ -497,10 +492,8 @@ class ActiveLearnerPlugin(Star):
 
     async def _post_learn_analysis(self, event: AstrMessageEvent, response) -> None:
         """回复完成后，异步分析对话是否包含可学习知识点，自动存入记忆库。"""
-        # 1. 权限与开关检查
+        # 1. 开关检查
         if not self._enable_active_learn_hint or self._learn_weight <= 0.0:
-            return
-        if not self._is_admin_user(event):
             return
 
         # 2. 提取用户消息
@@ -512,7 +505,24 @@ class ActiveLearnerPlugin(Star):
         if not user_msg or len(user_msg) < 5:
             return
 
-        # 3. 提取 LLM 回复
+        # 3. 管理员：只有包含明确学习意图（记住/学习/保存等）时才分析
+        if self._is_admin_user(event):
+            learn_intent = re.search(
+                r"(记住|记下来|学习|学一下|记一下|保存|存起来|存下|收录|记到知识|记到记忆|记入|收录到)",
+                user_msg,
+            )
+            if not learn_intent:
+                return
+            # 去掉学习指令，保留真正要学习的内容
+            user_msg = re.sub(
+                r"(?:请|帮我)?(?:记住|记下来|学习|学一下|记一下|保存|存起来|存下|收录|记到知识|记到记忆|记入|收录到)[：:的]?\s*",
+                "",
+                user_msg,
+            ).strip()
+            if not user_msg or len(user_msg) < 2:
+                return
+
+        # 4. 提取 LLM 回复
         llm_text = ""
         if hasattr(response, "completion_text"):
             llm_text = (getattr(response, "completion_text") or "").strip()
