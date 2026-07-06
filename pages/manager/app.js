@@ -279,7 +279,8 @@ async function batchVerifySelected() {
     return;
   }
   const confirmed = await _confirmModal(
-    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。`
+    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。`,
+    "确认验证"
   );
   if (!confirmed) return;
   const btn = document.getElementById("btn-batch-verify");

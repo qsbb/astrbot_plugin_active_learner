@@ -1,7 +1,7 @@
 name: astrbot_plugin_active_learner
 display_name: 主动学习记忆
 desc: 自动检索注入上下文、主动多源学习新知识、拟人化统一记忆池（软 scope 权重）、质疑时多源交叉验证与版本化
-version: 1.1.7.0
+version: 1.1.7.1
 author: lingxi
 repo: https://github.com/qsbb/astrbot_plugin_active_learner
 tags:
