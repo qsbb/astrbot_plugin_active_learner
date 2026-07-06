@@ -360,32 +360,29 @@ class ActiveLearnerPlugin(Star):
 
         @filter.on_llm_response()  # type: ignore[misc]
         async def on_llm_response(self, event: AstrMessageEvent, response):
-            """LLM 响应后追加 References footer（如果 on_llm_request 注入了记忆）。"""
+            """从 LLM 原始回复中移除 References block（防止 LLM 将其原样输出）。"""
             try:
                 injected_ids = getattr(event, "_injected_memory_ids", []) or []
                 if not injected_ids:
                     return
-                refs_entries = self.store.get_entries_by_ids(injected_ids[:5])
-                if not refs_entries:
-                    return
-                footer_lines = ["", "📚 参考资料:"]
-                for e in refs_entries:
-                    v_tag = "已验证" if e.verified else "待验证"
-                    footer_lines.append(f"- [{e.topic}] 置信度 {e.confidence:.0%} ({v_tag})")
-                footer = "\n".join(footer_lines)
-                completion = getattr(response, "completion_text", None)
-                if completion is not None:
+
+                # 从 LLM 原始回复中删除 "📚 参考资料:" 相关内容（正则匹配到行尾）
+                for attr in ("completion_text", "text"):
+                    raw = getattr(response, attr, None)
+                    if raw is None:
+                        continue
                     try:
-                        response.completion_text = completion + "\n" + footer
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        response.text = (response.text or "") + "\n" + footer
+                        cleaned = re.sub(
+                            r"\n*📚\s*参考资料:.*",
+                            "",
+                            raw,
+                            flags=re.DOTALL,
+                        ).rstrip("\n")
+                        setattr(response, attr, cleaned)
                     except Exception:
                         pass
             except Exception as e:
-                logger.debug(f"on_llm_response footer 失败: {e}")
+                logger.debug(f"on_llm_response cleanup 失败: {e}")
 
     # ---------- v2.6.0：群黑话被动捕获 + 定时批量学习 ----------
 
