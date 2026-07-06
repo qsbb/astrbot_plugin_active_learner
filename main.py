@@ -105,6 +105,16 @@ class ActiveLearnerPlugin(Star):
 
         # Phase 1：精炼器 + 自管设置
         self._cfg_llm_provider_id = (cfg.get("llm_provider_id") or "").strip()
+        if not self._cfg_llm_provider_id:
+            # 诊断：列出 cfg 中所有和 provider/llm 相关的 key
+            provider_keys = {
+                k: (str(v)[:80] if v else repr(v))
+                for k, v in cfg.items()
+                if any(x in k.lower() for x in ("provider", "llm", "model"))
+            }
+            logger.warning(
+                f"llm_provider_id 为空! cfg 中 provider 相关字段: {provider_keys}"
+            )
         self.refiner = KnowledgeRefiner(self)
         self._settings = SettingsStore(
             StarTools.get_data_dir() / "active_learner_settings.json"
