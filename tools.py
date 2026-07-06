@@ -151,17 +151,20 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         source_tag = f"网络搜索 ({len(sources)}个来源)"
         if refine_result.refined:
             source_tag += "+精炼"
-        entry = plugin.store.add_or_update(
-            scope=scope,
-            topic=topic,
-            content=summary,
-            keywords=keywords,
-            source=source_tag,
-            sources_detail=sources,
-            confidence=confidence,
-        )
+        try:
+            entry = await asyncio.to_thread(
+                plugin.store.add_or_update,
+                scope, topic, summary or search_text[:500],
+                keywords=keywords,
+                source=source_tag,
+                sources_detail=sources,
+                confidence=confidence,
+            )
+        except Exception as e:
+            logger.error(f"❌ 搜索学习存储失败「{topic}」: {e}", exc_info=True)
+            return (f"搜索学习「{topic}」失败（存储错误），请稍后重试。")
 
-        logger.info(f"已学习「{topic}」(置信度{confidence:.0%}, 来源{len(sources)}, refined={refine_result.refined}, scope: {scope})")
+        logger.info(f"✅ 已学习「{topic}」(id: {entry.id}, 置信度{confidence:.0%}, 来源{len(sources)}, refined={refine_result.refined}, scope: {scope})")
 
         return (
             f"已学习「{topic}」并存入记忆库。\n"
