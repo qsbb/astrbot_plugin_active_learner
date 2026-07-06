@@ -215,6 +215,37 @@ class ActiveLearnerPlugin(Star):
             pass
         return 0.4, 0.6
 
+    def _get_admin_ids(self) -> set[str]:
+        """从 AstrBot 全局配置中读取 wl_admin 管理员名单。"""
+        admins: set[str] = set()
+        # 尝试从 context.get_config() 读取全局配置
+        if hasattr(self.context, "get_config"):
+            try:
+                raw = self.context.get_config()
+                if isinstance(raw, dict):
+                    val = raw.get("wl_admin", [])
+                    if isinstance(val, list):
+                        admins.update(str(a) for a in val)
+            except Exception:
+                pass
+        # 兜底：从注入的 config 读取
+        cfg = getattr(self, "config", None) or {}
+        extra = cfg.get("wl_admin", [])
+        if isinstance(extra, list):
+            admins.update(str(a) for a in extra)
+        return admins
+
+    def _is_admin_user(self, event) -> bool:
+        """判断当前用户是否为 AstrBot 管理员。无管理员配置时默认所有人都可学习。"""
+        admins = self._get_admin_ids()
+        if not admins:
+            return True  # 无管理员名单 → 向后兼容，所有人可学
+        try:
+            uid = event.get_sender_id()
+            return bool(uid) and str(uid) in admins
+        except Exception:
+            return True
+
     def _hits_match_priority(self, hits) -> bool:
         """检查检索结果中是否有任一记忆命中关心领域。"""
         if not self._priority_topics or not hits:
@@ -324,13 +355,20 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
-        # 3. 主动学习提示（v2.4.6：去掉正则门槛，无结果就提示，让 LLM 自主判断是否搜索）
+        # 3. 主动学习提示（v2.6.5：仅管理员可触发，非管理员静默跳过）
         if self._enable_active_learn_hint and not hits:
-            self._active_learn_hinted = True
-            parts.append(
-                "[学习提示] 记忆库无相关内容。如果你不确定如何回答，"
-                "可调用 search_and_learn 工具搜索并学习。"
-            )
+            if self._is_admin_user(event):
+                self._active_learn_hinted = True
+                parts.append(
+                    "[学习提示] 你刚刚收到了一条新信息。如果这是你原本不掌握的知识点"
+                    "（即对方在向你科普/教你新东西），请立即调用 search_and_learn"
+                    " 工具将其存入记忆库，以免以后遗忘。"
+                    "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。"
+                )
+            else:
+                logger.info(
+                    f"ℹ️ 当前用户非管理员，跳过主动学习 (scope: {scope})"
+                )
         else:
             self._active_learn_hinted = False
 
@@ -351,7 +389,7 @@ class ActiveLearnerPlugin(Star):
             tags.append(f"{len(hits)}条记忆")
         if is_challenge and hits:
             tags.append("质疑提示")
-        if self._enable_active_learn_hint and not hits:
+        if self._active_learn_hinted:
             tags.append("学习提示")
         try:
             if hasattr(req, "extra_user_content_parts"):
