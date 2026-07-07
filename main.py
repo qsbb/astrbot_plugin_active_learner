@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.10.0",
+    "1.1.10.1",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -231,7 +231,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.10.0 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.10.1 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -1238,161 +1238,162 @@ class ActiveLearnerPlugin(Star):
 
     async def _web_batch_enrich(self):
         """批量补充信息：为已选记忆搜索网络，提取新信息并更新条目。"""
-        payload = await request.json(default={}) or {}
-        ids = payload.get("ids", [])
-        if not ids or not isinstance(ids, list):
-            return error_response("请提供要补充的记忆 ID 列表", status_code=400)
+        try:
+            payload = await request.json(default={}) or {}
+            ids = payload.get("ids", [])
+            if not ids or not isinstance(ids, list):
+                return error_response("请提供要补充的记忆 ID 列表", status_code=400)
 
-        provider_id = (payload.get("provider_id") or "").strip()
-        if not provider_id:
-            provider_id = await self._resolve_plugin_provider_id()
-        if not provider_id:
-            return error_response(
-                "无法确定 LLM provider。请在 Dashboard 设置页选择一个模型。",
-                status_code=400,
-            )
+            provider_id = (payload.get("provider_id") or "").strip()
+            if not provider_id:
+                provider_id = await self._resolve_plugin_provider_id()
+            if not provider_id:
+                return error_response(
+                    "无法确定 LLM provider。请在 Dashboard 设置页选择一个模型。",
+                    status_code=400,
+                )
 
-        CONCURRENCY = 3
-        total = len(ids)
-        results: list[dict] = []
-        ok = 0
-        fail = 0
-        next_index = 0
-        lock = asyncio.Lock()
+            CONCURRENCY = 3
+            total = len(ids)
+            results: list[dict] = []
+            ok = 0
+            fail = 0
+            next_index = 0
+            lock = asyncio.Lock()
 
-        async def worker():
-            nonlocal ok, fail
-            while True:
-                async with lock:
-                    if next_index >= total:
-                        return
-                    idx = next_index
-                    next_index += 1
-                entry_id = ids[idx]
-                try:
-                    entry = self.store.get_entry_by_id(entry_id)
-                    if entry is None:
+            async def worker():
+                nonlocal ok, fail
+                while True:
+                    async with lock:
+                        if next_index >= total:
+                            return
+                        idx = next_index
+                        next_index += 1
+                    entry_id = ids[idx]
+                    try:
+                        entry = self.store.get_entry_by_id(entry_id)
+                        if entry is None:
+                            async with lock:
+                                fail += 1
+                                results.append({"id": entry_id, "status": "skipped", "reason": "记忆不存在"})
+                            continue
+
+                        # 搜索网络
+                        search_results = await self.searcher.search(entry.topic, max_results=5)
+                        if not search_results:
+                            async with lock:
+                                ok += 1
+                                results.append({"id": entry_id, "status": "no_new_info", "reason": "搜索无结果"})
+                            continue
+
+                        # 整理搜索结果
+                        snippets = []
+                        sources = []
+                        for r in search_results:
+                            snippets.append(f"标题: {r.get('title','')}\n摘要: {r.get('snippet','')}")
+                            sources.append(f"{r.get('title','')} ({r.get('url','')})")
+                        search_text = "\n---\n".join(snippets)
+
+                        # LLM 提取新信息
+                        prompt = (
+                            "你是知识库管理员，判断搜索结果中是否有「新增信息」。\n\n"
+                            f"--- 已有知识 ---\n"
+                            f"主题：{entry.topic}\n"
+                            f"内容：{entry.content}\n"
+                            f"关键词：{'、'.join(entry.keywords or [])}\n\n"
+                            f"--- 搜索结果 ---\n{search_text[:3000]}\n\n"
+                            "请判断：\n"
+                            "1. 搜索结果中是否有已有知识未涵盖的**新信息**（新的属性、细节、别名、关联实体等）\n"
+                            "2. 如果有，提取新信息并生成融合后的内容\n"
+                            "3. 如果搜索结果只是重复已有知识的内容，则判定为无新信息\n\n"
+                            "严格按以下格式输出（每行一个字段）：\n"
+                            "HAS_NEW: yes / no\n"
+                            "MERGED_CONTENT: <融合后的完整内容，≤500字，仅在 HAS_NEW=yes 时需要>\n"
+                            "NEW_KEYWORDS: <新增的关键词，逗号分隔，仅在 HAS_NEW=yes 时需要>\n"
+                            "REASON: <判断理由，≤30字>\n"
+                        )
+
+                        reply = await self.llm_service.generate(
+                            prompt=prompt, provider_id=provider_id,
+                        )
+                        if not reply or not reply.strip():
+                            async with lock:
+                                ok += 1
+                                results.append({"id": entry_id, "status": "no_new_info", "reason": "LLM 无返回"})
+                            continue
+
+                        import re as _re
+                        hm = _re.search(r"HAS_NEW:\s*(\S+)", reply)
+                        has_new = hm is not None and hm.group(1).strip().lower() == "yes"
+
+                        if not has_new:
+                            async with lock:
+                                ok += 1
+                                results.append({"id": entry_id, "status": "no_new_info", "reason": "无新信息"})
+                            continue
+
+                        merged = _re.search(r"MERGED_CONTENT:\s*(.+?)(?=\n[A-Z_]+:|\Z)", reply, _re.DOTALL)
+                        merged_content = merged.group(1).strip() if merged else ""
+
+                        nk = _re.search(r"NEW_KEYWORDS:\s*(.+?)(?=\n[A-Z_]+:|\Z)", reply)
+                        new_keywords_str = nk.group(1).strip() if nk else ""
+
+                        reason_m = _re.search(r"REASON:\s*(.+?)(?=\n[A-Z_]+:|\Z)", reply)
+                        enrich_reason = reason_m.group(1).strip() if reason_m else ""
+
+                        if not merged_content:
+                            async with lock:
+                                ok += 1
+                                results.append({"id": entry_id, "status": "no_new_info", "reason": "LLM 未返回有效内容"})
+                            continue
+
+                        # 融合关键词和来源
+                        all_keywords = list(entry.keywords or [])
+                        extra = []
+                        if new_keywords_str:
+                            extra = [k.strip() for k in _re.split(r"[,，、\s]+", new_keywords_str) if k.strip() and len(k.strip()) >= 2]
+                            all_keywords = list(dict.fromkeys(all_keywords + extra))
+
+                        all_sources = list(entry.sources_detail or [])
+                        all_sources.extend(s for s in sources if s not in all_sources)
+
+                        # 更新记忆
+                        updated = await asyncio.to_thread(
+                            self.store.add_or_update,
+                            Scope(type=entry.scope_type, id=entry.scope_id),
+                            entry.topic, merged_content,
+                            keywords=all_keywords,
+                            source=f"{entry.source or ''} + 补充搜索",
+                            sources_detail=all_sources,
+                            confidence=min(1.0, entry.confidence + 0.05),
+                            origin=entry.origin or "",
+                        )
+                        async with lock:
+                            ok += 1
+                            results.append({
+                                "id": entry_id,
+                                "status": "enriched",
+                                "reason": enrich_reason,
+                                "new_keywords": extra,
+                            })
+                    except Exception as e:
+                        logger.error(f"补充信息条目失败 (id={entry_id}): {e}", exc_info=True)
                         async with lock:
                             fail += 1
-                            results.append({"id": entry_id, "status": "skipped", "reason": "记忆不存在"})
-                        continue
+                            results.append({"id": entry_id, "status": "error", "reason": str(e)})
 
-                    # 搜索网络
-                    search_query = entry.topic
-                    search_results = await self.searcher.search(search_query, max_results=5)
-                    if not search_results:
-                        async with lock:
-                            ok += 1
-                            results.append({"id": entry_id, "status": "no_new_info", "reason": "搜索无结果"})
-                        continue
+            workers = [worker() for _ in range(min(CONCURRENCY, total))]
+            await asyncio.gather(*workers)
 
-                    # 整理搜索结果
-                    snippets = []
-                    sources = []
-                    for r in search_results:
-                        snippets.append(f"标题: {r.get('title','')}\n摘要: {r.get('snippet','')}")
-                        sources.append(f"{r.get('title','')} ({r.get('url','')})")
-                    search_text = "\n---\n".join(snippets)
-
-                    # LLM 提取新信息
-                    prompt = (
-                        "你是知识库管理员，判断搜索结果中是否有「新增信息」。\n\n"
-                        f"--- 已有知识 ---\n"
-                        f"主题：{entry.topic}\n"
-                        f"内容：{entry.content}\n"
-                        f"关键词：{'、'.join(entry.keywords or [])}\n\n"
-                        f"--- 搜索结果 ---\n{search_text[:3000]}\n\n"
-                        "请判断：\n"
-                        "1. 搜索结果中是否有已有知识未涵盖的**新信息**（新的属性、细节、别名、关联实体等）\n"
-                        "2. 如果有，提取新信息并生成融合后的内容\n"
-                        "3. 如果搜索结果只是重复已有知识的内容，则判定为无新信息\n\n"
-                        "严格按以下格式输出（每行一个字段）：\n"
-                        "HAS_NEW: yes / no\n"
-                        "MERGED_CONTENT: <融合后的完整内容，≤500字，仅在 HAS_NEW=yes 时需要>\n"
-                        "NEW_KEYWORDS: <新增的关键词，逗号分隔，仅在 HAS_NEW=yes 时需要>\n"
-                        "REASON: <判断理由，≤30字>\n"
-                    )
-
-                    reply = await self.llm_service.generate(
-                        prompt=prompt, provider_id=provider_id,
-                    )
-                    if not reply or not reply.strip():
-                        async with lock:
-                            ok += 1
-                            results.append({"id": entry_id, "status": "no_new_info", "reason": "LLM 无返回"})
-                        continue
-
-                    has_new = False
-                    import re as _re
-                    hm = _re.search(r"HAS_NEW:\s*(\S+)", reply)
-                    if hm:
-                        has_new = hm.group(1).strip().lower() == "yes"
-
-                    if not has_new:
-                        async with lock:
-                            ok += 1
-                            results.append({"id": entry_id, "status": "no_new_info", "reason": "无新信息"})
-                        continue
-
-                    merged = _re.search(r"MERGED_CONTENT:\s*(.+?)(?=\n[A-Z_]+:|\Z)", reply, _re.DOTALL)
-                    merged_content = merged.group(1).strip() if merged else ""
-
-                    nk = _re.search(r"NEW_KEYWORDS:\s*(.+?)(?=\n[A-Z_]+:|\Z)", reply)
-                    new_keywords_str = nk.group(1).strip() if nk else ""
-
-                    reason_m = _re.search(r"REASON:\s*(.+?)(?=\n[A-Z_]+:|\Z)", reply)
-                    enrich_reason = reason_m.group(1).strip() if reason_m else ""
-
-                    if not merged_content:
-                        async with lock:
-                            ok += 1
-                            results.append({"id": entry_id, "status": "no_new_info", "reason": "LLM 未返回有效内容"})
-                        continue
-
-                    # 解析新关键词
-                    all_keywords = list(entry.keywords or [])
-                    if new_keywords_str:
-                        extra = [k.strip() for k in _re.split(r"[,，、\s]+", new_keywords_str) if k.strip() and len(k.strip()) >= 2]
-                        all_keywords = list(dict.fromkeys(all_keywords + extra))
-
-                    # 融合来源
-                    all_sources = list(entry.sources_detail or [])
-                    all_sources.extend(s for s in sources if s not in all_sources)
-
-                    # 更新记忆
-                    scope = Scope(type=entry.scope_type, id=entry.scope_id)
-                    updated = await asyncio.to_thread(
-                        self.store.add_or_update,
-                        scope, entry.topic, merged_content,
-                        keywords=all_keywords,
-                        source=f"{entry.source} + 补充搜索",
-                        sources_detail=all_sources,
-                        confidence=min(1.0, entry.confidence + 0.05),
-                        origin=entry.origin or "",
-                    )
-                    async with lock:
-                        ok += 1
-                        results.append({
-                            "id": entry_id,
-                            "status": "enriched",
-                            "reason": enrich_reason,
-                            "new_keywords": extra if new_keywords_str else [],
-                        })
-                except Exception as e:
-                    logger.error(f"补充信息失败 (id={entry_id}): {e}", exc_info=True)
-                    async with lock:
-                        fail += 1
-                        results.append({"id": entry_id, "status": "error", "reason": str(e)})
-
-        workers = [worker() for _ in range(min(CONCURRENCY, total))]
-        await asyncio.gather(*workers)
-
-        return json_response({
-            "ok": ok,
-            "fail": fail,
-            "total": total,
-            "results": results,
-        })
+            return json_response({
+                "ok": ok,
+                "fail": fail,
+                "total": total,
+                "results": results,
+            })
+        except Exception as e:
+            logger.error(f"批量补充信息失败: {e}", exc_info=True)
+            return error_response(f"批量补充信息失败: {e}", status_code=500)
 
     async def _web_export(self):
         scope = self._scope_from_query()

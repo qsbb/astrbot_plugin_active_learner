@@ -2,6 +2,13 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.10.1] - 2026-07-07
+
+### 修复
+
+- **补充信息 500 错误**：`_web_batch_enrich` 外层缺乏 try/except 兜底，未捕获异常时返回 HTTP 500。现对整个方法体添加 try/except，异常时记录完整 traceback 并返回友好错误信息。
+- **修复 extra 变量未初始化**：当 `new_keywords_str` 为空时 `extra` 变量被后续代码引用，现提前初始化为空列表。
+
 ## [1.1.10.0] - 2026-07-07
 
 ### 新增
