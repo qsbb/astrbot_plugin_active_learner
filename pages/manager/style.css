@@ -1380,3 +1380,71 @@ input[type="file"]:hover {
 .builtin-kb-docs::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+
+/* ---------- 置信度阈值选择弹窗 ---------- */
+
+.confidence-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.confidence-slider-wrap input[type="range"] {
+  flex: 1;
+  height: 6px;
+  appearance: none;
+  background: linear-gradient(to right, #22c55e 0%, #eab308 50%, #ef4444 100%);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.confidence-slider-wrap input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--accent, #6366f1);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+
+.confidence-slider-wrap input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.confidence-value-wrap {
+  min-width: 56px;
+  text-align: center;
+}
+
+#confidence-display {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent, #6366f1);
+  line-height: 1;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
+
+.confidence-value-wrap .percent {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-left: 1px;
+}
+
+.confidence-range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+#confidence-threshold-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #6366f1);
+}

@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.8.1",
+    "1.1.9.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -231,7 +231,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.8.1 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.9.0 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -671,7 +671,35 @@ class ActiveLearnerPlugin(Star):
             logger.debug(f"后置学习跳过: LLM 返回 learn 但缺 topic/content (topic={topic!r}, content={content!r})")
             return
 
-        # 8. 存入记忆
+        # 8. 融合检查：搜索本地已有记忆，判断是否与现有条目融合
+        if provider_id:
+            try:
+                existing = self.store.search(scope, topic, top_k=3)
+                if existing:
+                    top_match = existing[0]
+                    if top_match.entry.topic.lower() != topic.lower():
+                        merge_decision = await self.refiner.check_merge(
+                            new_topic=topic,
+                            new_summary=content,
+                            new_keywords=keywords or [topic],
+                            existing_topic=top_match.entry.topic,
+                            existing_summary=top_match.entry.content,
+                            existing_keywords=top_match.entry.keywords or [],
+                            provider_id=provider_id,
+                        )
+                        if merge_decision.should_merge:
+                            logger.info(
+                                f"🧬 后置融合：新知识「{topic}」→ 融合到已有「{merge_decision.target_topic}」"
+                                f"（理由：{merge_decision.merge_reason}）"
+                            )
+                            topic = merge_decision.target_topic
+                            existing_kws = top_match.entry.keywords or []
+                            merged_kws = list(dict.fromkeys(existing_kws + (keywords or [topic])))
+                            keywords = merged_kws
+            except Exception as e:
+                logger.debug(f"后置学习融合检查失败: {e}")
+
+        # 9. 存入记忆
         try:
             umo = getattr(event, "unified_msg_origin", "") or ""
             entry = await asyncio.to_thread(

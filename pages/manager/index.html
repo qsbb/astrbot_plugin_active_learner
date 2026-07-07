@@ -61,6 +61,7 @@
         <button type="button" id="btn-select-all">全选本页</button>
         <button type="button" id="btn-select-verified">选择已验证</button>
         <button type="button" id="btn-select-unverified">选择未验证</button>
+        <button type="button" id="btn-select-low-confidence">选择低置信度</button>
         <button type="button" id="btn-invert">反选</button>
         <button type="button" id="btn-deselect-all">取消选择</button>
         <span id="selected-count" class="selected-count"></span>
@@ -561,6 +562,36 @@
       <footer class="modal-footer">
         <button type="button" id="confirm-cancel">取消</button>
         <button type="button" id="confirm-ok" class="danger">确认删除</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="confidence-modal" class="modal hidden" role="alertdialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card" style="max-width:380px">
+      <header class="modal-header">
+        <h2>选择低置信度记忆</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div class="modal-body">
+        <p style="margin:0 0 16px;font-size:14px;color:#555">
+          选择置信度低于该值的记忆（不含等于）：</p>
+        <div class="confidence-slider-wrap">
+          <input type="range" id="confidence-slider" min="0" max="100" value="50" step="1" />
+          <div class="confidence-value-wrap">
+            <span id="confidence-display">50</span><span class="percent">%</span>
+          </div>
+        </div>
+        <div class="confidence-range-labels">
+          <span>0%</span>
+          <span id="confidence-threshold-label">置信度 < 50%</span>
+          <span>100%</span>
+        </div>
+        <p id="confidence-preview" style="margin:12px 0 0;font-size:13px;color:#888;text-align:center">本页低于此阈值：加载中…</p>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="confidence-cancel" class="secondary">取消</button>
+        <button type="button" id="confidence-ok" class="primary">确认选择</button>
       </footer>
     </div>
   </div>

@@ -146,6 +146,37 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             if len(search_results) >= 3:
                 confidence = min(0.85, confidence + 0.1)
 
+        # 5.5 融合检查：搜索本地已有记忆，判断是否应与现有条目融合而非新建
+        summary = refine_result.summary or search_text[:500]
+        if provider_id and refine_result.refined:
+            try:
+                existing = plugin.store.search(scope, topic, top_k=3)
+                if existing:
+                    # 取最相关且不同主题的条目
+                    top_match = existing[0]
+                    if top_match.entry.topic.lower() != topic.lower():
+                        merge_decision = await plugin.refiner.check_merge(
+                            new_topic=topic,
+                            new_summary=summary,
+                            new_keywords=keywords,
+                            existing_topic=top_match.entry.topic,
+                            existing_summary=top_match.entry.content,
+                            existing_keywords=top_match.entry.keywords or [],
+                            provider_id=provider_id,
+                        )
+                        if merge_decision.should_merge:
+                            logger.info(
+                                f"🧬 知识融合：新知识「{topic}」→ 融合到已有「{merge_decision.target_topic}」"
+                                f"（理由：{merge_decision.merge_reason}）"
+                            )
+                            topic = merge_decision.target_topic
+                            # 融合关键词：取并集
+                            existing_kws = top_match.entry.keywords or []
+                            merged_kws = list(dict.fromkeys(existing_kws + keywords))
+                            keywords = merged_kws
+            except Exception as e:
+                logger.debug(f"融合检查失败: {e}")
+
         # 6. 存入记忆
         source_tag = f"网络搜索 ({len(sources)}个来源)"
         if refine_result.refined:

@@ -27,6 +27,17 @@ class RefineResult:
     refined: bool = True
 
 
+@dataclass
+class MergeDecision:
+    """融合判断结果。should_merge=True 表示新知识与已有条目应融合。"""
+
+    should_merge: bool = False
+    target_topic: str = ""
+    target_id: str = ""
+    merge_reason: str = ""
+    refined: bool = True  # False 表示 LLM 调用失败，由调用方决定降级行为
+
+
 class KnowledgeRefiner:
     """依赖 plugin 持有的 context（用于 llm_generate）。"""
 
@@ -196,6 +207,72 @@ class KnowledgeRefiner:
                     refined=False,
                 ))
         return results
+
+    # ---------- 融合判断 ----------
+
+    async def check_merge(
+        self,
+        new_topic: str,
+        new_summary: str,
+        new_keywords: list[str],
+        existing_topic: str,
+        existing_summary: str,
+        existing_keywords: list[str],
+        provider_id: str,
+    ) -> MergeDecision:
+        """判断新知识是否应融合到已有条目。
+
+        场景：LLM 刚学到"糖猫"，但库里已有"米雪儿"。
+        LLM 判断：
+          - 如果糖猫 = 米雪儿的别名/属性 → 融合（should_merge=True）
+          - 如果糖猫是一个独立新实体 → 不融合（should_merge=False）
+
+        无 provider 时不判断（refined=False），由调用方决定降级行为。
+        """
+        if not provider_id:
+            return MergeDecision(refined=False)
+
+        existing_kws = "、".join(existing_keywords[:5]) if existing_keywords else "无"
+        new_kws = "、".join(new_keywords[:5]) if new_keywords else "无"
+
+        prompt = (
+            "你是知识库管理员，判断两条知识是否描述同一实体，是否需要融合。\n\n"
+            "--- 已有知识 ---\n"
+            f"主题：{existing_topic}\n"
+            f"内容：{existing_summary[:500]}\n"
+            f"关键词：{existing_kws}\n\n"
+            "--- 新知识 ---\n"
+            f"主题：{new_topic}\n"
+            f"内容：{new_summary[:500]}\n"
+            f"关键词：{new_kws}\n\n"
+            "判断标准：\n"
+            "1. 如果新知识是已有知识的别名、属性补充、细节扩展 → 应融合\n"
+            "   例如已有「米雪儿」学到「糖猫是米雪儿外号」→ 融合\n"
+            "   例如已有「Python」学到「Python 3.13 新特性」→ 融合\n"
+            "2. 如果新知识是完全独立的实体 → 不融合\n"
+            "   例如已有「米雪儿」学到「量子纠缠」→ 不融合\n\n"
+            "严格按以下格式输出（每行一个字段）：\n"
+            "DECISION: yes / no\n"
+            "TARGET: <融合目标主题（已有知识的主题）>\n"
+            f"REASON: <判断理由，≤30字>\n"
+        )
+
+        reply = await self._safe_generate(provider_id, prompt)
+        if not reply or not reply.strip():
+            return MergeDecision(refined=False)
+
+        decision = self._extract_field(reply, r"DECISION:\s*(\S+)", "").strip().lower()
+        reason = self._extract_field(reply, r"REASON:\s*(.+?)(?=\n[A-Z]+:|\Z)", "")
+
+        if decision != "yes":
+            return MergeDecision(should_merge=False, merge_reason=reason, refined=True)
+
+        return MergeDecision(
+            should_merge=True,
+            target_topic=existing_topic,
+            merge_reason=reason,
+            refined=True,
+        )
 
     # ---------- 内部方法 ----------
 

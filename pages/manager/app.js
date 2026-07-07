@@ -221,6 +221,10 @@ function selectAllUnverified() {
   _applySelectionToUI();
 }
 
+function selectAllLowConfidence() {
+  openConfidenceModal();
+}
+
 function _confirmModal(msg, okText = "确认删除") {
   return new Promise((resolve) => {
     const modal = document.getElementById("confirm-modal");
@@ -730,6 +734,7 @@ function bindEvents() {
   document.getElementById("btn-select-all")?.addEventListener("click", selectAllCurrent);
   document.getElementById("btn-select-verified")?.addEventListener("click", selectAllVerified);
   document.getElementById("btn-select-unverified")?.addEventListener("click", selectAllUnverified);
+  document.getElementById("btn-select-low-confidence")?.addEventListener("click", selectAllLowConfidence);
 
   document.getElementById("btn-invert")?.addEventListener("click", () => {
     state.currentItems.forEach((e) => {
@@ -1405,10 +1410,90 @@ async function init() {
   bindSettingsEvents();
   bindConfigEvents();
   bindBuiltinKbEvents();
+  bindConfidenceModalEvents();
   await refreshAll();
 }
 
 init().catch((e) => showToast(`初始化失败：${e.message}`, true));
+
+// ---------- 置信度阈值选择弹窗 ----------
+
+let _confidenceThreshold = 50;
+
+function _countLowConfidenceItems(threshold) {
+  if (!state.currentItems || !state.currentItems.length) return 0;
+  return state.currentItems.filter((e) => (e.confidence || 0) < threshold / 100).length;
+}
+
+function openConfidenceModal() {
+  const modal = document.getElementById("confidence-modal");
+  const slider = document.getElementById("confidence-slider");
+  const display = document.getElementById("confidence-display");
+  const label = document.getElementById("confidence-threshold-label");
+  const preview = document.getElementById("confidence-preview");
+
+  slider.value = _confidenceThreshold;
+  display.textContent = _confidenceThreshold;
+  label.textContent = `置信度 < ${_confidenceThreshold}%`;
+  const cnt = _countLowConfidenceItems(_confidenceThreshold);
+  preview.textContent = `本页低于此阈值：${cnt} 条`;
+
+  modal.classList.remove("hidden");
+}
+
+function closeConfidenceModal() {
+  document.getElementById("confidence-modal").classList.add("hidden");
+}
+
+function bindConfidenceModalEvents() {
+  const slider = document.getElementById("confidence-slider");
+  const display = document.getElementById("confidence-display");
+  const label = document.getElementById("confidence-threshold-label");
+  const preview = document.getElementById("confidence-preview");
+
+  // 滑动条实时更新
+  slider.addEventListener("input", () => {
+    const val = parseInt(slider.value, 10);
+    display.textContent = val;
+    label.textContent = `置信度 < ${val}%`;
+    const cnt = _countLowConfidenceItems(val);
+    preview.textContent = `本页低于此阈值：${cnt} 条`;
+  });
+
+  // ✕ 关闭 / 背景点击 / 取消
+  document.querySelectorAll("#confidence-modal .modal-close, #confidence-cancel").forEach((btn) => {
+    btn.addEventListener("click", closeConfidenceModal);
+  });
+  document.getElementById("confidence-modal")?.addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeConfidenceModal();
+  });
+
+  // 确认选择
+  document.getElementById("confidence-ok").addEventListener("click", () => {
+    const threshold = parseInt(slider.value, 10);
+    _confidenceThreshold = threshold;
+
+    state.selectedIds.clear();
+    state.currentItems.forEach((e) => {
+      if ((e.confidence || 0) < threshold / 100) {
+        state.selectedIds.add(e.id);
+      }
+    });
+    _applySelectionToUI();
+    showToast(`已选择 ${state.selectedIds.size} 条置信度低于 ${threshold}% 的记忆`);
+    closeConfidenceModal();
+  });
+
+  // Escape 键关闭
+  document.addEventListener("keydown", function _onConfKey(e) {
+    if (e.key === "Escape") {
+      const modal = document.getElementById("confidence-modal");
+      if (!modal.classList.contains("hidden")) {
+        closeConfidenceModal();
+      }
+    }
+  });
+}
 
 // ---------- Builtin KB Modal（从 AstrBot 内置知识库导入） ----------
 
