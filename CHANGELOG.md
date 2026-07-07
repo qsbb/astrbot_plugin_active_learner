@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.11.4] - 2026-07-08
+
+### 修复
+
+- **修复批量验证/补充信息闭包变量错误**：`_web_batch_verify` 与 `_web_batch_enrich` 的 worker 闭包中读取并修改了 `next_index`，但未在 `nonlocal` 中声明，导致 `cannot access local variable 'next_index'` 运行时错误。已补全 `nonlocal ok, fail, next_index`。
+
 ## [1.1.11.3] - 2026-07-08
 
 ### 更新
