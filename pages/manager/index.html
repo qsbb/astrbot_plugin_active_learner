@@ -16,6 +16,7 @@
         <button id="btn-builtin-kb" type="button" title="从 AstrBot 内置知识库导入">📚 内置知识库</button>
         <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
         <button id="btn-config" type="button" title="编辑配置文件">📋 配置</button>
+        <button id="btn-priority-learn" type="button" title="主动搜索已设置的关心领域并持续学习">🎯 主动学习</button>
         <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
       </div>
     </div>
@@ -178,6 +179,11 @@
             <span class="settings-label-sm">管理员 ID（逗号分隔，留空则全员可学）</span>
             <input type="text" id="settings-admin-ids" class="settings-text" />
           </div>
+          <div class="settings-row">
+            <span class="settings-label-sm">主动学习关心领域上限（条，1-500）</span>
+            <input type="number" id="settings-auto-learn-limit" min="1" max="500" class="settings-number" />
+          </div>
+          <p class="hint">点击顶部「🎯 主动学习」按钮时，最多学习多少条记忆。每个关心领域均分配额。⚠ 会大量消耗 Token。</p>
         </div>
 
         <div class="settings-section">
@@ -556,9 +562,9 @@
   <!-- 确认弹窗 -->
   <div id="confirm-modal" class="modal hidden" role="alertdialog" aria-modal="true">
     <div class="modal-backdrop"></div>
-    <div class="modal-card" style="max-width:420px">
+    <div class="modal-card" style="max-width:520px">
       <div class="modal-body">
-        <p id="confirm-msg" style="margin:0;font-size:14px;line-height:1.6"></p>
+        <p id="confirm-msg" style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap"></p>
       </div>
       <footer class="modal-footer">
         <button type="button" id="confirm-cancel">取消</button>
@@ -593,6 +599,37 @@
       <footer class="modal-footer">
         <button type="button" id="confidence-cancel" class="secondary">取消</button>
         <button type="button" id="confidence-ok" class="primary">确认选择</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="priority-learn-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card" style="max-width:560px">
+      <header class="modal-header">
+        <h2>🎯 主动学习关心领域</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="priority-learn-progress-wrap">
+          <div class="priority-learn-progress-bar">
+            <div id="priority-learn-progress-fill" class="priority-learn-progress-fill" style="width:0%"></div>
+          </div>
+          <span id="priority-learn-progress-text" class="priority-learn-progress-text">0 / 0</span>
+        </div>
+        <div class="priority-learn-row">
+          <span class="priority-learn-label">当前处理：</span>
+          <span id="priority-learn-current">—</span>
+        </div>
+        <div class="priority-learn-row">
+          <span class="priority-learn-label">关心领域：</span>
+          <span id="priority-learn-topics">—</span>
+        </div>
+        <div id="priority-learn-errors" class="priority-learn-errors hidden"></div>
+        <p class="hint">任务在后台运行，可关闭此窗口。再次点击「🎯 主动学习」可查看进度。</p>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="priority-learn-close" class="primary">关闭</button>
       </footer>
     </div>
   </div>

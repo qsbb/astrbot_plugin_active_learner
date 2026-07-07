@@ -1448,3 +1448,79 @@ input[type="file"]:hover {
   font-weight: 600;
   color: var(--accent, #6366f1);
 }
+
+/* ---------- 主动学习关心领域进度弹窗 ---------- */
+
+.priority-learn-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.priority-learn-progress-bar {
+  flex: 1;
+  height: 10px;
+  background: var(--border, #e5e7eb);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.priority-learn-progress-fill {
+  height: 100%;
+  background: linear-gradient(to right, #6366f1, #8b5cf6);
+  border-radius: 5px;
+  transition: width 0.4s ease;
+  width: 0%;
+}
+
+.priority-learn-progress-text {
+  min-width: 110px;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent, #6366f1);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
+
+.priority-learn-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.priority-learn-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+#priority-learn-current {
+  color: var(--text, #111827);
+}
+
+#priority-learn-topics {
+  color: var(--text, #111827);
+}
+
+.priority-learn-errors {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.priority-learn-err-item {
+  color: #b91c1c;
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+.priority-learn-err-item:first-of-type {
+  margin-top: 0;
+}

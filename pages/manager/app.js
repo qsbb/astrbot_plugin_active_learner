@@ -884,6 +884,7 @@ async function loadSettings() {
       chunk_overlap: s.chunk_overlap || 50,
       admin_ids: s.admin_ids || "",
       verifier_search_source: s.verifier_search_source || "auto",
+      auto_learn_topic_limit: s.auto_learn_topic_limit != null ? s.auto_learn_topic_limit : 100,
     };
     document.getElementById("settings-provider").value = state.settings.llm_provider_id || "";
     document.getElementById("settings-refine-search").checked = state.settings.refine_on_search;
@@ -898,6 +899,7 @@ async function loadSettings() {
     document.getElementById("settings-chunk-overlap").value = state.settings.chunk_overlap;
     document.getElementById("settings-admin-ids").value = state.settings.admin_ids;
     document.getElementById("settings-verifier-search-source").value = state.settings.verifier_search_source;
+    document.getElementById("settings-auto-learn-limit").value = state.settings.auto_learn_topic_limit;
     updateNoProviderHint(state.settings.llm_provider_id);
   } catch (e) {
     showToast(`加载设置失败: ${e.message}`, true);
@@ -927,6 +929,7 @@ async function saveSettings() {
     chunk_overlap: parseInt(document.getElementById("settings-chunk-overlap").value, 10) || 50,
     admin_ids: document.getElementById("settings-admin-ids").value,
     verifier_search_source: document.getElementById("settings-verifier-search-source").value,
+    auto_learn_topic_limit: parseInt(document.getElementById("settings-auto-learn-limit").value, 10) || 100,
   };
   try {
     const result = await bridge.apiPost("settings", payload);
@@ -943,6 +946,7 @@ async function saveSettings() {
       chunk_overlap: result.chunk_overlap || 50,
       admin_ids: result.admin_ids || "",
       verifier_search_source: result.verifier_search_source || "auto",
+      auto_learn_topic_limit: result.auto_learn_topic_limit != null ? result.auto_learn_topic_limit : 100,
     };
     showToast("设置已保存");
     closeSettingsModal();
@@ -1458,6 +1462,7 @@ async function init() {
   bindConfigEvents();
   bindBuiltinKbEvents();
   bindConfidenceModalEvents();
+  bindPriorityLearnEvents();
   await refreshAll();
 }
 
@@ -1537,6 +1542,149 @@ function bindConfidenceModalEvents() {
       const modal = document.getElementById("confidence-modal");
       if (!modal.classList.contains("hidden")) {
         closeConfidenceModal();
+      }
+    }
+  });
+}
+
+// ---------- 主动学习关心领域 ----------
+
+let _priorityLearnPollTimer = null;
+
+async function startPriorityLearn() {
+  // 若已有任务在跑，直接打开进度面板
+  try {
+    const st = await bridge.apiGet("priority_learn/status");
+    if (st && st.running) {
+      openPriorityLearnModal();
+      pollPriorityLearnStatus();
+      showToast("已有主动学习任务在运行，已为你打开进度面板");
+      return;
+    }
+  } catch (e) {
+    // 忽略，继续走启动流程
+  }
+
+  // 读取设置以显示提示
+  let topics = [];
+  let limit = 100;
+  try {
+    const s = await bridge.apiGet("settings");
+    topics = (s.priority_topics || "").split(",").map((t) => t.trim()).filter(Boolean);
+    limit = s.auto_learn_topic_limit != null ? s.auto_learn_topic_limit : 100;
+  } catch (e) {
+    // ignore
+  }
+
+  if (!topics.length) {
+    showToast("未设置关心领域，请先在「📋 配置」中设置 priority_topics", true);
+    return;
+  }
+
+  const topicsList = topics.map((t) => `• ${t}`).join("\n");
+  const msg =
+    `将主动学习以下关心领域：\n${topicsList}\n\n` +
+    `上限 ${limit} 条记忆。\n` +
+    `⚠ 这将大量消耗 Token（每条都会搜索网络 + LLM 精炼），可能耗时较长。\n\n` +
+    `确认开始？`;
+  const confirmed = await _confirmModal(msg, "确认开始学习");
+  if (!confirmed) return;
+
+  const providerSelect = document.getElementById("settings-provider");
+  const providerId = providerSelect ? providerSelect.value : "";
+
+  try {
+    await bridge.apiPost("priority_learn", {
+      provider_id: providerId,
+      scope_type: state.scopeType || "global",
+      scope_id: state.scopeId || "global",
+    });
+    openPriorityLearnModal();
+    pollPriorityLearnStatus();
+    showToast("主动学习已启动");
+  } catch (e) {
+    showToast(`启动失败: ${e.message}`, true);
+  }
+}
+
+function openPriorityLearnModal() {
+  document.getElementById("priority-learn-modal").classList.remove("hidden");
+}
+
+function closePriorityLearnModal() {
+  document.getElementById("priority-learn-modal").classList.add("hidden");
+  if (_priorityLearnPollTimer) {
+    clearTimeout(_priorityLearnPollTimer);
+    _priorityLearnPollTimer = null;
+  }
+}
+
+async function pollPriorityLearnStatus() {
+  if (_priorityLearnPollTimer) {
+    clearTimeout(_priorityLearnPollTimer);
+    _priorityLearnPollTimer = null;
+  }
+  const modal = document.getElementById("priority-learn-modal");
+  if (!modal || modal.classList.contains("hidden")) return;
+
+  let stopPolling = false;
+  try {
+    const st = await bridge.apiGet("priority_learn/status");
+    const done = st.done || 0;
+    const total = st.total || 0;
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const fill = document.getElementById("priority-learn-progress-fill");
+    if (fill) fill.style.width = `${pct}%`;
+    const txt = document.getElementById("priority-learn-progress-text");
+    if (txt) txt.textContent = `${done} / ${total}（${pct}%）`;
+    const cur = document.getElementById("priority-learn-current");
+    if (cur) cur.textContent = st.current_topic || "—";
+    const topicsEl = document.getElementById("priority-learn-topics");
+    if (topicsEl) topicsEl.textContent = (st.topics || []).join("、") || "—";
+    const errBox = document.getElementById("priority-learn-errors");
+    if (errBox) {
+      const errs = st.errors || [];
+      if (errs.length) {
+        errBox.classList.remove("hidden");
+        errBox.innerHTML =
+          `<div class="priority-learn-label">错误（最近 ${errs.length} 条）：</div>` +
+          errs.map((e) => `<div class="priority-learn-err-item">${escapeHtml(String(e))}</div>`).join("");
+      } else {
+        errBox.classList.add("hidden");
+        errBox.innerHTML = "";
+      }
+    }
+
+    if (!st.running) {
+      stopPolling = true;
+      if (st.finished_at != null) {
+        const errs = st.errors || [];
+        showToast(
+          `主动学习完成：${done}/${total} 条${errs.length ? `，${errs.length} 条错误` : ""}`,
+          errs.length > 0
+        );
+        await Promise.all([loadMemories(), loadStats()]);
+      }
+    }
+  } catch (e) {
+    console.error("查询主动学习进度失败:", e);
+  }
+  if (stopPolling) return;
+  _priorityLearnPollTimer = setTimeout(pollPriorityLearnStatus, 2000);
+}
+
+function bindPriorityLearnEvents() {
+  document.getElementById("btn-priority-learn")?.addEventListener("click", startPriorityLearn);
+  document
+    .querySelectorAll(
+      "#priority-learn-modal .modal-close, #priority-learn-modal .modal-backdrop, #priority-learn-close"
+    )
+    .forEach((el) => el.addEventListener("click", closePriorityLearnModal));
+  document.addEventListener("keydown", function _onPlKey(e) {
+    if (e.key === "Escape") {
+      const modal = document.getElementById("priority-learn-modal");
+      if (modal && !modal.classList.contains("hidden")) {
+        closePriorityLearnModal();
       }
     }
   });

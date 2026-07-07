@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "lingxi",
     "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.10.1",
+    "1.1.11.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -206,6 +206,9 @@ class ActiveLearnerPlugin(Star):
         # v1.1.4.9：后置学习节流
         self._last_post_learn: dict[str, float] = {}
 
+        # v1.1.11.0：关心领域主动学习任务状态（单例，避免并发）
+        self._priority_learn_task: Optional[dict] = None
+
         # v1.1.4.0：群黑话被动捕获 + 定时批量学习（通过 on_llm_request 捕获）
         self._enable_slang_capture = bool(cfg.get("enable_slang_capture", False))
         self._slang_interval_hours = float(cfg.get("slang_capture_interval_hours", 24))
@@ -231,7 +234,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.10.1 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.11.0 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -1044,6 +1047,15 @@ class ActiveLearnerPlugin(Star):
             f"/{PLUGIN_NAME}/memory/batch_enrich",
             self._web_batch_enrich, ["POST"], "批量补充信息",
         )
+        # v1.1.11.0：关心领域主动学习（按钮触发，后台搜索+精炼+融合入库）
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/priority_learn",
+            self._web_priority_learn, ["POST"], "主动学习关心领域",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/priority_learn/status",
+            self._web_priority_learn_status, ["GET"], "查询关心领域学习进度",
+        )
         context.register_web_api(
             f"/{PLUGIN_NAME}/export", self._web_export, ["GET"], "导出 JSON"
         )
@@ -1395,6 +1407,291 @@ class ActiveLearnerPlugin(Star):
             logger.error(f"批量补充信息失败: {e}", exc_info=True)
             return error_response(f"批量补充信息失败: {e}", status_code=500)
 
+    async def _web_priority_learn(self):
+        """启动关心领域主动学习任务（后台运行）。
+
+        流程：
+        1. LLM 为每个 priority_topic 生成 N 个子查询（N = limit / 主题数）
+        2. 对每个子查询：搜索网络 → 精炼 → 融合检查 → 存入记忆
+        3. 达到 limit 上限或所有子查询处理完则结束
+        """
+        try:
+            payload = await request.json(default={}) or {}
+            provider_id = (payload.get("provider_id") or "").strip()
+            if not provider_id:
+                provider_id = await self._resolve_plugin_provider_id()
+            if not provider_id:
+                return error_response(
+                    "无法确定 LLM provider。请在 Dashboard 设置页选择一个模型。",
+                    status_code=400,
+                )
+
+            topics_raw = self.config_manager.get("priority_topics") or ""
+            topics = [t.strip() for t in topics_raw.split(",") if t.strip()]
+            if not topics:
+                return error_response(
+                    "未设置关心领域。请在「📋 配置」中设置 priority_topics。",
+                    status_code=400,
+                )
+
+            try:
+                limit = int(self.config_manager.get("auto_learn_topic_limit") or 100)
+            except (TypeError, ValueError):
+                limit = 100
+            limit = max(1, min(500, limit))
+
+            if self._priority_learn_task and self._priority_learn_task.get("running"):
+                return error_response(
+                    "已有主动学习任务在运行，请等待完成或重启插件。",
+                    status_code=400,
+                )
+
+            scope_type = (payload.get("scope_type") or "global").strip()
+            scope_id = (payload.get("scope_id") or "global").strip()
+            scope = Scope(type=scope_type, id=scope_id)
+
+            self._priority_learn_task = {
+                "running": True,
+                "cancelled": False,
+                "done": 0,
+                "total": limit,
+                "current_topic": "初始化中…",
+                "topics": topics,
+                "limit": limit,
+                "errors": [],
+                "started_at": now_ts(),
+                "finished_at": None,
+            }
+
+            asyncio.create_task(
+                self._priority_learn_worker(topics, limit, scope, provider_id)
+            )
+            logger.info(
+                f"🎯 关心领域主动学习已启动：topics={topics}, limit={limit}, scope={scope}, provider={provider_id}"
+            )
+            return json_response({
+                "status": "started",
+                "limit": limit,
+                "topics": topics,
+                "scope": {"type": scope.type, "id": scope.id},
+            })
+        except Exception as e:
+            logger.error(f"启动关心领域学习失败: {e}", exc_info=True)
+            return error_response(f"启动失败: {e}", status_code=500)
+
+    async def _web_priority_learn_status(self):
+        """查询关心领域主动学习任务进度。"""
+        task = self._priority_learn_task
+        if not task:
+            return json_response({
+                "running": False,
+                "done": 0,
+                "total": 0,
+                "current_topic": "",
+                "topics": [],
+                "errors": [],
+            })
+        return json_response({
+            "running": task["running"],
+            "done": task["done"],
+            "total": task["total"],
+            "current_topic": task["current_topic"],
+            "topics": task["topics"],
+            "limit": task["limit"],
+            "errors": task["errors"][-10:],
+            "started_at": task.get("started_at"),
+            "finished_at": task.get("finished_at"),
+        })
+
+    async def _priority_learn_worker(
+        self, topics: list[str], limit: int, scope: Scope, provider_id: str
+    ) -> None:
+        """关心领域主动学习后台任务。
+
+        对每个 topic：
+        1. LLM 生成子查询列表（均分 limit 配额）
+        2. 对每个子查询：搜索 → 精炼 → 融合检查 → 存储
+        """
+        task = self._priority_learn_task
+        if task is None:
+            return
+
+        per_topic = max(1, limit // len(topics))
+
+        try:
+            for topic in topics:
+                if task["cancelled"] or task["done"] >= limit:
+                    break
+
+                task["current_topic"] = f"{topic}（生成子查询…）"
+                # 1. LLM 生成子查询
+                try:
+                    subqueries = await self._generate_priority_subqueries(
+                        topic, per_topic, provider_id
+                    )
+                except Exception as e:
+                    logger.warning(f"生成子查询失败「{topic}」: {e}")
+                    task["errors"].append(f"{topic}: 生成子查询失败 - {e}")
+                    continue
+
+                if not subqueries:
+                    subqueries = [topic]
+
+                # 2. 逐个搜索 → 精炼 → 存储
+                for sq in subqueries:
+                    if task["cancelled"] or task["done"] >= limit:
+                        break
+                    task["current_topic"] = f"{topic} → {sq}"
+                    try:
+                        await self._priority_learn_one(sq, scope, provider_id)
+                        task["done"] += 1
+                        logger.info(
+                            f"🎯 主动学习 [{task['done']}/{limit}] {topic} → {sq}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"主动学习子查询失败「{sq}」: {e}")
+                        task["errors"].append(f"{sq}: {e}")
+
+            task["current_topic"] = "已完成" if not task["cancelled"] else "已取消"
+            logger.info(
+                f"🎯 关心领域主动学习结束：done={task['done']}/{limit}, "
+                f"errors={len(task['errors'])}"
+            )
+        except Exception as e:
+            logger.error(f"关心领域主动学习任务异常: {e}", exc_info=True)
+            task["current_topic"] = f"任务异常：{e}"
+            task["errors"].append(f"task: {e}")
+        finally:
+            task["running"] = False
+            task["finished_at"] = now_ts()
+
+    async def _generate_priority_subqueries(
+        self, topic: str, n: int, provider_id: str
+    ) -> list[str]:
+        """让 LLM 为某个关心领域生成 N 个不同的子查询关键词。"""
+        if n <= 0:
+            return [topic]
+        # 上取整，至少 1 个，最多 50 个（避免一次生成太多 LLM 截断）
+        n = max(1, min(50, n))
+        prompt = (
+            f"你是知识库管理员。针对主题「{topic}」，生成 {n} 个用于网络搜索的子主题关键词，"
+            f"用于学习这个领域的各个方面（基础概念、原理、应用、历史、最新进展等）。\n\n"
+            "要求：\n"
+            "1. 每个关键词都是独立的搜索 query（不要重复）\n"
+            "2. 涵盖该领域的不同侧面\n"
+            "3. 关键词要具体、可搜索\n\n"
+            "严格按以下格式输出，每行一个：\n"
+            "1. xxx\n2. xxx\n3. xxx\n..."
+        )
+        reply = await self.llm_service.generate(prompt=prompt, provider_id=provider_id)
+        if not reply or not reply.strip():
+            return [topic]
+
+        # 解析数字列表
+        import re as _re
+        lines = reply.strip().splitlines()
+        queries: list[str] = []
+        for line in lines:
+            # 去除前缀数字 + 点 + 空格
+            m = _re.match(r"^\s*\d+[\.\)、\s]+(.+)$", line)
+            q = m.group(1).strip() if m else line.strip()
+            if q and q not in queries and len(q) <= 100:
+                queries.append(q)
+            if len(queries) >= n:
+                break
+        if not queries:
+            queries = [topic]
+        return queries
+
+    async def _priority_learn_one(
+        self, query: str, scope: Scope, provider_id: str
+    ) -> None:
+        """对单个子查询执行：搜索 → 精炼 → 融合检查 → 存储。"""
+        # 1. 搜索
+        search_results = await self.searcher.search(query, max_results=5)
+        if not search_results:
+            logger.debug(f"主动学习「{query}」搜索无结果")
+            return
+
+        # B 站补充
+        if self.bili_source and self.bili_source.is_available():
+            try:
+                bili_results = await self.bili_source.search(query, limit=3)
+                if bili_results:
+                    search_results.extend(bili_results)
+            except Exception as e:
+                logger.debug(f"主动学习 B 站搜索失败: {e}")
+
+        # 2. 整理搜索结果
+        snippets = []
+        sources = []
+        for r in search_results:
+            snippets.append(f"标题: {r.get('title','')}\n摘要: {r.get('snippet','')}")
+            sources.append(f"{r.get('title','')} ({r.get('url','')})")
+        search_text = "\n---\n".join(snippets)
+
+        # 3. LLM 精炼
+        topic = query
+        refine_result = await self.refiner.refine_search_results(
+            topic=topic, search_text=search_text, sources=sources,
+            provider_id=provider_id,
+        )
+        summary = refine_result.summary or search_text[:500]
+
+        # 4. 关键词
+        if refine_result.refined and refine_result.keywords:
+            keywords = refine_result.keywords
+        else:
+            keywords = [query]
+
+        # 5. 置信度
+        if refine_result.refined:
+            confidence = refine_result.confidence
+        else:
+            confidence = min(0.7, 0.3 + len(search_results) * 0.07)
+            if len(search_results) >= 3:
+                confidence = min(0.85, confidence + 0.1)
+
+        # 6. 融合检查
+        if refine_result.refined:
+            try:
+                existing = self.store.search(scope, topic, top_k=3)
+                if existing:
+                    top_match = existing[0]
+                    if top_match.entry.topic.lower() != topic.lower():
+                        merge_decision = await self.refiner.check_merge(
+                            new_topic=topic,
+                            new_summary=summary,
+                            new_keywords=keywords,
+                            existing_topic=top_match.entry.topic,
+                            existing_summary=top_match.entry.content,
+                            existing_keywords=top_match.entry.keywords or [],
+                            provider_id=provider_id,
+                        )
+                        if merge_decision.should_merge:
+                            logger.info(
+                                f"🧬 主动学习融合：「{topic}」→ 融合到「{merge_decision.target_topic}」"
+                            )
+                            topic = merge_decision.target_topic
+                            existing_kws = top_match.entry.keywords or []
+                            keywords = list(dict.fromkeys(existing_kws + keywords))
+            except Exception as e:
+                logger.debug(f"主动学习融合检查失败: {e}")
+
+        # 7. 存入记忆
+        source_tag = f"主动学习 ({len(sources)}个来源)"
+        if refine_result.refined:
+            source_tag += "+精炼"
+        await asyncio.to_thread(
+            self.store.add_or_update,
+            scope, topic, summary,
+            keywords=keywords,
+            source=source_tag,
+            sources_detail=sources,
+            confidence=confidence,
+            origin="priority_learn",
+        )
+
     async def _web_export(self):
         scope = self._scope_from_query()
         if scope is None:
@@ -1652,6 +1949,8 @@ class ActiveLearnerPlugin(Star):
             "chunk_size": int(data.get("chunk_size", 500)),
             "chunk_overlap": int(data.get("chunk_overlap", 50)),
             "verifier_search_source": str(data.get("verifier_search_source", "auto") or "auto"),
+            "priority_topics": str(data.get("priority_topics", "")),
+            "auto_learn_topic_limit": int(data.get("auto_learn_topic_limit", 100)),
         })
 
     def _load_schema(self) -> dict:

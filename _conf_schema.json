@@ -100,8 +100,14 @@
     "priority_topics": {
         "description": "关心的领域（优先检索）",
         "type": "string",
-        "hint": "逗号分隔，例如 'Python,量子计算,历史'。topic 或 keywords 命中任一关键词的记忆会获得 1.3x 分数加权，优先注入。",
+        "hint": "逗号分隔，例如 'Python,量子计算,历史'。topic 或 keywords 命中任一关键词的记忆会获得 1.3x 分数加权，优先注入。点击 Dashboard「🎯 主动学习关心领域」按钮可批量学习这些领域。",
         "default": ""
+    },
+    "auto_learn_topic_limit": {
+        "description": "主动学习关心领域的上限条数",
+        "type": "int",
+        "hint": "点击「🎯 主动学习关心领域」按钮时，最多学习多少条记忆。每个关心领域均分配额。范围 1-500。",
+        "default": 100
     },
     "context_inject_count": {
         "description": "上下文注入记忆条数",
