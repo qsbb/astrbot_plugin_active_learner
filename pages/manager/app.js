@@ -328,6 +328,52 @@ async function batchVerifySelected() {
   await Promise.all([loadMemories(), loadStats()]);
 }
 
+async function batchEnrichSelected() {
+  const ids = Array.from(state.selectedIds);
+  if (!ids.length) {
+    showToast("请先选择需要补充信息的记忆", true);
+    return;
+  }
+  const CONCURRENCY = 3;
+  const confirmed = await _confirmModal(
+    `确定对选中的 ${ids.length} 条记忆执行补充信息？\n每条会搜索网络 + LLM 提取新信息，可能耗时较长。\n将并发执行（最多 ${CONCURRENCY} 条同时搜索）。`,
+    "确认补充"
+  );
+  if (!confirmed) return;
+  const btn = document.getElementById("btn-batch-enrich");
+  if (btn) btn.disabled = true;
+  const providerSelect = document.getElementById("settings-provider");
+  const providerId = providerSelect ? providerSelect.value : "";
+
+  const total = ids.length;
+  let ok = 0, fail = 0, enriched = 0;
+
+  try {
+    const result = await bridge.apiPost("memory/batch_enrich", {
+      ids: ids,
+      provider_id: providerId,
+    });
+    ok = result.ok || 0;
+    fail = result.fail || 0;
+    enriched = result.results?.filter((r) => r.status === "enriched").length || 0;
+    const noNew = ok - enriched;
+    const parts = [];
+    if (enriched > 0) parts.push(`${enriched} 条已补充`);
+    if (noNew > 0) parts.push(`${noNew} 条无新信息`);
+    if (fail > 0) parts.push(`${fail} 条失败`);
+    showToast(`补充完成：${parts.join("，")}`, fail > 0);
+  } catch (e) {
+    showToast(`补充信息失败: ${e.message}`, true);
+  }
+
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "补充信息";
+  }
+  state.selectedIds.clear();
+  await Promise.all([loadMemories(), loadStats()]);
+}
+
 function renderPagination() {
   document.getElementById("page-info").textContent = `第 ${state.page} / ${state.totalPages} 页，共 ${state.total} 条`;
   document.getElementById("page-prev").disabled = state.page <= 1;
@@ -754,6 +800,7 @@ function bindEvents() {
 
   document.getElementById("btn-batch-delete")?.addEventListener("click", batchDeleteSelected);
   document.getElementById("btn-batch-verify")?.addEventListener("click", batchVerifySelected);
+  document.getElementById("btn-batch-enrich")?.addEventListener("click", batchEnrichSelected);
   document.getElementById("btn-refresh-logs")?.addEventListener("click", (e) => {
     e.preventDefault();
     loadLogs(true);
