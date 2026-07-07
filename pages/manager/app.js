@@ -282,48 +282,36 @@ async function batchVerifySelected() {
     showToast("请先选择需要验证的记忆", true);
     return;
   }
-  const CONCURRENCY = 3;
   const confirmed = await _confirmModal(
-    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。\n将并发执行（最多 ${CONCURRENCY} 条同时验证）。`,
+    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。\n将由后端并发异步同时处理。`,
     "确认验证"
   );
   if (!confirmed) return;
   const btn = document.getElementById("btn-batch-verify");
-  if (btn) btn.disabled = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "验证中…";
+  }
   const providerSelect = document.getElementById("settings-provider");
   const providerId = providerSelect ? providerSelect.value : "";
 
-  const total = ids.length;
-  let ok = 0, fail = 0, done = 0;
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < ids.length) {
-      const idx = nextIndex++;
-      const id = ids[idx];
-      try {
-        await bridge.apiPost(`memory/${id}/verify`, { provider_id: providerId });
-        ok++;
-      } catch (e) {
-        console.error(`批量验证失败 (id=${id}):`, e);
-        fail++;
-      }
-      done++;
-      if (btn) btn.textContent = `验证中… (${done}/${total})`;
-    }
+  try {
+    const result = await bridge.apiPost("memory/batch_verify", {
+      ids: ids,
+      provider_id: providerId,
+    });
+    const ok = result.ok || 0;
+    const fail = result.fail || 0;
+    const total = result.total || ids.length;
+    showToast(`批量验证完成：${ok}/${total} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
+  } catch (e) {
+    showToast(`批量验证失败: ${e.message}`, true);
   }
-
-  const workers = [];
-  for (let i = 0; i < Math.min(CONCURRENCY, ids.length); i++) {
-    workers.push(worker());
-  }
-  await Promise.all(workers);
 
   if (btn) {
     btn.disabled = false;
     btn.textContent = "批量验证";
   }
-  showToast(`批量验证完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
   state.selectedIds.clear();
   await Promise.all([loadMemories(), loadStats()]);
 }

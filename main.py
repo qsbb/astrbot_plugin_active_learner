@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "心弦知忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.11.2",
+    "1.1.11.3",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -234,7 +234,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.11.2 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.11.3 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -1044,6 +1044,10 @@ class ActiveLearnerPlugin(Star):
             self._web_memory_verify, ["POST"], "触发验证",
         )
         context.register_web_api(
+            f"/{PLUGIN_NAME}/memory/batch_verify",
+            self._web_batch_verify, ["POST"], "批量验证",
+        )
+        context.register_web_api(
             f"/{PLUGIN_NAME}/memory/batch_enrich",
             self._web_batch_enrich, ["POST"], "批量补充信息",
         )
@@ -1247,6 +1251,79 @@ class ActiveLearnerPlugin(Star):
             "text": result.to_text(),
             "debug_info": result.debug_info,
         })
+
+    async def _web_batch_verify(self):
+        """批量验证：后端并发执行验证，减少前端请求次数。
+
+        请求体：{"ids": [...], "provider_id": "..."}
+        响应：{"ok": N, "fail": N, "total": N, "results": [{id, status, ...}, ...]}
+        """
+        try:
+            payload = await request.json(default={}) or {}
+            ids = payload.get("ids", [])
+            if not ids or not isinstance(ids, list):
+                return error_response("请提供要验证的记忆 ID 列表", status_code=400)
+
+            provider_id = (payload.get("provider_id") or "").strip()
+            if not provider_id:
+                provider_id = await self._resolve_plugin_provider_id()
+            if not provider_id:
+                return error_response(
+                    "无法确定 LLM provider。请在 Dashboard 设置页选择一个模型。",
+                    status_code=400,
+                )
+
+            CONCURRENCY = 5
+            total = len(ids)
+            results: list[dict] = []
+            ok = 0
+            fail = 0
+            next_index = 0
+            lock = asyncio.Lock()
+
+            async def worker():
+                nonlocal ok, fail
+                while True:
+                    async with lock:
+                        if next_index >= total:
+                            return
+                        idx = next_index
+                        next_index += 1
+                    entry_id = ids[idx]
+                    try:
+                        entry = self.store.get_entry_by_id(entry_id)
+                        if entry is None:
+                            async with lock:
+                                fail += 1
+                                results.append({"id": entry_id, "status": "skipped", "reason": "记忆不存在"})
+                            continue
+                        result = await self.verifier.run(entry, provider_id)
+                        async with lock:
+                            ok += 1
+                            results.append({
+                                "id": entry_id,
+                                "status": "verified",
+                                "verdict": result.verdict,
+                                "confidence": result.confidence,
+                            })
+                    except Exception as e:
+                        logger.error(f"批量验证条目失败 (id={entry_id}): {e}", exc_info=True)
+                        async with lock:
+                            fail += 1
+                            results.append({"id": entry_id, "status": "error", "reason": str(e)})
+
+            workers = [worker() for _ in range(min(CONCURRENCY, total))]
+            await asyncio.gather(*workers)
+
+            return json_response({
+                "ok": ok,
+                "fail": fail,
+                "total": total,
+                "results": results,
+            })
+        except Exception as e:
+            logger.error(f"批量验证失败: {e}", exc_info=True)
+            return error_response(f"批量验证失败: {e}", status_code=500)
 
     async def _web_batch_enrich(self):
         """批量补充信息：为已选记忆搜索网络，提取新信息并更新条目。"""

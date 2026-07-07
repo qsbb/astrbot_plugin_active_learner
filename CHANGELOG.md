@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.11.3] - 2026-07-08
+
+### 更新
+
+- **批量验证改为后端异步并发处理**：新增 `POST /memory/batch_verify` 接口，前端一次性提交所有选中的记忆 ID，由后端使用 worker pool（并发 5）异步同时验证，减少前端请求次数并提升整体效率。前端只需等待一次响应即可显示完成结果。
+
 ## [1.1.11.2] - 2026-07-08
 
 ### 更新
