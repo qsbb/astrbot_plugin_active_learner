@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.11.1] - 2026-07-08
+
+### 更新
+
+- **插件中文名更新为「心弦知忆」**：统一 `display_name`、前端页面标题、文档与代码注释中的插件中文名为「心弦知忆」，保留英文类名 `ActiveLearnerPlugin` 与插件包名 `astrbot_plugin_active_learner` 不变。
+
 ## [1.1.11.0] - 2026-07-08
 
 ### 新增

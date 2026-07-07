@@ -1,4 +1,4 @@
-"""AstrBot 主动学习记忆插件主入口。
+"""AstrBot 心弦知忆插件主入口。
 
 功能：
 1. 自动检索记忆并注入 LLM 上下文
@@ -60,12 +60,12 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
 @register(
     "astrbot_plugin_active_learner",
     "lingxi",
-    "主动学习记忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.11.0",
+    "心弦知忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
+    "1.1.11.1",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
-    """主动学习记忆插件。"""
+    """心弦知忆插件。"""
 
     # ---------- 生命周期 ----------
 
@@ -234,7 +234,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.11.0 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.11.1 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
