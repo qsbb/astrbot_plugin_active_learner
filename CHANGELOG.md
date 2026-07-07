@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.11.2] - 2026-07-08
+
+### 更新
+
+- **插件作者改为「凌溪」**：同步修改 `metadata.yaml` 与 `main.py` 中 `@register` 的作者字段。
+
 ## [1.1.11.1] - 2026-07-08
 
 ### 更新
