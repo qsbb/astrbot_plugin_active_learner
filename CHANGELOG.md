@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.11.6] - 2026-07-08
+
+### 修复
+
+- **后置学习分析不再阻塞回复**：`on_llm_response` 钩子中 `_post_learn_analysis` 改为 `asyncio.create_task` 后台执行，用户消息回复立即发出，知识入库在后台异步完成。
+
 ## [1.1.11.5] - 2026-07-08
 
 ### 性能优化

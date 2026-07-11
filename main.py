@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "心弦知忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.11.5",
+    "1.1.11.6",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -234,7 +234,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.11.5 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.11.6 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -549,11 +549,15 @@ class ActiveLearnerPlugin(Star):
                 else:
                     logger.info("ℹ️ 主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）")
 
-            # v1.1.4.9：后置异步学习分析（回复完后自动分析是否需要记忆）
-            try:
-                await self._post_learn_analysis(event, response)
-            except Exception as e:
-                logger.debug(f"后置学习分析异常: {e}")
+            # v1.1.11.5：后置学习分析改为后台异步执行，不阻塞回复
+            asyncio.create_task(self._post_learn_analysis_bg(event, response))
+
+    async def _post_learn_analysis_bg(self, event: AstrMessageEvent, response) -> None:
+        """后置学习分析的后台包装，不阻塞回复发送。"""
+        try:
+            await self._post_learn_analysis(event, response)
+        except Exception as e:
+            logger.debug(f"后置学习分析异常: {e}")
 
     async def _post_learn_analysis(self, event: AstrMessageEvent, response) -> None:
         """回复完成后，异步分析对话是否包含可学习知识点，自动存入记忆库。"""
