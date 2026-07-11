@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Optional
 
@@ -206,7 +207,7 @@ class Verifier:
         source_cfg: str = "auto",
         keywords: list[str] | None = None,
     ) -> list[dict]:
-        """根据配置从对应搜索源收集证据。用关键词辅助搜索。"""
+        """根据配置从对应搜索源收集证据。Web 搜索和 B 站搜索并行执行。"""
         sources: list[dict] = []
         keywords = keywords or []
 
@@ -216,47 +217,42 @@ class Verifier:
         # 构建搜索 query：优先用关键词组合
         search_query = " ".join(keywords[:3]) if keywords else topic
 
-        # 网页搜索
-        if use_web:
-            results = await self._plugin.searcher.search(search_query, max_results=5)
-            for r in results:
-                sources.append({
-                    "title": r.get("title", ""),
-                    "snippet": r.get("snippet", ""),
-                    "url": r.get("url", ""),
-                    "source_type": "web",
-                })
+        # 并行发起所有搜索任务
+        search_tasks = []
+        task_labels = []
 
+        if use_web:
+            search_tasks.append(self._plugin.searcher.search(search_query, max_results=5))
+            task_labels.append("web_primary")
             # 第二轮搜索：用 topic + 关键词
             if keywords:
                 alt_query = f"{topic} {keywords[0]}"
-                fact_results = await self._plugin.searcher.search(alt_query, max_results=3)
-                for r in fact_results:
-                    if r.get("title") and r["title"][:30] not in {
-                        s["title"][:30] for s in sources
-                    }:
-                        sources.append({
-                            "title": r.get("title", ""),
-                            "snippet": r.get("snippet", ""),
-                            "url": r.get("url", ""),
-                            "source_type": "web_factcheck",
-                        })
+                search_tasks.append(self._plugin.searcher.search(alt_query, max_results=3))
+                task_labels.append("web_secondary")
 
-        # B 站搜索
-        if use_bili and self._plugin.bili_source:
-            try:
-                if self._plugin.bili_source.is_available():
-                    bili_query = keywords[0] if keywords else topic
-                    bili_results = await self._plugin.bili_source.search(bili_query, limit=3)
-                    for r in bili_results:
-                        sources.append({
-                            "title": r.get("title", ""),
-                            "snippet": r.get("snippet", ""),
-                            "url": r.get("url", ""),
-                            "source_type": "bilibili",
-                        })
-            except Exception as e:
-                logger.debug(f"B 站搜索失败: {e}")
+        if use_bili and self._plugin.bili_source and self._plugin.bili_source.is_available():
+            bili_query = keywords[0] if keywords else topic
+            search_tasks.append(self._plugin.bili_source.search(bili_query, limit=3))
+            task_labels.append("bilibili")
+
+        # 并行执行所有搜索
+        if search_tasks:
+            results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
+            for i, label in enumerate(task_labels):
+                result = results_list[i]
+                if isinstance(result, Exception):
+                    logger.debug(f"搜索任务 {label} 失败: {result}")
+                    continue
+                if not isinstance(result, list):
+                    continue
+                source_type = "web" if label == "web_primary" else "web_factcheck" if label == "web_secondary" else "bilibili"
+                for r in result:
+                    sources.append({
+                        "title": r.get("title", ""),
+                        "snippet": r.get("snippet", ""),
+                        "url": r.get("url", ""),
+                        "source_type": source_type,
+                    })
 
         # 去重
         seen: set[str] = set()

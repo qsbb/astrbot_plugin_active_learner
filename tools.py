@@ -99,17 +99,15 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         if scope is None:
             return ("无法识别会话作用域，学习失败")
 
-        # 1. 多源搜索
+        # 1. 多源搜索（Web + B 站并行）
         logger.info(f"搜索「{query}」(主题: {topic}, scope: {scope})")
-        search_results = await plugin.searcher.search(query, max_results=6)
-
-        # B 站补充（可选）
+        search_tasks = [plugin.searcher.search(query, max_results=6)]
         if plugin.bili_source and plugin.bili_source.is_available():
-            try:
-                bili_results = await plugin.bili_source.search(topic, limit=3)
-                search_results.extend(bili_results)
-            except Exception as e:
-                logger.debug(f"B 站搜索失败: {e}")
+            search_tasks.append(plugin.bili_source.search(topic, limit=3))
+        search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
+        search_results = search_results_list[0] if isinstance(search_results_list[0], list) else []
+        if len(search_results_list) > 1 and isinstance(search_results_list[1], list):
+            search_results.extend(search_results_list[1])
 
         if not search_results:
             logger.info(f"搜索「{query}」无结果")

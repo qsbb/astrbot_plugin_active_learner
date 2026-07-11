@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "心弦知忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.11.4",
+    "1.1.11.5",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -234,7 +234,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.11.4 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.11.5 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -1587,13 +1587,15 @@ class ActiveLearnerPlugin(Star):
 
         对每个 topic：
         1. LLM 生成子查询列表（均分 limit 配额）
-        2. 对每个子查询：搜索 → 精炼 → 融合检查 → 存储
+        2. 并发处理子查询（信号量控制并发度），提升整体速度
         """
         task = self._priority_learn_task
         if task is None:
             return
 
+        CONCURRENCY = 3  # 子查询并发数
         per_topic = max(1, limit // len(topics))
+        sem = asyncio.Semaphore(CONCURRENCY)
 
         try:
             for topic in topics:
@@ -1614,20 +1616,25 @@ class ActiveLearnerPlugin(Star):
                 if not subqueries:
                     subqueries = [topic]
 
-                # 2. 逐个搜索 → 精炼 → 存储
-                for sq in subqueries:
+                # 2. 并发处理子查询（信号量控制并发度）
+                async def _run_one(sq: str):
                     if task["cancelled"] or task["done"] >= limit:
-                        break
-                    task["current_topic"] = f"{topic} → {sq}"
-                    try:
-                        await self._priority_learn_one(sq, scope, provider_id)
-                        task["done"] += 1
-                        logger.info(
-                            f"🎯 主动学习 [{task['done']}/{limit}] {topic} → {sq}"
-                        )
-                    except Exception as e:
-                        logger.warning(f"主动学习子查询失败「{sq}」: {e}")
-                        task["errors"].append(f"{sq}: {e}")
+                        return
+                    async with sem:
+                        if task["cancelled"] or task["done"] >= limit:
+                            return
+                        try:
+                            await self._priority_learn_one(sq, scope, provider_id)
+                            task["done"] += 1
+                            logger.info(
+                                f"🎯 主动学习 [{task['done']}/{limit}] {topic} → {sq}"
+                            )
+                        except Exception as e:
+                            logger.warning(f"主动学习子查询失败「{sq}」: {e}")
+                            task["errors"].append(f"{sq}: {e}")
+
+                task["current_topic"] = f"{topic}（并发学习 {len(subqueries)} 个子主题…）"
+                await asyncio.gather(*[_run_one(sq) for sq in subqueries])
 
             task["current_topic"] = "已完成" if not task["cancelled"] else "已取消"
             logger.info(
@@ -1684,20 +1691,17 @@ class ActiveLearnerPlugin(Star):
         self, query: str, scope: Scope, provider_id: str
     ) -> None:
         """对单个子查询执行：搜索 → 精炼 → 融合检查 → 存储。"""
-        # 1. 搜索
-        search_results = await self.searcher.search(query, max_results=5)
+        # 1. 搜索（Web + B 站并行）
+        tasks = [self.searcher.search(query, max_results=5)]
+        if self.bili_source and self.bili_source.is_available():
+            tasks.append(self.bili_source.search(query, limit=3))
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+        search_results = results_list[0] if isinstance(results_list[0], list) else []
+        if len(results_list) > 1 and isinstance(results_list[1], list):
+            search_results.extend(results_list[1])
         if not search_results:
             logger.debug(f"主动学习「{query}」搜索无结果")
             return
-
-        # B 站补充
-        if self.bili_source and self.bili_source.is_available():
-            try:
-                bili_results = await self.bili_source.search(query, limit=3)
-                if bili_results:
-                    search_results.extend(bili_results)
-            except Exception as e:
-                logger.debug(f"主动学习 B 站搜索失败: {e}")
 
         # 2. 整理搜索结果
         snippets = []

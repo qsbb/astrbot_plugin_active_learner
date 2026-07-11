@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.11.5] - 2026-07-08
+
+### 性能优化
+
+- **搜索结果精炼从 2 次 LLM 调用合并为 1 次**：`refine_search_results` 原先先抽取事实再结构化（2 次串行 LLM），合并为单次调用直接生成知识卡，搜索学习延迟降低约 50%。
+- **Web 搜索 + B 站搜索并行执行**：`_priority_learn_one`、`SearchAndLearnTool.call`、`verifier._collect_sources` 三处原本串行的搜索改为 `asyncio.gather` 并行，减少网络等待时间。
+- **Verifier 多源搜索全面并行**：验证器的第一轮 Web 搜索、第二轮 Web 搜索、B 站搜索全部并行执行。
+- **主动学习子查询并发处理**：`_priority_learn_worker` 中各子查询从串行改为信号量控制的并发执行（并发 3），整体速度提升约 3 倍。
+
 ## [1.1.11.4] - 2026-07-08
 
 ### 修复
