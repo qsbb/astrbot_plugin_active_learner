@@ -233,6 +233,9 @@ class ActiveLearnerPlugin(Star):
             if d.strip()
         ]
         self._enable_cross_domain = bool(cfg.get("enable_cross_domain", True))
+        self._cross_domain_exclude_admin = bool(
+            cfg.get("cross_domain_exclude_admin", True)
+        )
 
         # 注册 LLM 工具
         self._tools = []
@@ -400,6 +403,38 @@ class ActiveLearnerPlugin(Star):
         except Exception:
             return False
 
+    def _strip_search_tools(self, req) -> int:
+        """从 LLM 请求中移除本插件的搜索/学习类工具定义。
+
+        用于跨领域限制场景，确保 LLM 不再调用搜索工具。
+        """
+        if not hasattr(req, "tools") or not req.tools:
+            return 0
+        deny_names: set[str] = set()
+        for t in self._tools or []:
+            try:
+                name = t.get("function", {}).get("name")
+                if name:
+                    deny_names.add(name)
+            except Exception:
+                continue
+        # 同时屏蔽 AstrBot 内置联网搜索工具（如果存在）
+        deny_names.add("web_search")
+
+        original = list(req.tools)
+        cleaned: list = []
+        for t in original:
+            name = None
+            try:
+                name = t.get("function", {}).get("name")
+            except Exception:
+                pass
+            if name in deny_names:
+                continue
+            cleaned.append(t)
+        req.tools = cleaned
+        return len(original) - len(cleaned)
+
     def _get_learn_prompt(self) -> str | None:
         """根据 learn_weight 返回对应强度的学习提示。None=不注入。"""
         w = self._learn_weight
@@ -540,22 +575,28 @@ class ActiveLearnerPlugin(Star):
             )
 
         # v1.2.0.0：知识领域范围控制
-        # 本地记忆已有相关知识时不受影响；管理员不受此限制；开启跨领域时不限制。
+        # 本地记忆已有相关知识时不受影响；开启跨领域时不限制。
+        # 管理员是否排除取决于 cross_domain_exclude_admin 配置。
         domain_restricted = False
+        is_admin = self._is_admin_user_strict(event)
+        admin_bypass = is_admin and self._cross_domain_exclude_admin
         if (
-            not self._is_admin_user_strict(event)
+            not admin_bypass
             and not self._enable_cross_domain
             and self._knowledge_domain_scope
             and not hits
             and not self._query_in_domain_scope(msg)
         ):
             domain_restricted = True
+            removed = self._strip_search_tools(req)
             parts.append(
                 "【领域限制】用户的问题不在你的知识领域范围内，且本地记忆中没有相关记录。"
                 "请不要尝试搜索网络、调用工具或编造答案，"
                 "直接明确回复你不知道/没玩过/没见过。"
             )
-            logger.info(f"领域限制：无本地记忆且非兴趣领域 (query: {msg[:50]})")
+            logger.info(
+                f"领域限制：无本地记忆且非兴趣领域，已移除 {removed} 个搜索工具 (query: {msg[:50]})"
+            )
 
         # 3. 主动学习提示（v1.1.5.0：所有用户按 learn_weight 触发，不限于管理员）
         if not domain_restricted and self._enable_active_learn_hint:
@@ -2165,6 +2206,7 @@ class ActiveLearnerPlugin(Star):
             "knowledge_source_priority": str(data.get("knowledge_source_priority", "web,bilibili")),
             "knowledge_domain_scope": str(data.get("knowledge_domain_scope", "")),
             "enable_cross_domain": bool(data.get("enable_cross_domain", True)),
+            "cross_domain_exclude_admin": bool(data.get("cross_domain_exclude_admin", True)),
         })
 
     def _load_schema(self) -> dict:
@@ -2389,6 +2431,9 @@ class ActiveLearnerPlugin(Star):
             if d.strip()
         ]
         self._enable_cross_domain = bool(cfg.get("enable_cross_domain", True))
+        self._cross_domain_exclude_admin = bool(
+            cfg.get("cross_domain_exclude_admin", True)
+        )
 
         # 清空 embedder 矩阵缓存（参数变化后需重建）
         if self.embedder is not None:

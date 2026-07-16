@@ -130,121 +130,142 @@
         <button type="button" class="modal-close" aria-label="关闭">✕</button>
       </header>
       <div class="modal-body">
-        <div class="settings-section">
-          <div class="settings-label">LLM Provider</div>
-          <div class="settings-row">
-            <select id="settings-provider"></select>
-            <button type="button" id="btn-refresh-providers" title="刷新列表">↻</button>
-          </div>
-          <p class="hint">选择插件进行搜索学习 / 导入精炼 / 验证 时使用的 LLM。留空则按事件默认 Provider。</p>
-          <p id="settings-no-provider-hint" class="disabled-hint hidden">⚠ 未选择 Provider，精炼将降级为原内容直存</p>
+        <div class="settings-tabs" role="tablist">
+          <button type="button" class="settings-tab active" data-tab="llm" role="tab">LLM</button>
+          <button type="button" class="settings-tab" data-tab="learn" role="tab">学习</button>
+          <button type="button" class="settings-tab" data-tab="search" role="tab">搜索 / 领域</button>
+          <button type="button" class="settings-tab" data-tab="other" role="tab">其它</button>
         </div>
 
-        <div class="settings-section">
-          <div class="settings-label">精炼开关</div>
-          <label class="checkbox-row">
-            <input type="checkbox" id="settings-refine-search" />
-            <span>搜索学习时精炼（搜索结果 → LLM 2 步蒸馏 → 入库）</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="settings-refine-import" />
-            <span>导入时精炼（原始文本 → LLM 蒸馏 → 入库）</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="settings-refine-verify" />
-            <span>验证时精炼（本期预留，暂不影响行为）</span>
-          </label>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-label">主动学习</div>
-          <label class="checkbox-row">
-            <input type="checkbox" id="settings-enable-learn" />
-            <span>启用主动学习提示</span>
-          </label>
-          <div class="settings-row">
-            <span class="settings-label-sm">学习权重（0=关闭，1=激进）</span>
-            <input type="range" id="settings-learn-weight" min="0" max="1" step="0.1" class="settings-slider" />
-            <span id="settings-learn-weight-val">0.7</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-label-sm">搜索返回条数</span>
-            <input type="number" id="settings-search-top-k" min="1" max="20" class="settings-number" />
-          </div>
-          <div class="settings-row">
-            <span class="settings-label-sm">默认置信度</span>
-            <input type="number" id="settings-default-confidence" min="0.1" max="1.0" step="0.05" class="settings-number" />
-          </div>
-          <div class="settings-row">
-            <span class="settings-label-sm">管理员 ID（逗号分隔，留空则全员可学）</span>
-            <input type="text" id="settings-admin-ids" class="settings-text" />
-          </div>
-          <div class="settings-row">
-            <span class="settings-label-sm">主动学习关心领域上限（条，1-500）</span>
-            <input type="number" id="settings-auto-learn-limit" min="1" max="500" class="settings-number" />
-          </div>
-          <p class="hint">点击顶部「🎯 主动学习」按钮时，最多学习多少条记忆。每个关心领域均分配额。⚠ 会大量消耗 Token。</p>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-label">验证搜索源</div>
-          <div class="settings-row">
-            <span class="settings-label-sm">验证记忆时使用的搜索源</span>
-            <select id="settings-verifier-search-source" class="settings-text">
-              <option value="auto">自动（有API用网页+B站，没API用LLM）</option>
-              <option value="web">仅网页搜索（Tavily/BoCha/Brave）</option>
-              <option value="bilibili">仅 B 站搜索</option>
-              <option value="web+bilibili">网页 + B 站</option>
-              <option value="llm">纯 LLM 验证（不搜索）</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-label">联网搜索与知识领域</div>
-          <label class="checkbox-row">
-            <input type="checkbox" id="settings-enable-web-search" />
-            <span>启用联网搜索</span>
-          </label>
-          <p class="hint">关闭后 search_and_learn、B 站搜索、主动学习等依赖联网的功能将不可用。</p>
-          <label class="checkbox-row">
-            <input type="checkbox" id="settings-web-search-only-top" />
-            <span>联网搜索仅使用最高优先级来源</span>
-          </label>
-          <div class="settings-row">
-            <span class="settings-label-sm">知识搜索源优先级</span>
-            <select id="settings-knowledge-source-priority" class="settings-select">
-              <option value="web,bilibili">网页搜索优先（web → bilibili）</option>
-              <option value="bilibili,web">B 站搜索优先（bilibili → web）</option>
-              <option value="web">仅网页搜索（web）</option>
-              <option value="bilibili">仅 B 站搜索（bilibili）</option>
-            </select>
-          </div>
-          <p class="hint">选择外部搜索源的优先级顺序；开启「仅最高优先级」时只使用第一个来源。本地记忆默认优先检索，不需要选择。</p>
-          <div class="settings-row">
-            <span class="settings-label-sm">知识领域范围</span>
-            <div class="tag-input" id="settings-knowledge-domain-scope-tags">
-              <div class="tag-list"></div>
-              <input type="text" class="tag-input-field" placeholder="输入后按回车添加" />
+        <div class="settings-panels">
+          <div class="settings-panel active" data-panel="llm">
+            <div class="settings-section">
+              <div class="settings-label">LLM Provider</div>
+              <div class="settings-row">
+                <select id="settings-provider"></select>
+                <button type="button" id="btn-refresh-providers" title="刷新列表">↻</button>
+              </div>
+              <p class="hint">选择插件进行搜索学习 / 导入精炼 / 验证 时使用的 LLM。留空则按事件默认 Provider。</p>
+              <p id="settings-no-provider-hint" class="disabled-hint hidden">⚠ 未选择 Provider，精炼将降级为原内容直存</p>
             </div>
-            <input type="hidden" id="settings-knowledge-domain-scope" />
-          </div>
-          <p class="hint">输入兴趣领域后按回车添加；关闭「允许跨领域回复」后，未命中领域的问题会触发 LLM 明确拒绝回答。</p>
-          <label class="checkbox-row">
-            <input type="checkbox" id="settings-enable-cross-domain" />
-            <span>允许跨领域回复</span>
-          </label>
-        </div>
 
-        <div class="settings-section">
-          <div class="settings-label">文档分块</div>
-          <div class="settings-row">
-            <span class="settings-label-sm">分块大小（字符数）</span>
-            <input type="number" id="settings-chunk-size" min="100" max="5000" class="settings-number" />
+            <div class="settings-section">
+              <div class="settings-label">精炼开关</div>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-refine-search" />
+                <span>搜索学习时精炼（搜索结果 → LLM 2 步蒸馏 → 入库）</span>
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-refine-import" />
+                <span>导入时精炼（原始文本 → LLM 蒸馏 → 入库）</span>
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-refine-verify" />
+                <span>验证时精炼（本期预留，暂不影响行为）</span>
+              </label>
+            </div>
           </div>
-          <div class="settings-row">
-            <span class="settings-label-sm">分块重叠（字符数）</span>
-            <input type="number" id="settings-chunk-overlap" min="0" max="1000" class="settings-number" />
+
+          <div class="settings-panel" data-panel="learn">
+            <div class="settings-section">
+              <div class="settings-label">主动学习</div>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-enable-learn" />
+                <span>启用主动学习提示</span>
+              </label>
+              <div class="settings-row">
+                <span class="settings-label-sm">学习权重（0=关闭，1=激进）</span>
+                <input type="range" id="settings-learn-weight" min="0" max="1" step="0.1" class="settings-slider" />
+                <span id="settings-learn-weight-val">0.7</span>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label-sm">搜索返回条数</span>
+                <input type="number" id="settings-search-top-k" min="1" max="20" class="settings-number" />
+              </div>
+              <div class="settings-row">
+                <span class="settings-label-sm">默认置信度</span>
+                <input type="number" id="settings-default-confidence" min="0.1" max="1.0" step="0.05" class="settings-number" />
+              </div>
+              <div class="settings-row">
+                <span class="settings-label-sm">管理员 ID（逗号分隔，留空则全员可学）</span>
+                <input type="text" id="settings-admin-ids" class="settings-text" />
+              </div>
+              <div class="settings-row">
+                <span class="settings-label-sm">主动学习关心领域上限（条，1-500）</span>
+                <input type="number" id="settings-auto-learn-limit" min="1" max="500" class="settings-number" />
+              </div>
+              <p class="hint">点击顶部「🎯 主动学习」按钮时，最多学习多少条记忆。每个关心领域均分配额。⚠ 会大量消耗 Token。</p>
+            </div>
+          </div>
+
+          <div class="settings-panel" data-panel="search">
+            <div class="settings-section">
+              <div class="settings-label">验证搜索源</div>
+              <div class="settings-row">
+                <span class="settings-label-sm">验证记忆时使用的搜索源</span>
+                <select id="settings-verifier-search-source" class="settings-text">
+                  <option value="auto">自动（有API用网页+B站，没API用LLM）</option>
+                  <option value="web">仅网页搜索（Tavily/BoCha/Brave）</option>
+                  <option value="bilibili">仅 B 站搜索</option>
+                  <option value="web+bilibili">网页 + B 站</option>
+                  <option value="llm">纯 LLM 验证（不搜索）</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <div class="settings-label">联网搜索与知识领域</div>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-enable-web-search" />
+                <span>启用联网搜索</span>
+              </label>
+              <p class="hint">关闭后 search_and_learn、B 站搜索、主动学习等依赖联网的功能将不可用。</p>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-web-search-only-top" />
+                <span>联网搜索仅使用最高优先级来源</span>
+              </label>
+              <div class="settings-row">
+                <span class="settings-label-sm">知识搜索源优先级</span>
+                <select id="settings-knowledge-source-priority" class="settings-select">
+                  <option value="web,bilibili">网页搜索优先（web → bilibili）</option>
+                  <option value="bilibili,web">B 站搜索优先（bilibili → web）</option>
+                  <option value="web">仅网页搜索（web）</option>
+                  <option value="bilibili">仅 B 站搜索（bilibili）</option>
+                </select>
+              </div>
+              <p class="hint">选择外部搜索源的优先级顺序；开启「仅最高优先级」时只使用第一个来源。本地记忆默认优先检索，不需要选择。</p>
+              <div class="settings-row">
+                <span class="settings-label-sm">知识领域范围</span>
+                <div class="tag-input" id="settings-knowledge-domain-scope-tags">
+                  <div class="tag-list"></div>
+                  <input type="text" class="tag-input-field" placeholder="输入后按回车添加" />
+                </div>
+                <input type="hidden" id="settings-knowledge-domain-scope" />
+              </div>
+              <p class="hint">输入兴趣领域后按回车添加；关闭「允许跨领域回复」后，未命中领域的问题会触发 LLM 明确拒绝回答。</p>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-enable-cross-domain" />
+                <span>允许跨领域回复</span>
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" id="settings-cross-domain-exclude-admin" />
+                <span>拒绝跨领域搜索时排除管理员</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-panel" data-panel="other">
+            <div class="settings-section">
+              <div class="settings-label">文档分块</div>
+              <div class="settings-row">
+                <span class="settings-label-sm">分块大小（字符数）</span>
+                <input type="number" id="settings-chunk-size" min="100" max="5000" class="settings-number" />
+              </div>
+              <div class="settings-row">
+                <span class="settings-label-sm">分块重叠（字符数）</span>
+                <input type="number" id="settings-chunk-overlap" min="0" max="1000" class="settings-number" />
+              </div>
+            </div>
           </div>
         </div>
       </div>

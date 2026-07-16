@@ -1065,6 +1065,55 @@ textarea {
   min-width: 0;
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border, #e4e7ed);
+  margin: -4px -4px 16px;
+  padding: 0 4px;
+}
+
+.settings-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted, #909399);
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+  border-radius: 0;
+}
+
+.settings-tab:hover {
+  color: var(--text, #303133);
+  background: transparent;
+}
+
+.settings-tab.active {
+  color: var(--accent, #409eff);
+  border-bottom-color: var(--accent, #409eff);
+  font-weight: 600;
+}
+
+.settings-panels {
+  position: relative;
+}
+
+.settings-panel {
+  display: none;
+}
+
+.settings-panel.active {
+  display: block;
+  animation: fade-in 0.2s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .tag-input {
   flex: 1;
   display: flex;

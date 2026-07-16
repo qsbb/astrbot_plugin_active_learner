@@ -30,6 +30,7 @@ const state = {
     knowledge_source_priority: "web,bilibili",
     knowledge_domain_scope: "",
     enable_cross_domain: true,
+    cross_domain_exclude_admin: true,
   },
 };
 
@@ -884,6 +885,7 @@ async function loadSettings() {
       knowledge_source_priority: s.knowledge_source_priority || "web,bilibili",
       knowledge_domain_scope: s.knowledge_domain_scope || "",
       enable_cross_domain: s.enable_cross_domain !== false,
+      cross_domain_exclude_admin: s.cross_domain_exclude_admin !== false,
     };
     document.getElementById("settings-provider").value = state.settings.llm_provider_id || "";
     document.getElementById("settings-refine-search").checked = state.settings.refine_on_search;
@@ -905,6 +907,7 @@ async function loadSettings() {
     document.getElementById("settings-knowledge-domain-scope").value = state.settings.knowledge_domain_scope;
     renderDomainScopeTags(state.settings.knowledge_domain_scope);
     document.getElementById("settings-enable-cross-domain").checked = state.settings.enable_cross_domain;
+    document.getElementById("settings-cross-domain-exclude-admin").checked = state.settings.cross_domain_exclude_admin;
     updateNoProviderHint(state.settings.llm_provider_id);
   } catch (e) {
     showToast(`加载设置失败: ${e.message}`, true);
@@ -1002,6 +1005,7 @@ async function saveSettings() {
     knowledge_source_priority: document.getElementById("settings-knowledge-source-priority").value,
     knowledge_domain_scope: document.getElementById("settings-knowledge-domain-scope").value,
     enable_cross_domain: document.getElementById("settings-enable-cross-domain").checked,
+    cross_domain_exclude_admin: document.getElementById("settings-cross-domain-exclude-admin").checked,
   };
   try {
     const result = await bridge.apiPost("settings", payload);
@@ -1024,12 +1028,22 @@ async function saveSettings() {
       knowledge_source_priority: result.knowledge_source_priority || "web,bilibili",
       knowledge_domain_scope: result.knowledge_domain_scope || "",
       enable_cross_domain: result.enable_cross_domain !== false,
+      cross_domain_exclude_admin: result.cross_domain_exclude_admin !== false,
     };
     showToast("设置已保存");
     closeSettingsModal();
   } catch (e) {
     showToast(`保存失败: ${e.message}`, true);
   }
+}
+
+function switchSettingsTab(tabName) {
+  document.querySelectorAll(".settings-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tabName);
+  });
+  document.querySelectorAll(".settings-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.panel === tabName);
+  });
 }
 
 function bindSettingsEvents() {
@@ -1040,6 +1054,9 @@ function bindSettingsEvents() {
     });
   document.getElementById("settings-save").addEventListener("click", saveSettings);
   document.getElementById("btn-refresh-providers").addEventListener("click", loadProviders);
+  document.querySelectorAll(".settings-tab").forEach((btn) => {
+    btn.addEventListener("click", () => switchSettingsTab(btn.dataset.tab));
+  });
   bindDomainScopeTags();
   document.getElementById("settings-provider").addEventListener("change", (e) => {
     updateNoProviderHint(e.target.value);

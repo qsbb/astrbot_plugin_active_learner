@@ -90,6 +90,12 @@
         "hint": "关闭后，当用户问题未命中「知识领域范围」时，插件会提示 LLM 明确回复不知道/没玩过/没见过等。",
         "default": true
     },
+    "cross_domain_exclude_admin": {
+        "description": "拒绝跨领域搜索时排除管理员",
+        "type": "bool",
+        "hint": "开启后，管理员不受跨领域限制，仍可触发联网搜索；关闭则管理员也会被限制。",
+        "default": true
+    },
     "debate_rounds": {
         "description": "质疑验证的自辩论轮数",
         "type": "int",
