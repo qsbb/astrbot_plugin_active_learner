@@ -99,15 +99,49 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         if scope is None:
             return ("无法识别会话作用域，学习失败")
 
-        # 1. 多源搜索（Web + B 站并行）
-        logger.info(f"搜索「{query}」(主题: {topic}, scope: {scope})")
-        search_tasks = [plugin.searcher.search(query, max_results=6)]
-        if plugin.bili_source and plugin.bili_source.is_available():
+        # 0. 联网搜索总开关
+        if not plugin._enable_web_search:
+            logger.info(f"搜索「{query}」被拒绝：联网搜索已关闭")
+            return ("联网搜索已关闭，无法学习新知识。")
+
+        # 1. 按知识源优先级搜索
+        logger.info(
+            f"搜索「{query}」(主题: {topic}, scope: {scope}, "
+            f"sources={plugin._knowledge_source_priority}, "
+            f"only_top={plugin._web_search_only_highest_priority})"
+        )
+
+        # 若 memory 是唯一启用源，直接查本地记忆
+        if plugin._is_source_enabled("memory") and not plugin._is_source_enabled("web") and not plugin._is_source_enabled("bilibili"):
+            hits = plugin.store.search(scope, topic, top_k=3)
+            if hits:
+                top = hits[0].entry
+                logger.info(f"搜索学习命中本地记忆，直接返回「{top.topic}」")
+                return (
+                    f"已检索到本地记忆「{top.topic}」，无需联网搜索。\n"
+                    f"内容: {top.content[:200]}\n"
+                    f"置信度: {top.confidence:.0%}"
+                )
+
+        search_tasks: list = []
+        if plugin._is_source_enabled("web"):
+            search_tasks.append(plugin.searcher.search(query, max_results=6))
+        if (
+            plugin._is_source_enabled("bilibili")
+            and plugin.bili_source
+            and plugin.bili_source.is_available()
+        ):
             search_tasks.append(plugin.bili_source.search(topic, limit=3))
+
+        if not search_tasks:
+            logger.info(f"搜索「{query}」无可用搜索源")
+            return ("当前知识源优先级配置下无可用的联网搜索源。")
+
         search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
-        search_results = search_results_list[0] if isinstance(search_results_list[0], list) else []
-        if len(search_results_list) > 1 and isinstance(search_results_list[1], list):
-            search_results.extend(search_results_list[1])
+        search_results: list[dict] = []
+        for r in search_results_list:
+            if isinstance(r, list):
+                search_results.extend(r)
 
         if not search_results:
             logger.info(f"搜索「{query}」无结果")
@@ -376,6 +410,11 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
         limit = max(1, min(10, limit))
 
         plugin = self._plugin
+
+        # v1.1.12.0：联网搜索总开关
+        if not plugin._enable_web_search:
+            logger.info(f"搜索 B站「{keyword}」被拒绝：联网搜索已关闭")
+            return ("联网搜索已关闭，无法搜索 B 站。")
 
         logger.info(f"搜索 B站: {keyword} (limit={limit})")
 

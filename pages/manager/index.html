@@ -201,6 +201,33 @@
         </div>
 
         <div class="settings-section">
+          <div class="settings-label">联网搜索与知识领域</div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="settings-enable-web-search" />
+            <span>启用联网搜索</span>
+          </label>
+          <p class="hint">关闭后 search_and_learn、B 站搜索、主动学习等依赖联网的功能将不可用。</p>
+          <label class="checkbox-row">
+            <input type="checkbox" id="settings-web-search-only-top" />
+            <span>联网搜索仅使用最高优先级来源</span>
+          </label>
+          <div class="settings-row">
+            <span class="settings-label-sm">知识搜索源优先级</span>
+            <input type="text" id="settings-knowledge-source-priority" class="settings-text" placeholder="memory,web,bilibili" />
+          </div>
+          <p class="hint">逗号分隔，如 memory,web,bilibili。排在前面的源优先级更高；开启「仅最高优先级」时只使用第一个。</p>
+          <div class="settings-row">
+            <span class="settings-label-sm">知识领域范围</span>
+            <input type="text" id="settings-knowledge-domain-scope" class="settings-text" placeholder="游戏,动漫,编程" />
+          </div>
+          <p class="hint">逗号分隔的兴趣领域白名单。关闭「允许跨领域回复」后，未命中领域的问题会触发 LLM 明确拒绝回答。</p>
+          <label class="checkbox-row">
+            <input type="checkbox" id="settings-enable-cross-domain" />
+            <span>允许跨领域回复</span>
+          </label>
+        </div>
+
+        <div class="settings-section">
           <div class="settings-label">文档分块</div>
           <div class="settings-row">
             <span class="settings-label-sm">分块大小（字符数）</span>

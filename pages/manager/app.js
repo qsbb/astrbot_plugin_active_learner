@@ -24,6 +24,12 @@ const state = {
     chunk_overlap: 50,
     admin_ids: "",
     verifier_search_source: "auto",
+    auto_learn_topic_limit: 100,
+    enable_web_search: true,
+    web_search_only_highest_priority: false,
+    knowledge_source_priority: "memory,web,bilibili",
+    knowledge_domain_scope: "",
+    enable_cross_domain: true,
   },
 };
 
@@ -873,6 +879,11 @@ async function loadSettings() {
       admin_ids: s.admin_ids || "",
       verifier_search_source: s.verifier_search_source || "auto",
       auto_learn_topic_limit: s.auto_learn_topic_limit != null ? s.auto_learn_topic_limit : 100,
+      enable_web_search: s.enable_web_search !== false,
+      web_search_only_highest_priority: s.web_search_only_highest_priority === true,
+      knowledge_source_priority: s.knowledge_source_priority || "memory,web,bilibili",
+      knowledge_domain_scope: s.knowledge_domain_scope || "",
+      enable_cross_domain: s.enable_cross_domain !== false,
     };
     document.getElementById("settings-provider").value = state.settings.llm_provider_id || "";
     document.getElementById("settings-refine-search").checked = state.settings.refine_on_search;
@@ -888,6 +899,11 @@ async function loadSettings() {
     document.getElementById("settings-admin-ids").value = state.settings.admin_ids;
     document.getElementById("settings-verifier-search-source").value = state.settings.verifier_search_source;
     document.getElementById("settings-auto-learn-limit").value = state.settings.auto_learn_topic_limit;
+    document.getElementById("settings-enable-web-search").checked = state.settings.enable_web_search;
+    document.getElementById("settings-web-search-only-top").checked = state.settings.web_search_only_highest_priority;
+    document.getElementById("settings-knowledge-source-priority").value = state.settings.knowledge_source_priority;
+    document.getElementById("settings-knowledge-domain-scope").value = state.settings.knowledge_domain_scope;
+    document.getElementById("settings-enable-cross-domain").checked = state.settings.enable_cross_domain;
     updateNoProviderHint(state.settings.llm_provider_id);
   } catch (e) {
     showToast(`加载设置失败: ${e.message}`, true);
@@ -918,6 +934,11 @@ async function saveSettings() {
     admin_ids: document.getElementById("settings-admin-ids").value,
     verifier_search_source: document.getElementById("settings-verifier-search-source").value,
     auto_learn_topic_limit: parseInt(document.getElementById("settings-auto-learn-limit").value, 10) || 100,
+    enable_web_search: document.getElementById("settings-enable-web-search").checked,
+    web_search_only_highest_priority: document.getElementById("settings-web-search-only-top").checked,
+    knowledge_source_priority: document.getElementById("settings-knowledge-source-priority").value,
+    knowledge_domain_scope: document.getElementById("settings-knowledge-domain-scope").value,
+    enable_cross_domain: document.getElementById("settings-enable-cross-domain").checked,
   };
   try {
     const result = await bridge.apiPost("settings", payload);
@@ -935,6 +956,11 @@ async function saveSettings() {
       admin_ids: result.admin_ids || "",
       verifier_search_source: result.verifier_search_source || "auto",
       auto_learn_topic_limit: result.auto_learn_topic_limit != null ? result.auto_learn_topic_limit : 100,
+      enable_web_search: result.enable_web_search !== false,
+      web_search_only_highest_priority: result.web_search_only_highest_priority === true,
+      knowledge_source_priority: result.knowledge_source_priority || "memory,web,bilibili",
+      knowledge_domain_scope: result.knowledge_domain_scope || "",
+      enable_cross_domain: result.enable_cross_domain !== false,
     };
     showToast("设置已保存");
     closeSettingsModal();

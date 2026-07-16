@@ -62,8 +62,24 @@ class Verifier:
         self._plugin = plugin
 
     def _get_search_source(self) -> str:
-        """读取验证搜索源配置。"""
-        return str(self._plugin.config.get("verifier_search_source", "auto") or "auto").lower()
+        """读取验证搜索源配置，并受联网搜索总开关与优先级约束。"""
+        cfg = str(self._plugin.config.get("verifier_search_source", "auto") or "auto").lower()
+
+        # v1.1.12.0：联网搜索关闭时强制纯 LLM
+        if not getattr(self._plugin, "_enable_web_search", True):
+            return "llm"
+
+        # 仅使用最高优先级来源
+        if getattr(self._plugin, "_web_search_only_highest_priority", False):
+            priority = getattr(self._plugin, "_knowledge_source_priority", ["web"])
+            top = priority[0] if priority else "web"
+            if top == "web":
+                return "web"
+            if top == "bilibili":
+                return "bilibili"
+            return "llm"
+
+        return cfg
 
     async def run(
         self,

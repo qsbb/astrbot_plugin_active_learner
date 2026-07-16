@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "心弦知忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.11.6",
+    "1.1.12.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -219,6 +219,21 @@ class ActiveLearnerPlugin(Star):
         )
         self._slang_last_check: dict[str, float] = {}  # 进程内节流：scope_key → 上次检查时间
 
+        # v1.1.12.0：联网搜索与知识领域控制
+        self._enable_web_search = bool(cfg.get("enable_web_search", True))
+        self._web_search_only_highest_priority = bool(
+            cfg.get("web_search_only_highest_priority", False)
+        )
+        self._knowledge_source_priority = self._parse_source_priority(
+            cfg.get("knowledge_source_priority", "memory,web,bilibili")
+        )
+        self._knowledge_domain_scope = [
+            d.strip().lower()
+            for d in (cfg.get("knowledge_domain_scope") or "").split(",")
+            if d.strip()
+        ]
+        self._enable_cross_domain = bool(cfg.get("enable_cross_domain", True))
+
         # 注册 LLM 工具
         self._tools = []
         try:
@@ -234,7 +249,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.11.6 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.1.12.0 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -287,6 +302,45 @@ class ActiveLearnerPlugin(Star):
         except Exception:
             pass
         return 0.4, 0.6
+
+    @staticmethod
+    def _parse_source_priority(s: str) -> list[str]:
+        """解析知识搜索源优先级字符串，返回去重后的小写列表。"""
+        try:
+            parts = [p.strip().lower() for p in str(s).split(",") if p.strip()]
+            # 去重并保持顺序
+            seen: set[str] = set()
+            unique: list[str] = []
+            for p in parts:
+                if p in ("memory", "web", "bilibili") and p not in seen:
+                    seen.add(p)
+                    unique.append(p)
+            if unique:
+                return unique
+        except Exception:
+            pass
+        return ["memory", "web", "bilibili"]
+
+    def _is_source_enabled(self, source: str) -> bool:
+        """判断某个知识搜索源是否在当前配置下启用。"""
+        source = source.lower()
+        if source not in self._knowledge_source_priority:
+            return False
+        if self._web_search_only_highest_priority:
+            return self._knowledge_source_priority[0] == source
+        return True
+
+    def _query_in_domain_scope(self, query: str) -> bool:
+        """判断查询是否命中用户设置的知识领域范围。
+
+        未设置范围、或开启跨领域时视为命中。
+        """
+        if self._enable_cross_domain:
+            return True
+        if not self._knowledge_domain_scope:
+            return True
+        q = query.lower()
+        return any(domain in q or q in domain for domain in self._knowledge_domain_scope)
 
     def _get_admin_ids(self) -> set[str]:
         """从 AstrBot 全局配置 + 插件配置中读取管理员名单。"""
@@ -382,6 +436,24 @@ class ActiveLearnerPlugin(Star):
 
         scope = Scope.from_event(event)
         parts: list[str] = []
+
+        # v1.1.12.0：知识领域范围检查
+        if not self._query_in_domain_scope(msg):
+            logger.info(f"领域限制：跳过非兴趣领域查询 (query: {msg[:50]})")
+            try:
+                injection = (
+                    "【领域限制】用户的问题不在你的知识领域范围内。"
+                    "请不要尝试搜索网络、调用工具或编造答案，"
+                    "直接明确回复你不知道/没玩过/没见过。"
+                )
+                if hasattr(req, "extra_user_content_parts"):
+                    from astrbot.core.agent.message import TextPart
+                    req.extra_user_content_parts.append(TextPart(text=injection))
+                else:
+                    req.system_prompt = (req.system_prompt or "") + "\n" + injection
+            except Exception as e:
+                logger.error(f"领域限制注入失败: {e}")
+            return
 
         # 1. 检索记忆（v1.1.2.0：混合检索 FTS5 + 向量）
         try:
@@ -1346,6 +1418,13 @@ class ActiveLearnerPlugin(Star):
                     status_code=400,
                 )
 
+            # v1.1.12.0：补充信息依赖联网搜索
+            if not self._enable_web_search:
+                return error_response(
+                    "联网搜索已关闭，无法执行补充信息。请在设置中开启「启用联网搜索」。",
+                    status_code=400,
+                )
+
             CONCURRENCY = 3
             total = len(ids)
             results: list[dict] = []
@@ -1497,6 +1576,13 @@ class ActiveLearnerPlugin(Star):
         3. 达到 limit 上限或所有子查询处理完则结束
         """
         try:
+            # v1.1.12.0：主动学习依赖联网搜索
+            if not self._enable_web_search:
+                return error_response(
+                    "联网搜索已关闭，无法执行主动学习。请在设置中开启「启用联网搜索」。",
+                    status_code=400,
+                )
+
             payload = await request.json(default={}) or {}
             provider_id = (payload.get("provider_id") or "").strip()
             if not provider_id:
@@ -1695,14 +1781,24 @@ class ActiveLearnerPlugin(Star):
         self, query: str, scope: Scope, provider_id: str
     ) -> None:
         """对单个子查询执行：搜索 → 精炼 → 融合检查 → 存储。"""
-        # 1. 搜索（Web + B 站并行）
-        tasks = [self.searcher.search(query, max_results=5)]
-        if self.bili_source and self.bili_source.is_available():
+        # 1. 搜索（按知识源优先级配置）
+        tasks = []
+        if self._enable_web_search and self._is_source_enabled("web"):
+            tasks.append(self.searcher.search(query, max_results=5))
+        if (
+            self._is_source_enabled("bilibili")
+            and self.bili_source
+            and self.bili_source.is_available()
+        ):
             tasks.append(self.bili_source.search(query, limit=3))
+        if not tasks:
+            logger.debug(f"主动学习「{query}」无可用搜索源")
+            return
         results_list = await asyncio.gather(*tasks, return_exceptions=True)
-        search_results = results_list[0] if isinstance(results_list[0], list) else []
-        if len(results_list) > 1 and isinstance(results_list[1], list):
-            search_results.extend(results_list[1])
+        search_results: list[dict] = []
+        for r in results_list:
+            if isinstance(r, list):
+                search_results.extend(r)
         if not search_results:
             logger.debug(f"主动学习「{query}」搜索无结果")
             return
@@ -2036,6 +2132,12 @@ class ActiveLearnerPlugin(Star):
             "verifier_search_source": str(data.get("verifier_search_source", "auto") or "auto"),
             "priority_topics": str(data.get("priority_topics", "")),
             "auto_learn_topic_limit": int(data.get("auto_learn_topic_limit", 100)),
+            # v1.1.12.0：联网搜索与知识领域控制
+            "enable_web_search": bool(data.get("enable_web_search", True)),
+            "web_search_only_highest_priority": bool(data.get("web_search_only_highest_priority", False)),
+            "knowledge_source_priority": str(data.get("knowledge_source_priority", "memory,web,bilibili")),
+            "knowledge_domain_scope": str(data.get("knowledge_domain_scope", "")),
+            "enable_cross_domain": bool(data.get("enable_cross_domain", True)),
         })
 
     def _load_schema(self) -> dict:
@@ -2245,6 +2347,21 @@ class ActiveLearnerPlugin(Star):
             self._chunk_overlap = max(0, min(1000, int(cfg.get("chunk_overlap", 50))))
         except (TypeError, ValueError):
             pass
+
+        # v1.1.12.0：联网搜索与知识领域控制
+        self._enable_web_search = bool(cfg.get("enable_web_search", True))
+        self._web_search_only_highest_priority = bool(
+            cfg.get("web_search_only_highest_priority", False)
+        )
+        self._knowledge_source_priority = self._parse_source_priority(
+            cfg.get("knowledge_source_priority", "memory,web,bilibili")
+        )
+        self._knowledge_domain_scope = [
+            d.strip().lower()
+            for d in (cfg.get("knowledge_domain_scope") or "").split(",")
+            if d.strip()
+        ]
+        self._enable_cross_domain = bool(cfg.get("enable_cross_domain", True))
 
         # 清空 embedder 矩阵缓存（参数变化后需重建）
         if self.embedder is not None:

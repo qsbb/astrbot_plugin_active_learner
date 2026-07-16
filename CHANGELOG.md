@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.12.0] - 2026-07-16
+
+### 新增
+
+- **联网搜索总开关**：新增 `enable_web_search`，关闭后 `search_and_learn`、B 站搜索、主动学习等依赖联网的功能将不可用，插件仅依赖本地记忆库。
+- **仅最高优先级搜索源**：新增 `web_search_only_highest_priority`，开启后搜索/验证仅使用「知识搜索源优先级」中排第一位的来源。
+- **知识搜索源优先级**：新增 `knowledge_source_priority`，可配置 `memory,web,bilibili` 的优先级顺序，搜索学习按优先级选择来源。
+- **知识领域范围控制**：新增 `knowledge_domain_scope` 兴趣领域白名单与 `enable_cross_domain` 跨领域开关。
+  - 关闭「允许跨领域回复」后，当用户问题未命中配置领域时，插件会注入系统提示，要求 LLM 明确回复不知道/没玩过/没见过。
+  - 为空领域范围时默认不限制。
+
 ## [1.1.11.6] - 2026-07-08
 
 ### 修复

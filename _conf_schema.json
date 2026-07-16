@@ -60,6 +60,36 @@
         "hint": "验证记忆时使用的搜索源。auto=有API就用网页搜索+B站，没API则LLM；web=仅网页搜索(Tavily/BoCha/Brave)；bilibili=仅B站；web+bilibili=网页+B站；llm=纯LLM验证不搜索。",
         "default": "auto"
     },
+    "enable_web_search": {
+        "description": "启用联网搜索",
+        "type": "bool",
+        "hint": "关闭后 search_and_learn 等联网搜索工具将不可用，插件仅依赖本地记忆库。",
+        "default": true
+    },
+    "web_search_only_highest_priority": {
+        "description": "联网搜索仅使用最高优先级来源",
+        "type": "bool",
+        "hint": "开启后，搜索/验证时仅使用「知识搜索源优先级」中排第一位的来源，不再混合其它来源。",
+        "default": false
+    },
+    "knowledge_source_priority": {
+        "description": "知识搜索源优先级",
+        "type": "string",
+        "hint": "逗号分隔，例如 'memory,web,bilibili'。排在前面的源优先级更高；开启「仅最高优先级」时只使用第一个来源。",
+        "default": "memory,web,bilibili"
+    },
+    "knowledge_domain_scope": {
+        "description": "知识领域范围",
+        "type": "string",
+        "hint": "逗号分隔的兴趣领域白名单，例如 '游戏,动漫,编程'。配合「允许跨领域回复」开关使用；为空时表示不限制。",
+        "default": ""
+    },
+    "enable_cross_domain": {
+        "description": "允许跨领域回复",
+        "type": "bool",
+        "hint": "关闭后，当用户问题未命中「知识领域范围」时，插件会提示 LLM 明确回复不知道/没玩过/没见过等。",
+        "default": true
+    },
     "debate_rounds": {
         "description": "质疑验证的自辩论轮数",
         "type": "int",
