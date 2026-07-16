@@ -225,7 +225,7 @@ class ActiveLearnerPlugin(Star):
             cfg.get("web_search_only_highest_priority", False)
         )
         self._knowledge_source_priority = self._parse_source_priority(
-            cfg.get("knowledge_source_priority", "memory,web,bilibili")
+            cfg.get("knowledge_source_priority", "web,bilibili")
         )
         self._knowledge_domain_scope = [
             d.strip().lower()
@@ -305,25 +305,30 @@ class ActiveLearnerPlugin(Star):
 
     @staticmethod
     def _parse_source_priority(s: str) -> list[str]:
-        """解析知识搜索源优先级字符串，返回去重后的小写列表。"""
+        """解析外部知识搜索源优先级字符串，返回去重后的小写列表。
+
+        本地记忆不属于外部搜索源，因此只接受 web / bilibili。
+        """
         try:
             parts = [p.strip().lower() for p in str(s).split(",") if p.strip()]
             # 去重并保持顺序
             seen: set[str] = set()
             unique: list[str] = []
             for p in parts:
-                if p in ("memory", "web", "bilibili") and p not in seen:
+                if p in ("web", "bilibili") and p not in seen:
                     seen.add(p)
                     unique.append(p)
             if unique:
                 return unique
         except Exception:
             pass
-        return ["memory", "web", "bilibili"]
+        return ["web", "bilibili"]
 
     def _is_source_enabled(self, source: str) -> bool:
-        """判断某个知识搜索源是否在当前配置下启用。"""
+        """判断某个外部知识搜索源是否在当前配置下启用。"""
         source = source.lower()
+        if source not in ("web", "bilibili"):
+            return False
         if source not in self._knowledge_source_priority:
             return False
         if self._web_search_only_highest_priority:
@@ -2135,7 +2140,7 @@ class ActiveLearnerPlugin(Star):
             # v1.1.12.0：联网搜索与知识领域控制
             "enable_web_search": bool(data.get("enable_web_search", True)),
             "web_search_only_highest_priority": bool(data.get("web_search_only_highest_priority", False)),
-            "knowledge_source_priority": str(data.get("knowledge_source_priority", "memory,web,bilibili")),
+            "knowledge_source_priority": str(data.get("knowledge_source_priority", "web,bilibili")),
             "knowledge_domain_scope": str(data.get("knowledge_domain_scope", "")),
             "enable_cross_domain": bool(data.get("enable_cross_domain", True)),
         })
@@ -2354,7 +2359,7 @@ class ActiveLearnerPlugin(Star):
             cfg.get("web_search_only_highest_priority", False)
         )
         self._knowledge_source_priority = self._parse_source_priority(
-            cfg.get("knowledge_source_priority", "memory,web,bilibili")
+            cfg.get("knowledge_source_priority", "web,bilibili")
         )
         self._knowledge_domain_scope = [
             d.strip().lower()

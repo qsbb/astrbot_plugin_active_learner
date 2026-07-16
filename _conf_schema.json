@@ -75,8 +75,8 @@
     "knowledge_source_priority": {
         "description": "知识搜索源优先级",
         "type": "string",
-        "hint": "逗号分隔，例如 'memory,web,bilibili'。排在前面的源优先级更高；开启「仅最高优先级」时只使用第一个来源。",
-        "default": "memory,web,bilibili"
+        "hint": "逗号分隔外部搜索源，例如 'web,bilibili'。排在前面的源优先级更高；开启「仅最高优先级」时只使用第一个来源。本地记忆默认始终优先检索，不需要放在此处。",
+        "default": "web,bilibili"
     },
     "knowledge_domain_scope": {
         "description": "知识领域范围",

@@ -27,7 +27,7 @@ const state = {
     auto_learn_topic_limit: 100,
     enable_web_search: true,
     web_search_only_highest_priority: false,
-    knowledge_source_priority: "memory,web,bilibili",
+    knowledge_source_priority: "web,bilibili",
     knowledge_domain_scope: "",
     enable_cross_domain: true,
   },
@@ -881,7 +881,7 @@ async function loadSettings() {
       auto_learn_topic_limit: s.auto_learn_topic_limit != null ? s.auto_learn_topic_limit : 100,
       enable_web_search: s.enable_web_search !== false,
       web_search_only_highest_priority: s.web_search_only_highest_priority === true,
-      knowledge_source_priority: s.knowledge_source_priority || "memory,web,bilibili",
+      knowledge_source_priority: s.knowledge_source_priority || "web,bilibili",
       knowledge_domain_scope: s.knowledge_domain_scope || "",
       enable_cross_domain: s.enable_cross_domain !== false,
     };
@@ -958,7 +958,7 @@ async function saveSettings() {
       auto_learn_topic_limit: result.auto_learn_topic_limit != null ? result.auto_learn_topic_limit : 100,
       enable_web_search: result.enable_web_search !== false,
       web_search_only_highest_priority: result.web_search_only_highest_priority === true,
-      knowledge_source_priority: result.knowledge_source_priority || "memory,web,bilibili",
+      knowledge_source_priority: result.knowledge_source_priority || "web,bilibili",
       knowledge_domain_scope: result.knowledge_domain_scope || "",
       enable_cross_domain: result.enable_cross_domain !== false,
     };

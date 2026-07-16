@@ -104,25 +104,23 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             logger.info(f"搜索「{query}」被拒绝：联网搜索已关闭")
             return ("联网搜索已关闭，无法学习新知识。")
 
-        # 1. 按知识源优先级搜索
+        # 1. 本地记忆默认优先检索（不属于「知识搜索源优先级」的外部源范畴）
         logger.info(
-            f"搜索「{query}」(主题: {topic}, scope: {scope}, "
-            f"sources={plugin._knowledge_source_priority}, "
+            f"搜索学习「{query}」(主题: {topic}, scope: {scope}, "
+            f"external_sources={plugin._knowledge_source_priority}, "
             f"only_top={plugin._web_search_only_highest_priority})"
         )
+        hits = plugin.store.search(scope, topic, top_k=3)
+        if hits:
+            top = hits[0].entry
+            logger.info(f"搜索学习命中本地记忆，直接返回「{top.topic}」")
+            return (
+                f"已检索到本地记忆「{top.topic}」，无需联网搜索。\n"
+                f"内容: {top.content[:200]}\n"
+                f"置信度: {top.confidence:.0%}"
+            )
 
-        # 若 memory 是唯一启用源，直接查本地记忆
-        if plugin._is_source_enabled("memory") and not plugin._is_source_enabled("web") and not plugin._is_source_enabled("bilibili"):
-            hits = plugin.store.search(scope, topic, top_k=3)
-            if hits:
-                top = hits[0].entry
-                logger.info(f"搜索学习命中本地记忆，直接返回「{top.topic}」")
-                return (
-                    f"已检索到本地记忆「{top.topic}」，无需联网搜索。\n"
-                    f"内容: {top.content[:200]}\n"
-                    f"置信度: {top.confidence:.0%}"
-                )
-
+        # 2. 按外部知识源优先级执行联网搜索
         search_tasks: list = []
         if plugin._is_source_enabled("web"):
             search_tasks.append(plugin.searcher.search(query, max_results=6))
