@@ -61,7 +61,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "心弦知忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
-    "1.1.12.0",
+    "1.2.0.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -219,7 +219,7 @@ class ActiveLearnerPlugin(Star):
         )
         self._slang_last_check: dict[str, float] = {}  # 进程内节流：scope_key → 上次检查时间
 
-        # v1.1.12.0：联网搜索与知识领域控制
+        # v1.2.0.0：联网搜索与知识领域控制
         self._enable_web_search = bool(cfg.get("enable_web_search", True))
         self._web_search_only_highest_priority = bool(
             cfg.get("web_search_only_highest_priority", False)
@@ -249,7 +249,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.1.12.0 已加载 | max_entries={max_entries} | "
+                f"ActiveLearner v1.2.0.0 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -539,7 +539,7 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
-        # v1.1.12.0：知识领域范围控制
+        # v1.2.0.0：知识领域范围控制
         # 本地记忆已有相关知识时不受影响；管理员不受此限制；开启跨领域时不限制。
         domain_restricted = False
         if (
@@ -1445,7 +1445,7 @@ class ActiveLearnerPlugin(Star):
                     status_code=400,
                 )
 
-            # v1.1.12.0：补充信息依赖联网搜索
+            # v1.2.0.0：补充信息依赖联网搜索
             if not self._enable_web_search:
                 return error_response(
                     "联网搜索已关闭，无法执行补充信息。请在设置中开启「启用联网搜索」。",
@@ -1603,7 +1603,7 @@ class ActiveLearnerPlugin(Star):
         3. 达到 limit 上限或所有子查询处理完则结束
         """
         try:
-            # v1.1.12.0：主动学习依赖联网搜索
+            # v1.2.0.0：主动学习依赖联网搜索
             if not self._enable_web_search:
                 return error_response(
                     "联网搜索已关闭，无法执行主动学习。请在设置中开启「启用联网搜索」。",
@@ -2159,7 +2159,7 @@ class ActiveLearnerPlugin(Star):
             "verifier_search_source": str(data.get("verifier_search_source", "auto") or "auto"),
             "priority_topics": str(data.get("priority_topics", "")),
             "auto_learn_topic_limit": int(data.get("auto_learn_topic_limit", 100)),
-            # v1.1.12.0：联网搜索与知识领域控制
+            # v1.2.0.0：联网搜索与知识领域控制
             "enable_web_search": bool(data.get("enable_web_search", True)),
             "web_search_only_highest_priority": bool(data.get("web_search_only_highest_priority", False)),
             "knowledge_source_priority": str(data.get("knowledge_source_priority", "web,bilibili")),
@@ -2375,7 +2375,7 @@ class ActiveLearnerPlugin(Star):
         except (TypeError, ValueError):
             pass
 
-        # v1.1.12.0：联网搜索与知识领域控制
+        # v1.2.0.0：联网搜索与知识领域控制
         self._enable_web_search = bool(cfg.get("enable_web_search", True))
         self._web_search_only_highest_priority = bool(
             cfg.get("web_search_only_highest_priority", False)

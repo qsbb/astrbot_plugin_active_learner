@@ -65,7 +65,7 @@ class Verifier:
         """读取验证搜索源配置，并受联网搜索总开关与优先级约束。"""
         cfg = str(self._plugin.config.get("verifier_search_source", "auto") or "auto").lower()
 
-        # v1.1.12.0：联网搜索关闭时强制纯 LLM
+        # v1.2.0.0：联网搜索关闭时强制纯 LLM
         if not getattr(self._plugin, "_enable_web_search", True):
             return "llm"
 

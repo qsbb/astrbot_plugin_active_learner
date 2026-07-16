@@ -409,7 +409,7 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
 
         plugin = self._plugin
 
-        # v1.1.12.0：联网搜索总开关
+        # v1.2.0.0：联网搜索总开关
         if not plugin._enable_web_search:
             logger.info(f"搜索 B站「{keyword}」被拒绝：联网搜索已关闭")
             return ("联网搜索已关闭，无法搜索 B 站。")
