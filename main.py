@@ -385,6 +385,21 @@ class ActiveLearnerPlugin(Star):
         except Exception:
             return True
 
+    def _is_admin_user_strict(self, event) -> bool:
+        """判断当前用户是否为管理员（用于权限绕过）。
+
+        与 _is_admin_user 的区别：无管理员配置时不视为管理员，
+        确保跨领域限制等安全开关对普通用户生效。
+        """
+        admins = self._get_admin_ids()
+        if not admins:
+            return False
+        try:
+            uid = event.get_sender_id()
+            return bool(uid) and str(uid) in admins
+        except Exception:
+            return False
+
     def _get_learn_prompt(self) -> str | None:
         """根据 learn_weight 返回对应强度的学习提示。None=不注入。"""
         w = self._learn_weight
@@ -441,24 +456,6 @@ class ActiveLearnerPlugin(Star):
 
         scope = Scope.from_event(event)
         parts: list[str] = []
-
-        # v1.1.12.0：知识领域范围检查
-        if not self._query_in_domain_scope(msg):
-            logger.info(f"领域限制：跳过非兴趣领域查询 (query: {msg[:50]})")
-            try:
-                injection = (
-                    "【领域限制】用户的问题不在你的知识领域范围内。"
-                    "请不要尝试搜索网络、调用工具或编造答案，"
-                    "直接明确回复你不知道/没玩过/没见过。"
-                )
-                if hasattr(req, "extra_user_content_parts"):
-                    from astrbot.core.agent.message import TextPart
-                    req.extra_user_content_parts.append(TextPart(text=injection))
-                else:
-                    req.system_prompt = (req.system_prompt or "") + "\n" + injection
-            except Exception as e:
-                logger.error(f"领域限制注入失败: {e}")
-            return
 
         # 1. 检索记忆（v1.1.2.0：混合检索 FTS5 + 向量）
         try:
@@ -542,8 +539,26 @@ class ActiveLearnerPlugin(Star):
                 f"若不确定，请调用 verify_knowledge 工具进行多源验证。"
             )
 
+        # v1.1.12.0：知识领域范围控制
+        # 本地记忆已有相关知识时不受影响；管理员不受此限制；开启跨领域时不限制。
+        domain_restricted = False
+        if (
+            not self._is_admin_user_strict(event)
+            and not self._enable_cross_domain
+            and self._knowledge_domain_scope
+            and not hits
+            and not self._query_in_domain_scope(msg)
+        ):
+            domain_restricted = True
+            parts.append(
+                "【领域限制】用户的问题不在你的知识领域范围内，且本地记忆中没有相关记录。"
+                "请不要尝试搜索网络、调用工具或编造答案，"
+                "直接明确回复你不知道/没玩过/没见过。"
+            )
+            logger.info(f"领域限制：无本地记忆且非兴趣领域 (query: {msg[:50]})")
+
         # 3. 主动学习提示（v1.1.5.0：所有用户按 learn_weight 触发，不限于管理员）
-        if self._enable_active_learn_hint:
+        if not domain_restricted and self._enable_active_learn_hint:
             if not hits:
                 hint = self._get_learn_prompt()
                 if hint:
@@ -568,11 +583,16 @@ class ActiveLearnerPlugin(Star):
         if not parts:
             return
 
-        # 行为规范（有内容注入时附带，约束 LLM 不要预告工具调用）
-        parts.append(
-            "[行为规范] 有记忆就直接答；需调用工具时直接调用，"
-            "不要在回复里预告\"让我查查看\"、\"我搜一下\"、\"让我想想\"等话术。"
-        )
+        # 行为规范
+        if domain_restricted:
+            parts.append(
+                "[行为规范] 请仅按上面的领域限制直接回复，不要调用任何工具或搜索网络。"
+            )
+        else:
+            parts.append(
+                "[行为规范] 有记忆就直接答；需调用工具时直接调用，"
+                "不要在回复里预告\"让我查查看\"、\"我搜一下\"、\"让我想想\"等话术。"
+            )
 
         injection = "\n".join(parts)
         # 标签汇总，让日志一眼看出注入了什么
@@ -581,6 +601,8 @@ class ActiveLearnerPlugin(Star):
             tags.append(f"{len(hits)}条记忆")
         if is_challenge and hits:
             tags.append("质疑提示")
+        if domain_restricted:
+            tags.append("领域限制")
         if self._active_learn_hinted:
             tags.append("学习提示")
         try:
