@@ -213,14 +213,23 @@
           </label>
           <div class="settings-row">
             <span class="settings-label-sm">知识搜索源优先级</span>
-            <input type="text" id="settings-knowledge-source-priority" class="settings-text" placeholder="web,bilibili" />
+            <select id="settings-knowledge-source-priority" class="settings-select">
+              <option value="web,bilibili">网页搜索优先（web → bilibili）</option>
+              <option value="bilibili,web">B 站搜索优先（bilibili → web）</option>
+              <option value="web">仅网页搜索（web）</option>
+              <option value="bilibili">仅 B 站搜索（bilibili）</option>
+            </select>
           </div>
-          <p class="hint">逗号分隔外部搜索源，如 web,bilibili。排在前面的源优先级更高；开启「仅最高优先级」时只使用第一个。本地记忆默认优先检索，不需要放在此处。</p>
+          <p class="hint">选择外部搜索源的优先级顺序；开启「仅最高优先级」时只使用第一个来源。本地记忆默认优先检索，不需要选择。</p>
           <div class="settings-row">
             <span class="settings-label-sm">知识领域范围</span>
-            <input type="text" id="settings-knowledge-domain-scope" class="settings-text" placeholder="游戏,动漫,编程" />
+            <div class="tag-input" id="settings-knowledge-domain-scope-tags">
+              <div class="tag-list"></div>
+              <input type="text" class="tag-input-field" placeholder="输入后按回车添加" />
+            </div>
+            <input type="hidden" id="settings-knowledge-domain-scope" />
           </div>
-          <p class="hint">逗号分隔的兴趣领域白名单。关闭「允许跨领域回复」后，未命中领域的问题会触发 LLM 明确拒绝回答。</p>
+          <p class="hint">输入兴趣领域后按回车添加；关闭「允许跨领域回复」后，未命中领域的问题会触发 LLM 明确拒绝回答。</p>
           <label class="checkbox-row">
             <input type="checkbox" id="settings-enable-cross-domain" />
             <span>允许跨领域回复</span>

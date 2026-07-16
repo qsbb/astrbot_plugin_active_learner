@@ -895,6 +895,68 @@ input[type="file"]:hover {
   min-width: 0;
 }
 
+#settings-modal .settings-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.tag-input {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  min-height: 34px;
+}
+
+.tag-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.tag-remove {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.tag-remove:hover {
+  color: var(--danger);
+}
+
+.tag-input-field {
+  flex: 1;
+  min-width: 80px;
+  border: none;
+  background: transparent;
+  padding: 4px 2px;
+  font-size: 13px;
+  outline: none;
+  color: var(--text);
+}
+
 /* ---------- Debug Panel ---------- */
 
 .debug-panel {

@@ -903,6 +903,7 @@ async function loadSettings() {
     document.getElementById("settings-web-search-only-top").checked = state.settings.web_search_only_highest_priority;
     document.getElementById("settings-knowledge-source-priority").value = state.settings.knowledge_source_priority;
     document.getElementById("settings-knowledge-domain-scope").value = state.settings.knowledge_domain_scope;
+    renderDomainScopeTags(state.settings.knowledge_domain_scope);
     document.getElementById("settings-enable-cross-domain").checked = state.settings.enable_cross_domain;
     updateNoProviderHint(state.settings.llm_provider_id);
   } catch (e) {
@@ -917,6 +918,68 @@ function updateNoProviderHint(providerId) {
   } else {
     hint.classList.add("hidden");
   }
+}
+
+// ---------- 知识领域范围标签输入 ----------
+
+function _getDomainScopeTags() {
+  const raw = document.getElementById("settings-knowledge-domain-scope").value || "";
+  return raw.split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+function renderDomainScopeTags(value) {
+  const tags = typeof value === "string"
+    ? value.split(",").map((t) => t.trim()).filter(Boolean)
+    : _getDomainScopeTags();
+  const list = document.querySelector("#settings-knowledge-domain-scope-tags .tag-list");
+  list.innerHTML = "";
+  for (const tag of tags) {
+    const span = document.createElement("span");
+    span.className = "tag";
+    span.innerHTML = `${escapeHtml(tag)} <span class="tag-remove" data-tag="${escapeHtml(tag)}">×</span>`;
+    list.appendChild(span);
+  }
+  document.getElementById("settings-knowledge-domain-scope").value = tags.join(",");
+}
+
+function addDomainScopeTag(tag) {
+  const t = tag.trim();
+  if (!t) return;
+  const current = _getDomainScopeTags();
+  if (current.includes(t)) return;
+  current.push(t);
+  document.getElementById("settings-knowledge-domain-scope").value = current.join(",");
+  renderDomainScopeTags();
+}
+
+function removeDomainScopeTag(tag) {
+  const current = _getDomainScopeTags().filter((t) => t !== tag);
+  document.getElementById("settings-knowledge-domain-scope").value = current.join(",");
+  renderDomainScopeTags();
+}
+
+function bindDomainScopeTags() {
+  const container = document.getElementById("settings-knowledge-domain-scope-tags");
+  const input = container.querySelector(".tag-input-field");
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addDomainScopeTag(input.value);
+      input.value = "";
+    } else if (e.key === "Backspace" && input.value === "") {
+      const tags = _getDomainScopeTags();
+      if (tags.length) {
+        removeDomainScopeTag(tags[tags.length - 1]);
+      }
+    }
+  });
+
+  container.addEventListener("click", (e) => {
+    if (e.target.classList.contains("tag-remove")) {
+      removeDomainScopeTag(e.target.dataset.tag);
+    }
+  });
 }
 
 async function saveSettings() {
@@ -977,6 +1040,7 @@ function bindSettingsEvents() {
     });
   document.getElementById("settings-save").addEventListener("click", saveSettings);
   document.getElementById("btn-refresh-providers").addEventListener("click", loadProviders);
+  bindDomainScopeTags();
   document.getElementById("settings-provider").addEventListener("change", (e) => {
     updateNoProviderHint(e.target.value);
   });
