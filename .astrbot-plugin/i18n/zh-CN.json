@@ -1,8 +1,8 @@
 {
   "pages": {
     "manager": {
-      "title": "记忆管理",
-      "description": "查看、检索、验证、删除本插件的记忆库"
+      "title": "知识管理",
+      "description": "学习、检索、验证并管理本插件的记忆库"
     }
   }
 }

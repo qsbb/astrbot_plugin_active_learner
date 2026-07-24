@@ -1,4 +1,4 @@
-"""AstrBot 凝心溯溪-忆插件主入口。
+"""AstrBot 凝心溯溪-知插件主入口。
 
 功能：
 1. 自动检索记忆并注入 LLM 上下文
@@ -35,6 +35,17 @@ from .bili_source import BiliSource
 from .embedder import Embedder
 from .models import Scope, make_chunk_id, now_ts
 from .refiner import KnowledgeRefiner
+from .runtime import (
+    BackgroundTaskHost,
+    ExternalSearchController,
+    build_missing_comparison_instruction,
+    comparison_coverage,
+    extract_comparison_objects,
+    get_request_learning_state,
+    mark_request_learning_hinted,
+    object_is_covered,
+    should_apply_domain_restriction,
+)
 from .searcher import WebSearcher
 from .settings_store import SettingsStore
 from .slang_capture import (
@@ -60,6 +71,9 @@ _FTS_SUFFICIENT_HITS = 3
 _FTS_MIN_TOP_SCORE_RATIO = 0.5
 _FTS_MIN_CONFIDENCE = 0.3
 _EMBEDDING_TIMEOUT_SECONDS = 1.5
+_RETRIEVAL_CONCURRENCY = 4
+_EXTERNAL_SEARCH_DEADLINE_SECONDS = 10.0
+_EXTERNAL_SEARCH_FIRST_RESULT_GRACE_SECONDS = 0.5
 _MEMORY_INJECT_MAX_COUNT = 3
 _MEMORY_INJECT_TOTAL_CHARS = 1800
 _MEMORY_INJECT_ITEM_CHARS = 700
@@ -71,12 +85,12 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
 @register(
     "astrbot_plugin_active_learner",
     "凌溪",
-    "凝心溯溪-忆，自动检索注入、多源学习、统一记忆池、交叉验证与版本管理",
-    "1.2.0.0",
+    "凝心溯溪-知，知识学习、检索与验证，支持自动上下文注入、多源学习、统一记忆池与版本管理",
+    "1.2.1.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
-    """凝心溯溪-忆插件。"""
+    """凝心溯溪-知：面向知识学习、检索与验证的插件。"""
 
     # ---------- 生命周期 ----------
 
@@ -124,6 +138,19 @@ class ActiveLearnerPlugin(Star):
             logger.info("搜索器未配置 API key，验证将使用 LLM-only 模式")
         self.bili_source = BiliSource(context)
         self.verifier = Verifier(self)
+        self._retrieval_semaphore = asyncio.Semaphore(_RETRIEVAL_CONCURRENCY)
+        self._external_search = ExternalSearchController(
+            concurrency=3,
+            source_timeouts={"web": 8.0, "bilibili": 6.0},
+            total_deadline=_EXTERNAL_SEARCH_DEADLINE_SECONDS,
+            first_result_grace=float(
+                cfg.get(
+                    "external_search_first_result_grace_seconds",
+                    _EXTERNAL_SEARCH_FIRST_RESULT_GRACE_SECONDS,
+                )
+            ),
+        )
+        self._background_tasks = BackgroundTaskHost()
 
         # Phase 1：精炼器 + 自管设置
         self._cfg_llm_provider_id = (cfg.get("llm_provider_id") or "").strip()
@@ -187,6 +214,7 @@ class ActiveLearnerPlugin(Star):
         self.embedder: Optional[Embedder] = (
             Embedder(self) if self._embedding_enabled else None
         )
+
         # 关心领域优先 + 注入条数
         self._priority_topics = [
             t.strip().lower()
@@ -213,7 +241,8 @@ class ActiveLearnerPlugin(Star):
         # v1.1.4.7：分块参数
         self._chunk_size = max(100, min(5000, int(cfg.get("chunk_size", 500))))
         self._chunk_overlap = max(0, min(1000, int(cfg.get("chunk_overlap", 50))))
-        # 主动学习追踪标记（on_llm_request ↔ on_llm_response）
+        # 主动学习追踪状态绑定到每个请求 event，避免并发会话互相覆盖。
+        # 保留同名属性供旧版扩展读取，但核心流程不再依赖它们。
         self._active_learn_hinted = False
         self._active_learn_was_called = False
         # v1.1.4.9：后置学习节流
@@ -265,7 +294,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"ActiveLearner v1.2.0.0 已加载 | max_entries={max_entries} | "
+                f"凝心溯溪-知 v1.2.1.0 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -303,10 +332,14 @@ class ActiveLearnerPlugin(Star):
 
     async def terminate(self):
         try:
+            await self._background_tasks.close()
+        except Exception:
+            pass
+        try:
             self.store.close()
         except Exception:
             pass
-        logger.info("ActiveLearner 已卸载，记忆已持久化")
+        logger.info("ActiveLearner 已卸载，后台任务已回收，记忆已持久化")
 
     @staticmethod
     def _parse_hybrid_weights(s: str) -> tuple[float, float]:
@@ -350,6 +383,41 @@ class ActiveLearnerPlugin(Star):
         if self._web_search_only_highest_priority:
             return self._knowledge_source_priority[0] == source
         return True
+
+    async def _search_external_sources(
+        self,
+        query: str,
+        *,
+        web_limit: int = 5,
+        bili_limit: int = 3,
+        allowed_sources: Optional[set[str]] = None,
+    ) -> list[dict]:
+        """在统一总 deadline 内并发搜索启用的外部源。"""
+        calls = {}
+        allow_web = allowed_sources is None or "web" in allowed_sources
+        allow_bili = allowed_sources is None or "bilibili" in allowed_sources
+        if (
+            allow_web
+            and web_limit > 0
+            and self._enable_web_search
+            and self._is_source_enabled("web")
+        ):
+            calls["web"] = lambda: self.searcher.search(query, max_results=web_limit)
+        if (
+            allow_bili
+            and bili_limit > 0
+            and self._is_source_enabled("bilibili")
+            and self.bili_source
+            and self.bili_source.is_available()
+        ):
+            calls["bilibili"] = lambda: self.bili_source.search(query, limit=bili_limit)
+        return await self._external_search.search(
+            calls, deadline=_EXTERNAL_SEARCH_DEADLINE_SECONDS
+        )
+
+    def _create_background_task(self, awaitable, *, name: str):
+        """统一托管插件后台任务，卸载时取消并等待回收。"""
+        return self._background_tasks.create(awaitable, name=name)
 
     def _query_in_domain_scope(self, query: str) -> bool:
         """判断查询是否命中用户设置的知识领域范围。
@@ -505,6 +573,128 @@ class ActiveLearnerPlugin(Star):
             and has_credible_hit
         )
 
+    async def _search_memory_once(
+        self, scope: Scope, query: str, query_vec=None
+    ) -> list:
+        async with self._retrieval_semaphore:
+            return await asyncio.to_thread(
+                self.store.search_hybrid,
+                scope, query, self._context_inject_count,
+                embedder=self.embedder,
+                fts_weight=self._hybrid_weights[0],
+                vec_weight=self._hybrid_weights[1],
+                enable_scope_fallback=self._enable_scope_fallback,
+                decay_half_life_days=self._decay_half_life_days,
+                query_vec=query_vec,
+                priority_topics=self._priority_topics,
+                priority_boost=self._priority_boost,
+                track_access=False,
+            )
+
+    @staticmethod
+    def _merge_search_hits(*groups) -> list:
+        by_id = {}
+        for group in groups:
+            for hit in group or []:
+                current = by_id.get(hit.entry.id)
+                if current is None or hit.score > current.score:
+                    by_id[hit.entry.id] = hit
+        return sorted(by_id.values(), key=lambda hit: hit.score, reverse=True)
+
+    async def _retrieve_memory(
+        self, scope: Scope, query: str
+    ) -> tuple[list, str, dict[str, bool]]:
+        """并发启动整句 FTS/Embedding，必要时合并并逐个补查缺失对象。"""
+        objects = extract_comparison_objects(query)
+
+        async def embed_and_search(item: str) -> list:
+            if self.embedder is None:
+                return []
+            async with self._retrieval_semaphore:
+                vector = await asyncio.wait_for(
+                    self.embedder.embed_query(item),
+                    timeout=_EMBEDDING_TIMEOUT_SECONDS,
+                )
+            if vector is None:
+                return []
+            return await self._search_memory_once(scope, item, vector)
+
+        fts_task = asyncio.create_task(self._search_memory_once(scope, query))
+        vector_task = (
+            asyncio.create_task(embed_and_search(query))
+            if self.embedder is not None
+            else None
+        )
+        hits = await fts_task
+        coverage = comparison_coverage(objects, hits)
+        fts_is_final = self._fts_hits_sufficient(hits) and all(coverage.values())
+        mode = "fts"
+
+        if vector_task is not None:
+            if fts_is_final:
+                vector_task.cancel()
+                await asyncio.gather(vector_task, return_exceptions=True)
+            else:
+                vector_group = await asyncio.gather(
+                    vector_task, return_exceptions=True
+                )
+                if isinstance(vector_group[0], list) and vector_group[0]:
+                    hits = self._merge_search_hits(hits, vector_group[0])
+                    mode = "hybrid"
+                    coverage = comparison_coverage(objects, hits)
+
+        # 整句混合结果仍未覆盖的对象，才分别补查；不重复查询已有对象。
+        missing = [obj for obj, covered in coverage.items() if not covered]
+        if missing:
+            async def search_missing_object(item: str) -> list:
+                item_fts = asyncio.create_task(self._search_memory_once(scope, item))
+                item_vector = (
+                    asyncio.create_task(embed_and_search(item))
+                    if self.embedder is not None
+                    else None
+                )
+                item_hits = await item_fts
+                if item_vector is not None:
+                    vector_result = await asyncio.gather(
+                        item_vector, return_exceptions=True
+                    )
+                    if isinstance(vector_result[0], list):
+                        item_hits = self._merge_search_hits(
+                            item_hits, vector_result[0]
+                        )
+                return item_hits
+
+            object_groups = await asyncio.gather(
+                *(search_missing_object(obj) for obj in missing)
+            )
+            hits = self._merge_search_hits(hits, *object_groups)
+            if any(object_groups) and self.embedder is not None:
+                mode = "hybrid"
+            coverage = comparison_coverage(objects, hits)
+
+        if objects:
+            selected = []
+            selected_ids = set()
+            # 每个已覆盖对象至少保留一条对应命中，之后再按总分补齐。
+            for obj in objects:
+                candidates = [
+                    hit for hit in hits if object_is_covered(obj, [hit])
+                ]
+                if candidates:
+                    best = candidates[0]
+                    if best.entry.id not in selected_ids:
+                        selected.append(best)
+                        selected_ids.add(best.entry.id)
+            for hit in hits:
+                if len(selected) >= self._context_inject_count:
+                    break
+                if hit.entry.id not in selected_ids:
+                    selected.append(hit)
+                    selected_ids.add(hit.entry.id)
+            hits = selected
+
+        return hits[:self._context_inject_count], mode, coverage
+
     @staticmethod
     def _build_memory_injection(hits) -> tuple[list[str], list]:
         """按条数、单条字符数和总字符数裁剪记忆注入。"""
@@ -548,71 +738,13 @@ class ActiveLearnerPlugin(Star):
         # 1. 普通请求先做全库 FTS；命中不足时才限时 Embedding + 混合检索。
         retrieval_started = time.perf_counter()
         retrieval_mode = "fts"
+        comparison_status: dict[str, bool] = {}
         try:
-            fts_started = time.perf_counter()
-            hits = await asyncio.to_thread(
-                self.store.search_hybrid,
-                scope, msg, self._context_inject_count,
-                embedder=self.embedder,
-                fts_weight=self._hybrid_weights[0],
-                vec_weight=self._hybrid_weights[1],
-                enable_scope_fallback=self._enable_scope_fallback,
-                decay_half_life_days=self._decay_half_life_days,
-                query_vec=None,
-                priority_topics=self._priority_topics,
-                priority_boost=self._priority_boost,
-                track_access=False,
+            hits, retrieval_mode, comparison_status = await self._retrieve_memory(
+                scope, msg
             )
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "记忆检索阶段 FTS: hits=%d, elapsed_ms=%.1f",
-                    len(hits),
-                    (time.perf_counter() - fts_started) * 1000,
-                )
-
-            fts_sufficient = self._fts_hits_sufficient(hits)
-            if not fts_sufficient and self.embedder is not None:
-                embedding_started = time.perf_counter()
-                try:
-                    query_vec = await asyncio.wait_for(
-                        self.embedder.embed_query(msg),
-                        timeout=_EMBEDDING_TIMEOUT_SECONDS,
-                    )
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "记忆检索阶段 Embedding: available=%s, elapsed_ms=%.1f, timeout_s=%.1f",
-                            query_vec is not None,
-                            (time.perf_counter() - embedding_started) * 1000,
-                            _EMBEDDING_TIMEOUT_SECONDS,
-                        )
-                    if query_vec is not None:
-                        hybrid_started = time.perf_counter()
-                        hits = await asyncio.to_thread(
-                            self.store.search_hybrid,
-                            scope, msg, self._context_inject_count,
-                            embedder=self.embedder,
-                            fts_weight=self._hybrid_weights[0],
-                            vec_weight=self._hybrid_weights[1],
-                            enable_scope_fallback=self._enable_scope_fallback,
-                            decay_half_life_days=self._decay_half_life_days,
-                            query_vec=query_vec,
-                            priority_topics=self._priority_topics,
-                            priority_boost=self._priority_boost,
-                            track_access=False,
-                        )
-                        retrieval_mode = "hybrid"
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(
-                                "记忆检索阶段混合排序: hits=%d, elapsed_ms=%.1f",
-                                len(hits),
-                                (time.perf_counter() - hybrid_started) * 1000,
-                            )
-                except asyncio.TimeoutError:
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "记忆检索阶段 Embedding 超时，保留 FTS 结果: timeout_s=%.1f",
-                            _EMBEDDING_TIMEOUT_SECONDS,
-                        )
+            if comparison_status and logger.isEnabledFor(logging.DEBUG):
+                logger.debug("对比对象覆盖: %s", comparison_status)
 
             await asyncio.to_thread(self.store.track_search_hits, hits)
             # 动态调整 priority boost：命中关心领域 → 重置；未命中 → 衰减
@@ -680,6 +812,17 @@ class ActiveLearnerPlugin(Star):
                     )
                 )
 
+        missing_comparison_objects = [
+            obj for obj, covered in comparison_status.items() if not covered
+        ]
+        missing_instruction = build_missing_comparison_instruction(
+            missing_comparison_objects
+        )
+        if missing_instruction:
+            parts.append(missing_instruction)
+            mark_request_learning_hinted(event)
+            self._active_learn_hinted = True  # 兼容旧版扩展读取
+
         # 2. 质疑检测
         is_challenge = any(re.search(p, msg) for p in CHALLENGE_PATTERNS)
         if is_challenge and hits:
@@ -697,17 +840,17 @@ class ActiveLearnerPlugin(Star):
         # v1.2.0.0：知识领域范围控制
         # 本地记忆已有相关知识时不受影响；开启跨领域时不限制。
         # 管理员是否排除取决于 cross_domain_exclude_admin 配置。
-        domain_restricted = False
         is_admin = self._is_admin_user_strict(event)
         admin_bypass = is_admin and self._cross_domain_exclude_admin
-        if (
-            not admin_bypass
-            and not self._enable_cross_domain
-            and self._knowledge_domain_scope
-            and not hits
-            and not self._query_in_domain_scope(msg)
-        ):
-            domain_restricted = True
+        domain_restricted = should_apply_domain_restriction(
+            admin_bypass=admin_bypass,
+            enable_cross_domain=self._enable_cross_domain,
+            domains_configured=bool(self._knowledge_domain_scope),
+            has_hits=bool(hits),
+            query_in_scope=self._query_in_domain_scope(msg),
+            requires_missing_search=bool(missing_instruction),
+        )
+        if domain_restricted:
             removed = self._strip_search_tools(req)
             parts.append(
                 "【领域限制】用户的问题不在你的知识领域范围内，且本地记忆中没有相关记录。"
@@ -719,11 +862,17 @@ class ActiveLearnerPlugin(Star):
             )
 
         # 3. 主动学习提示（v1.1.5.0：所有用户按 learn_weight 触发，不限于管理员）
-        if not domain_restricted and self._enable_active_learn_hint:
+        # 缺失对象提示本身就是强制学习请求，不受通用主动学习开关影响。
+        if missing_instruction:
+            pass
+        elif not domain_restricted and self._enable_active_learn_hint:
             if not hits:
                 hint = self._get_learn_prompt()
                 if hint:
-                    self._active_learn_hinted = True
+                    state = get_request_learning_state(event)
+                    if state is not None:
+                        state.hinted = True
+                    self._active_learn_hinted = True  # 兼容旧版扩展读取
                     parts.append(hint)
                     logger.info(
                         f"ℹ️ 已注入学习提示 (weight={self._learn_weight}, scope: {scope})"
@@ -738,6 +887,9 @@ class ActiveLearnerPlugin(Star):
                     "（如果用户提供了你原本不掌握的新知识点，可调用 search_and_learn 工具学习）"
                 )
         else:
+            state = get_request_learning_state(event, create=False)
+            if state is not None:
+                state.hinted = False
             self._active_learn_hinted = False
 
         # 4. 注入
@@ -764,7 +916,8 @@ class ActiveLearnerPlugin(Star):
             tags.append("质疑提示")
         if domain_restricted:
             tags.append("领域限制")
-        if self._active_learn_hinted:
+        request_state = get_request_learning_state(event, create=False)
+        if request_state is not None and request_state.hinted:
             tags.append("学习提示")
         try:
             if hasattr(req, "extra_user_content_parts"):
@@ -800,17 +953,20 @@ class ActiveLearnerPlugin(Star):
         @filter.on_llm_response()  # type: ignore[misc]
         async def on_llm_response(self, event: AstrMessageEvent, response):
             """追踪主动学习提示 + 回复完成后置学习分析。"""
-            # v1.1.2.0：追踪主动学习提示是否被 LLM 调用
-            if getattr(self, "_active_learn_hinted", False):
-                self._active_learn_hinted = False
-                if getattr(self, "_active_learn_was_called", False):
-                    self._active_learn_was_called = False
-                    logger.info("✅ 主动学习已执行并存入记忆库")
+            # 请求级追踪，避免并发会话共享实例布尔值造成串扰。
+            state = get_request_learning_state(event, create=False)
+            if state is not None and state.hinted:
+                state.hinted = False
+                if state.called:
+                    logger.info("主动学习已执行并存入记忆库")
                 else:
-                    logger.info("ℹ️ 主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）")
+                    logger.info("主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）")
 
-            # v1.1.11.5：后置学习分析改为后台异步执行，不阻塞回复
-            asyncio.create_task(self._post_learn_analysis_bg(event, response))
+            # 后置学习由插件托管，不阻塞回复，卸载时统一回收。
+            self._create_background_task(
+                self._post_learn_analysis_bg(event, response),
+                name="active-learner-post-learn",
+            )
 
     async def _post_learn_analysis_bg(self, event: AstrMessageEvent, response) -> None:
         """后置学习分析的后台包装，不阻塞回复发送。"""
@@ -987,7 +1143,7 @@ class ActiveLearnerPlugin(Star):
     # ---------- v1.1.4.0：群黑话定时批量学习（捕获已移至 on_llm_request）----------
 
     def _maybe_trigger_batch_learn(self, scope: Scope) -> None:
-        """节流检查：每 scope 5 分钟最多查一次 DB；满足条件则 asyncio.create_task 触发批量学习。"""
+        """节流检查：每 scope 5 分钟最多查一次 DB；满足条件则托管后台批量学习。"""
         scope_key = f"{scope.type}:{scope.id}"
         now = now_ts()
         last = self._slang_last_check.get(scope_key, 0.0)
@@ -1010,7 +1166,10 @@ class ActiveLearnerPlugin(Star):
             ]
             if len(qualified) < self._slang_batch_size:
                 return
-            asyncio.create_task(self._async_batch_learn_slang(scope, qualified))
+            self._create_background_task(
+                self._async_batch_learn_slang(scope, qualified),
+                name=f"active-learner-slang-{scope_key}",
+            )
         except Exception as e:
             logger.debug(f"slang 触发检查失败: {e}")
 
@@ -1638,8 +1797,10 @@ class ActiveLearnerPlugin(Star):
                                 results.append({"id": entry_id, "status": "skipped", "reason": "记忆不存在"})
                             continue
 
-                        # 搜索网络
-                        search_results = await self.searcher.search(entry.topic, max_results=5)
+                        # 搜索网络（统一分源超时、总 deadline 与限流）
+                        search_results = await self._search_external_sources(
+                            entry.topic, web_limit=5, bili_limit=3
+                        )
                         if not search_results:
                             async with lock:
                                 ok += 1
@@ -1818,8 +1979,9 @@ class ActiveLearnerPlugin(Star):
                 "finished_at": None,
             }
 
-            asyncio.create_task(
-                self._priority_learn_worker(topics, limit, scope, provider_id)
+            self._create_background_task(
+                self._priority_learn_worker(topics, limit, scope, provider_id),
+                name="active-learner-priority-learn",
             )
             logger.info(
                 f"🎯 关心领域主动学习已启动：topics={topics}, limit={limit}, scope={scope}, provider={provider_id}"
@@ -1969,24 +2131,10 @@ class ActiveLearnerPlugin(Star):
         self, query: str, scope: Scope, provider_id: str
     ) -> None:
         """对单个子查询执行：搜索 → 精炼 → 融合检查 → 存储。"""
-        # 1. 搜索（按知识源优先级配置）
-        tasks = []
-        if self._enable_web_search and self._is_source_enabled("web"):
-            tasks.append(self.searcher.search(query, max_results=5))
-        if (
-            self._is_source_enabled("bilibili")
-            and self.bili_source
-            and self.bili_source.is_available()
-        ):
-            tasks.append(self.bili_source.search(query, limit=3))
-        if not tasks:
-            logger.debug(f"主动学习「{query}」无可用搜索源")
-            return
-        results_list = await asyncio.gather(*tasks, return_exceptions=True)
-        search_results: list[dict] = []
-        for r in results_list:
-            if isinstance(r, list):
-                search_results.extend(r)
+        # 1. 搜索（分源超时 + 总 deadline + 全局限流）
+        search_results = await self._search_external_sources(
+            query, web_limit=5, bili_limit=3
+        )
         if not search_results:
             logger.debug(f"主动学习「{query}」搜索无结果")
             return
@@ -2491,6 +2639,18 @@ class ActiveLearnerPlugin(Star):
         except (TypeError, ValueError):
             pass
         self._enable_scope_fallback = bool(cfg.get("enable_scope_fallback", True))
+        try:
+            self._external_search._first_result_grace = max(
+                0.0,
+                float(
+                    cfg.get(
+                        "external_search_first_result_grace_seconds",
+                        _EXTERNAL_SEARCH_FIRST_RESULT_GRACE_SECONDS,
+                    )
+                ),
+            )
+        except (TypeError, ValueError):
+            pass
 
         # 关心领域
         self._priority_topics = [

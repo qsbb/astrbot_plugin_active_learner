@@ -233,42 +233,33 @@ class Verifier:
         # 构建搜索 query：优先用关键词组合
         search_query = " ".join(keywords[:3]) if keywords else topic
 
-        # 并行发起所有搜索任务
-        search_tasks = []
-        task_labels = []
-
-        if use_web:
-            search_tasks.append(self._plugin.searcher.search(search_query, max_results=5))
-            task_labels.append("web_primary")
-            # 第二轮搜索：用 topic + 关键词
-            if keywords:
+        # 所有搜索通过插件级控制器执行，统一分源超时、总 deadline 与限流。
+        if use_web or use_bili:
+            allowed = set()
+            if use_web:
+                allowed.add("web")
+            if use_bili:
+                allowed.add("bilibili")
+            sources.extend(
+                await self._plugin._search_external_sources(
+                    search_query,
+                    web_limit=5,
+                    bili_limit=3,
+                    allowed_sources=allowed,
+                )
+            )
+            if use_web and keywords:
                 alt_query = f"{topic} {keywords[0]}"
-                search_tasks.append(self._plugin.searcher.search(alt_query, max_results=3))
-                task_labels.append("web_secondary")
-
-        if use_bili and self._plugin.bili_source and self._plugin.bili_source.is_available():
-            bili_query = keywords[0] if keywords else topic
-            search_tasks.append(self._plugin.bili_source.search(bili_query, limit=3))
-            task_labels.append("bilibili")
-
-        # 并行执行所有搜索
-        if search_tasks:
-            results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
-            for i, label in enumerate(task_labels):
-                result = results_list[i]
-                if isinstance(result, Exception):
-                    logger.debug(f"搜索任务 {label} 失败: {result}")
-                    continue
-                if not isinstance(result, list):
-                    continue
-                source_type = "web" if label == "web_primary" else "web_factcheck" if label == "web_secondary" else "bilibili"
-                for r in result:
-                    sources.append({
-                        "title": r.get("title", ""),
-                        "snippet": r.get("snippet", ""),
-                        "url": r.get("url", ""),
-                        "source_type": source_type,
-                    })
+                extra = await self._plugin._search_external_sources(
+                    alt_query,
+                    web_limit=3,
+                    bili_limit=0,
+                    allowed_sources={"web"},
+                )
+                for item in extra:
+                    if item.get("source_type") == "web":
+                        item["source_type"] = "web_factcheck"
+                        sources.append(item)
 
         # 去重
         seen: set[str] = set()

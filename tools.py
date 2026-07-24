@@ -29,6 +29,7 @@ except ImportError:  # 允许脱离 AstrBot 做语法检查
 from .plugin_logger import logger
 
 from .models import Scope
+from .runtime import get_request_learning_state
 
 
 def _get_event(context):
@@ -120,26 +121,10 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
                 f"置信度: {top.confidence:.0%}"
             )
 
-        # 2. 按外部知识源优先级执行联网搜索
-        search_tasks: list = []
-        if plugin._is_source_enabled("web"):
-            search_tasks.append(plugin.searcher.search(query, max_results=6))
-        if (
-            plugin._is_source_enabled("bilibili")
-            and plugin.bili_source
-            and plugin.bili_source.is_available()
-        ):
-            search_tasks.append(plugin.bili_source.search(topic, limit=3))
-
-        if not search_tasks:
-            logger.info(f"搜索「{query}」无可用搜索源")
-            return ("当前知识源优先级配置下无可用的联网搜索源。")
-
-        search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
-        search_results: list[dict] = []
-        for r in search_results_list:
-            if isinstance(r, list):
-                search_results.extend(r)
+        # 2. 分源超时、总 deadline 和实例级限流由插件统一控制。
+        search_results = await plugin._search_external_sources(
+            query, web_limit=6, bili_limit=3
+        )
 
         if not search_results:
             logger.info(f"搜索「{query}」无结果")
@@ -228,7 +213,10 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             return (f"搜索学习「{topic}」失败（存储错误），请稍后重试。")
 
         logger.info(f"✅ 已学习「{topic}」(id: {entry.id}, 置信度{confidence:.0%}, 来源{len(sources)}, refined={refine_result.refined}, scope: {scope})")
-        plugin._active_learn_was_called = True
+        request_state = get_request_learning_state(_evt, create=False) if _evt else None
+        if request_state is not None:
+            request_state.called = True
+        plugin._active_learn_was_called = True  # 兼容旧版扩展读取
 
         return (
             f"已学习「{topic}」并存入记忆库。\n"
@@ -529,9 +517,10 @@ class SaveMemoryTool(FunctionTool):  # type: ignore[misc]
         provider_id = await plugin.llm_service.resolve_provider_id(event=event)
         umo = getattr(event, "unified_msg_origin", "") if event else ""
 
-        # 立即返回，异步精炼 + 存储
-        asyncio.create_task(
-            self._async_refine_and_save(plugin, scope, topic, snippet, provider_id, umo)
+        # 立即返回，后台精炼 + 存储由插件统一托管。
+        plugin._create_background_task(
+            self._async_refine_and_save(plugin, scope, topic, snippet, provider_id, umo),
+            name="active-learner-save-memory",
         )
         return (f"已标记「{topic}」，正在后台分析并存储。")
 

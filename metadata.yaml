@@ -1,7 +1,7 @@
 name: astrbot_plugin_active_learner
-display_name: 凝心溯溪-忆
-desc: 凝心溯溪系列记忆模块：自动检索注入、多源学习、统一记忆池、交叉验证与版本管理
-version: 1.2.0.0
+display_name: 凝心溯溪-知
+desc: 凝心溯溪系列知识模块：知识学习、检索与验证，支持自动上下文注入、多源学习、统一记忆池与版本管理
+version: 1.2.1.0
 author: 凌溪
 repo: https://github.com/qsbb/astrbot_plugin_active_learner
 tags:

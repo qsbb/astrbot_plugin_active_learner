@@ -66,6 +66,12 @@
         "hint": "关闭后 search_and_learn 等联网搜索工具将不可用，插件仅依赖本地记忆库。",
         "default": true
     },
+    "external_search_first_result_grace_seconds": {
+        "description": "首个搜索结果后的等待窗口（秒）",
+        "type": "float",
+        "hint": "任一外部搜索源首次返回非空结果后，最多再等待其它来源的秒数，随后取消慢源。",
+        "default": 0.5
+    },
     "web_search_only_highest_priority": {
         "description": "联网搜索仅使用最高优先级来源",
         "type": "bool",
