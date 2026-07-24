@@ -569,11 +569,13 @@ class MemoryStore:
         query_vec: Optional[list[float]] = None,
         priority_topics: Optional[list[str]] = None,
         priority_boost: float = 1.3,
+        track_access: bool = True,
     ) -> list[SearchHit]:
         """混合检索：FTS5 + 向量 + scope 回退 + 衰减分数。
 
         query_vec 必须在锁外计算后传入（避免阻塞写入）。
         无 query_vec 时降级为纯 FTS5。
+        track_access=False 可用于向量回退前的 FTS 预检，避免重复累计访问。
         priority_topics：关心的领域列表（小写），命中 topic/keywords 的记忆按 priority_boost 加权。
         priority_boost：关心领域命中时的分数乘子，1.0 等于关闭。调用方可动态衰减以实现
                        “连续非关心查询后逐步淡化优先级”的效果。
@@ -666,10 +668,18 @@ class MemoryStore:
             top_hits = hits[:top_k]
 
         # 命中后增加 access_count + 更新 last_accessed_at（锁外，避免长锁）
-        for h in top_hits:
-            self.inc_access(h.entry.id)
-            self.update_last_accessed(h.entry.id, now)
+        if track_access:
+            self.track_search_hits(top_hits, now)
         return top_hits
+
+    def track_search_hits(self, hits: list[SearchHit], ts: float = None) -> None:
+        """记录最终采用的检索命中；供分阶段检索避免重复计数。"""
+        if ts is None:
+            import time as _time
+            ts = _time.time()
+        for hit in hits:
+            self.inc_access(hit.entry.id)
+            self.update_last_accessed(hit.entry.id, ts)
 
     def update_last_accessed(self, entry_id: str, ts: float = None) -> None:
         """更新 last_accessed_at 字段。"""

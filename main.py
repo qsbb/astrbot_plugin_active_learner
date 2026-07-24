@@ -1,4 +1,4 @@
-"""AstrBot 心弦知忆插件主入口。
+"""AstrBot 凝心溯溪-忆插件主入口。
 
 功能：
 1. 自动检索记忆并注入 LLM 上下文
@@ -14,6 +14,7 @@ import collections
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -53,6 +54,16 @@ from .importer import Importer  # noqa: F811
 
 PLUGIN_NAME = "astrbot_plugin_active_learner"
 
+# 普通请求检索/注入预算：先全库 FTS，命中不足才限时调用 Embedding。
+_FTS_SUFFICIENT_HITS = 3
+# 纯 FTS 归一化后最佳命中通常约为 fts_weight；阈值仅排除明显弱命中，保守触发向量兜底。
+_FTS_MIN_TOP_SCORE_RATIO = 0.5
+_FTS_MIN_CONFIDENCE = 0.3
+_EMBEDDING_TIMEOUT_SECONDS = 1.5
+_MEMORY_INJECT_MAX_COUNT = 3
+_MEMORY_INJECT_TOTAL_CHARS = 1800
+_MEMORY_INJECT_ITEM_CHARS = 700
+
 # 运行时检测 on_llm_response hook 是否可用（不可用时降级为 on_llm_request 内嵌 References）
 _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
 
@@ -60,12 +71,12 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
 @register(
     "astrbot_plugin_active_learner",
     "凌溪",
-    "心弦知忆：自动检索注入、主动多源学习、双层隔离 SQLite 记忆库、质疑多源验证",
+    "凝心溯溪-忆，自动检索注入、多源学习、统一记忆池、交叉验证与版本管理",
     "1.2.0.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
-    """心弦知忆插件。"""
+    """凝心溯溪-忆插件。"""
 
     # ---------- 生命周期 ----------
 
@@ -182,7 +193,9 @@ class ActiveLearnerPlugin(Star):
             for t in (cfg.get("priority_topics") or "").split(",")
             if t.strip()
         ]
-        self._context_inject_count = max(1, min(10, int(cfg.get("context_inject_count", 3))))
+        self._context_inject_count = max(
+            1, min(_MEMORY_INJECT_MAX_COUNT, int(cfg.get("context_inject_count", 3)))
+        )
         # priority boost 动态衰减：命中关心领域重置为 max，未命中则逐步衰减到 min
         self._priority_boost_max = float(cfg.get("priority_boost_max", 1.3))
         self._priority_boost_min = float(cfg.get("priority_boost_min", 1.0))
@@ -477,6 +490,46 @@ class ActiveLearnerPlugin(Star):
                 return True
         return False
 
+    def _fts_hits_sufficient(self, hits) -> bool:
+        """FTS 充足需同时满足数量和保守的最低质量要求。"""
+        required_hits = min(_FTS_SUFFICIENT_HITS, self._context_inject_count)
+        if len(hits) < required_hits or not hits:
+            return False
+        top_score = max(hit.score for hit in hits)
+        has_credible_hit = any(
+            hit.entry.verified or hit.entry.confidence >= _FTS_MIN_CONFIDENCE
+            for hit in hits
+        )
+        return (
+            top_score >= self._hybrid_weights[0] * _FTS_MIN_TOP_SCORE_RATIO
+            and has_credible_hit
+        )
+
+    @staticmethod
+    def _build_memory_injection(hits) -> tuple[list[str], list]:
+        """按条数、单条字符数和总字符数裁剪记忆注入。"""
+        parts: list[str] = []
+        injected_hits: list = []
+        remaining = _MEMORY_INJECT_TOTAL_CHARS
+        for hit in hits[:_MEMORY_INJECT_MAX_COUNT]:
+            entry = hit.entry
+            v_tag = "✅已验证" if entry.verified else f"⚠️置信度{entry.confidence:.0%}"
+            prefix = f"【内部知识 #{entry.id} | {entry.topic} | {v_tag}】"
+            item_limit = min(_MEMORY_INJECT_ITEM_CHARS, remaining)
+            if item_limit <= len(prefix):
+                break
+            content = entry.content or ""
+            if len(prefix) + len(content) > item_limit:
+                keep = max(0, item_limit - len(prefix) - 1)
+                content = content[:keep] + "…"
+            item = prefix + content
+            parts.append(item)
+            injected_hits.append(hit)
+            remaining -= len(item)
+            if remaining <= 0:
+                break
+        return parts, injected_hits
+
     # ---------- 上下文注入 + 质疑检测 + 主动学习提示（合并钩子） ----------
 
     @filter.on_llm_request()
@@ -492,11 +545,11 @@ class ActiveLearnerPlugin(Star):
         scope = Scope.from_event(event)
         parts: list[str] = []
 
-        # 1. 检索记忆（v1.1.2.0：混合检索 FTS5 + 向量）
+        # 1. 普通请求先做全库 FTS；命中不足时才限时 Embedding + 混合检索。
+        retrieval_started = time.perf_counter()
+        retrieval_mode = "fts"
         try:
-            query_vec = None
-            if self.embedder is not None:
-                query_vec = await self.embedder.embed_query(msg)
+            fts_started = time.perf_counter()
             hits = await asyncio.to_thread(
                 self.store.search_hybrid,
                 scope, msg, self._context_inject_count,
@@ -505,10 +558,63 @@ class ActiveLearnerPlugin(Star):
                 vec_weight=self._hybrid_weights[1],
                 enable_scope_fallback=self._enable_scope_fallback,
                 decay_half_life_days=self._decay_half_life_days,
-                query_vec=query_vec,
+                query_vec=None,
                 priority_topics=self._priority_topics,
                 priority_boost=self._priority_boost,
+                track_access=False,
             )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "记忆检索阶段 FTS: hits=%d, elapsed_ms=%.1f",
+                    len(hits),
+                    (time.perf_counter() - fts_started) * 1000,
+                )
+
+            fts_sufficient = self._fts_hits_sufficient(hits)
+            if not fts_sufficient and self.embedder is not None:
+                embedding_started = time.perf_counter()
+                try:
+                    query_vec = await asyncio.wait_for(
+                        self.embedder.embed_query(msg),
+                        timeout=_EMBEDDING_TIMEOUT_SECONDS,
+                    )
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "记忆检索阶段 Embedding: available=%s, elapsed_ms=%.1f, timeout_s=%.1f",
+                            query_vec is not None,
+                            (time.perf_counter() - embedding_started) * 1000,
+                            _EMBEDDING_TIMEOUT_SECONDS,
+                        )
+                    if query_vec is not None:
+                        hybrid_started = time.perf_counter()
+                        hits = await asyncio.to_thread(
+                            self.store.search_hybrid,
+                            scope, msg, self._context_inject_count,
+                            embedder=self.embedder,
+                            fts_weight=self._hybrid_weights[0],
+                            vec_weight=self._hybrid_weights[1],
+                            enable_scope_fallback=self._enable_scope_fallback,
+                            decay_half_life_days=self._decay_half_life_days,
+                            query_vec=query_vec,
+                            priority_topics=self._priority_topics,
+                            priority_boost=self._priority_boost,
+                            track_access=False,
+                        )
+                        retrieval_mode = "hybrid"
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "记忆检索阶段混合排序: hits=%d, elapsed_ms=%.1f",
+                                len(hits),
+                                (time.perf_counter() - hybrid_started) * 1000,
+                            )
+                except asyncio.TimeoutError:
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "记忆检索阶段 Embedding 超时，保留 FTS 结果: timeout_s=%.1f",
+                            _EMBEDDING_TIMEOUT_SECONDS,
+                        )
+
+            await asyncio.to_thread(self.store.track_search_hits, hits)
             # 动态调整 priority boost：命中关心领域 → 重置；未命中 → 衰减
             if self._priority_topics:
                 if self._hits_match_priority(hits):
@@ -531,23 +637,37 @@ class ActiveLearnerPlugin(Star):
             logger.warning(f"记忆检索失败: {e}")
             hits = []
 
-        logger.info(f"记忆检索: {len(hits)} hits (scope: {scope}, query: {msg[:50]})")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "记忆检索阶段总计: mode=%s, hits=%d, elapsed_ms=%.1f",
+                retrieval_mode,
+                len(hits),
+                (time.perf_counter() - retrieval_started) * 1000,
+            )
+        logger.info(
+            f"记忆检索: {len(hits)} hits (mode: {retrieval_mode}, "
+            f"scope: {scope}, query: {msg[:50]})"
+        )
 
-        # 把注入的记忆 ID 挂到 event 上，供 on_llm_response footer 使用
-        injected_ids = [h.entry.id for h in hits]
+        injection_started = time.perf_counter()
+        memory_parts, injected_hits = self._build_memory_injection(hits)
+        parts.extend(memory_parts)
+        # 把实际注入的记忆 ID 挂到 event 上，供 on_llm_response footer 使用
+        injected_ids = [h.entry.id for h in injected_hits]
         try:
             object.__setattr__(event, "_injected_memory_ids", injected_ids)
         except Exception:
             pass
-
-        for h in hits:
-            entry = h.entry
-            v_tag = "✅已验证" if entry.verified else f"⚠️置信度{entry.confidence:.0%}"
-            parts.append(
-                f"【内部知识 #{entry.id} | {entry.topic} | {v_tag}】{entry.content}"
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "记忆注入裁剪: selected=%d/%d, chars=%d, elapsed_ms=%.1f",
+                len(injected_hits),
+                len(hits),
+                sum(len(part) for part in memory_parts),
+                (time.perf_counter() - injection_started) * 1000,
             )
 
-        if parts:
+        if memory_parts:
             parts.append(
                 "【以上为内部知识参考，请基于上述内容作答，不要在回复中输出【内部知识】标记】"
             )
@@ -2390,7 +2510,11 @@ class ActiveLearnerPlugin(Star):
         # 上下文注入条数
         try:
             self._context_inject_count = max(
-                1, min(10, int(cfg.get("context_inject_count", 3)))
+                1,
+                min(
+                    _MEMORY_INJECT_MAX_COUNT,
+                    int(cfg.get("context_inject_count", 3)),
+                ),
             )
         except (TypeError, ValueError):
             pass

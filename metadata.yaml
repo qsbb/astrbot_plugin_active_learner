@@ -1,6 +1,6 @@
 name: astrbot_plugin_active_learner
-display_name: 心弦知忆
-desc: 自动检索注入上下文、主动多源学习新知识、拟人化统一记忆池（软 scope 权重）、质疑时多源交叉验证与版本化
+display_name: 凝心溯溪-忆
+desc: 凝心溯溪系列记忆模块：自动检索注入、多源学习、统一记忆池、交叉验证与版本管理
 version: 1.2.0.0
 author: 凌溪
 repo: https://github.com/qsbb/astrbot_plugin_active_learner
