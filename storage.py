@@ -582,7 +582,6 @@ class MemoryStore:
         """
         import time as _time
         from .embedder import normalize_scores
-        from .models import SCOPE_GROUP, SCOPE_PRIVATE
 
         now = _time.time()
 

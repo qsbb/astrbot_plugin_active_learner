@@ -6,14 +6,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
-import re
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from .plugin_logger import logger
 

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 # 候选词字符集：1-15 个中英文字符/数字/下划线，不含标点空格
 _PHRASE_CHARS = r"[\w\u4e00-\u9fa5]{1,15}"

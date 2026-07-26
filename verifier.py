@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Optional
 
@@ -330,9 +329,9 @@ class Verifier:
             f"请指出支持方论证中的:\n"
             f"1. 事实错误或偷换概念\n"
             + ("2. 来源不足或引用偏差\n" if not llm_only else "2. 知识盲区或过时信息\n")
-            + f"3. 逻辑漏洞\n"
-            f"4. 给出你的置信度评分（0-100，越低越怀疑）\n"
-            f"5. 200 字以内"
+            + "3. 逻辑漏洞\n"
+            "4. 给出你的置信度评分（0-100，越低越怀疑）\n"
+            "5. 200 字以内"
         )
         reply_b = await self._safe_llm_generate(provider_id, prompt_b)
         prompts.append({"step": "debate_round_b_skeptical", "text": prompt_b})

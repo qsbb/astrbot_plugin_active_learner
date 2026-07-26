@@ -17,7 +17,8 @@ from .plugin_logger import logger
 # 尝试导入 bilibili-api-python（第二降级路径）
 _BILI_AVAILABLE = False
 try:
-    from bilibili_api import search as _bili_search_mod  # type: ignore
+    from bilibili_api import search as _bili_search_mod  # type: ignore  # noqa: F401
+
     _BILI_AVAILABLE = True
 except ImportError:
     _BILI_AVAILABLE = False

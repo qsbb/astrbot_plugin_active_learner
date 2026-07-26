@@ -7,7 +7,7 @@ API key 从 AstrBot 的 provider_settings 读取，无需额外配置。
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 

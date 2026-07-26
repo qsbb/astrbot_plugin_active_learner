@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
 
@@ -33,7 +33,7 @@ except ImportError:  # AstrBot < v4.26 没有 Plugin Pages 支持
 
 from .bili_source import BiliSource
 from .embedder import Embedder
-from .models import Scope, make_chunk_id, now_ts
+from .models import Scope, now_ts
 from .refiner import KnowledgeRefiner
 from .runtime import (
     BackgroundTaskHost,
@@ -54,7 +54,7 @@ from .slang_capture import (
     parse_batch_response,
 )
 from .storage import MemoryStore
-from .triggers import ACTIVE_LEARN_PATTERNS, CHALLENGE_PATTERNS
+from .triggers import CHALLENGE_PATTERNS
 from .tools import create_tools
 from .verifier import Verifier
 
@@ -86,7 +86,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "凝心溯溪-知，知识学习、检索与验证，支持自动上下文注入、多源学习、统一记忆池与版本管理",
-    "1.2.3.1",
+    "1.2.4",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -294,7 +294,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"凝心溯溪-知 v1.2.3.1 已加载 | max_entries={max_entries} | "
+                f"凝心溯溪-知 v1.2.4 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -1000,7 +1000,7 @@ class ActiveLearnerPlugin(Star):
                 user_msg,
             )
             if not learn_intent:
-                logger.debug(f"后置学习跳过: 管理员消息无明确学习意图")
+                logger.debug("后置学习跳过: 管理员消息无明确学习意图")
                 return
             # 去掉学习指令，保留真正要学习的内容
             user_msg = re.sub(
@@ -1012,7 +1012,7 @@ class ActiveLearnerPlugin(Star):
                 logger.debug("后置学习跳过: 去掉指令后用户消息为空")
                 return
         else:
-            logger.debug(f"后置学习分析: 非管理员用户，自动分析")
+            logger.debug("后置学习分析: 非管理员用户，自动分析")
 
         # 4. 提取 LLM 回复
         llm_text = ""
@@ -1273,7 +1273,7 @@ class ActiveLearnerPlugin(Star):
                 f"{i}. {v} {e.topic} "
                 f"(置信度{e.confidence:.0%}, 访问{e.access_count}次)"
             )
-        lines.append(f"\n使用 /memory list <页码> 翻页")
+        lines.append("\n使用 /memory list <页码> 翻页")
         yield event.plain_result("\n".join(lines))
 
     @memory_cmd.command("search")
@@ -1879,7 +1879,7 @@ class ActiveLearnerPlugin(Star):
                         all_sources.extend(s for s in sources if s not in all_sources)
 
                         # 更新记忆
-                        updated = await asyncio.to_thread(
+                        await asyncio.to_thread(
                             self.store.add_or_update,
                             Scope(type=entry.scope_type, id=entry.scope_id),
                             entry.topic, merged_content,

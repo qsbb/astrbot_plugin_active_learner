@@ -16,7 +16,6 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from .plugin_logger import logger
 
 
 class ConfigManager:

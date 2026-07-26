@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import io
-from typing import Optional
 
 
 def chunk_text(text: str, max_size: int = 500, overlap: int = 50) -> list[str]:
