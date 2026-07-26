@@ -7,10 +7,15 @@
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <header class="topbar">
+  <div class="shell">
+  <header class="topbar hero">
     <div class="topbar-inner">
-      <h1>🧠 凝心溯溪-知</h1>
-      <div class="actions">
+      <div class="hero-copy">
+        <p class="eyebrow">AstrBot Plugin Page</p>
+        <h1>🧠 凝心溯溪-知</h1>
+        <p class="subtitle">知识学习、跨 scope 检索、验证与记忆条目管理</p>
+      </div>
+      <div class="actions" aria-label="知识管理操作">
         <button id="btn-refresh" type="button" title="刷新">↻ 刷新</button>
         <button id="btn-import" type="button" title="导入">⬆ 导入</button>
         <button id="btn-builtin-kb" type="button" title="从 AstrBot 内置知识库导入">📚 内置知识库</button>
@@ -20,7 +25,6 @@
         <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
       </div>
     </div>
-    <p class="subtitle">知识学习、跨 scope 检索、验证与记忆条目管理</p>
   </header>
 
   <main>
@@ -106,6 +110,7 @@
       <button id="page-next" type="button">下一页 ›</button>
     </section>
   </main>
+  </div>
 
   <div id="detail-modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-backdrop"></div>

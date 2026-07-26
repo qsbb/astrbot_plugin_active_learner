@@ -86,7 +86,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "凝心溯溪-知，知识学习、检索与验证，支持自动上下文注入、多源学习、统一记忆池与版本管理",
-    "1.2.1.0",
+    "1.2.2.0",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -294,7 +294,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"凝心溯溪-知 v1.2.1.0 已加载 | max_entries={max_entries} | "
+                f"凝心溯溪-知 v1.2.2.0 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
