@@ -101,10 +101,7 @@ async function loadStats() {
     };
     setVal("total", s.total ?? 0);
     setVal("verified", s.verified ?? 0);
-    setVal("challenged", s.challenged ?? 0);
-    setVal("challenged_total", s.challenged_total ?? 0);
     setVal("avg_confidence", s.avg_confidence != null ? formatConfidence(s.avg_confidence) : "—");
-    setVal("access_total", s.access_total ?? 0);
   } catch (e) {
     showToast(`加载统计失败: ${e.message}`, true);
   }
