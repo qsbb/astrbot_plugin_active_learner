@@ -1850,7 +1850,7 @@ body {
 }
 
 .shell {
-  width: min(1120px, calc(100% - 32px));
+  width: min(1440px, calc(100% - 32px));
   margin: 0 auto;
   padding: 36px 0 60px;
 }
@@ -2103,8 +2103,9 @@ input[type="range"]::-webkit-slider-thumb { border-color: var(--accent); }
 }
 
 @media (max-width: 760px) and (orientation: portrait) {
-  .shell { width: min(100% - 16px, 1120px); padding-top: 16px; }
+  .shell { width: calc(100% - 16px); padding-top: 16px; }
   .topbar-inner { gap: 16px; }
+  .desktop-stat { display: none; }
   .eyebrow, .subtitle { display: none; }
   .topbar h1 { font-size: 24px; }
 
