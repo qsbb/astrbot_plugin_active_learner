@@ -15,7 +15,7 @@
 
 ## 当前实现信息
 
-- 当前版本：`1.2.7`（已按 CONVENTIONS.md 第 2 节迁移为三段式无前缀格式）。
+- 当前版本：`1.2.8`（已按 CONVENTIONS.md 第 2 节迁移为三段式无前缀格式）。
 - AstrBot 兼容范围：`astrbot_version: ">=4.16,<5"`（已在 metadata 中声明；下界覆盖 `on_llm_response` 钩子引入版本）。
 - 命令入口：`/memory` 命令组；主要包括 `stats`、`list`、`search`、`info`、`forget`、`verify`、`export`、`versions`、`refresh`。
 - 页面/API 入口：插件注册多项 Web API；当前 README 不将其表述为固定管理页面，具体以运行时能力为准。

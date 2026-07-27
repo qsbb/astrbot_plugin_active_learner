@@ -92,7 +92,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "凝心溯溪-知，知识学习、检索与验证，支持自动上下文注入、多源学习、统一记忆池与版本管理",
-    "1.2.7",
+    "1.2.8",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -302,7 +302,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"凝心溯溪-知 v1.2.7 已加载 | max_entries={max_entries} | "
+                f"凝心溯溪-知 v1.2.8 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -1593,7 +1593,11 @@ class ActiveLearnerPlugin(Star):
         )
 
     async def _web_debug(self):
-        """返回数据库和插件诊断信息。"""
+        """返回数据库、运行状态和当前实际配置。
+
+        配置值统一从 ConfigManager 读取，不再读取启动时的旧 self.config。
+        只返回安全的运行参数，provider_settings/API Key 等敏感字段不进入诊断响应。
+        """
         embedder_available = False
         embedder_model = ""
         if self.embedder is not None:
@@ -1602,6 +1606,47 @@ class ActiveLearnerPlugin(Star):
                 embedder_model = self.embedder.model_name
             except Exception:
                 pass
+
+        cfg = self.config_manager.all()
+        configured_provider = str(cfg.get("llm_provider_id", "") or "").strip()
+        effective_provider = (
+            configured_provider
+            or self._cfg_llm_provider_id
+            or self._resolve_default_provider_id()
+        )
+        config_snapshot = {
+            "llm_provider_id": configured_provider,
+            "effective_provider_id": effective_provider,
+            "max_entries": int(cfg.get("max_entries", 500)),
+            "min_confidence": float(cfg.get("min_confidence", 0.3)),
+            "enable_active_learn_hint": bool(cfg.get("enable_active_learn_hint", True)),
+            "learn_weight": float(cfg.get("learn_weight", 0.7)),
+            "search_top_k": int(cfg.get("search_top_k", 5)),
+            "default_confidence": float(cfg.get("default_confidence", 0.6)),
+            "chunk_size": int(cfg.get("chunk_size", 500)),
+            "chunk_overlap": int(cfg.get("chunk_overlap", 50)),
+            "embedding_enabled": bool(cfg.get("embedding_enabled", True)),
+            "hybrid_search_weight": str(cfg.get("hybrid_search_weight", "0.4,0.6")),
+            "verifier_search_source": str(cfg.get("verifier_search_source", "auto")),
+            "enable_web_search": bool(cfg.get("enable_web_search", True)),
+            "enable_bilibili": bool(cfg.get("enable_bilibili", False)),
+            "priority_topics": str(cfg.get("priority_topics", "")),
+            "knowledge_domain_scope": str(cfg.get("knowledge_domain_scope", "")),
+            "enable_cross_domain": bool(cfg.get("enable_cross_domain", True)),
+            "llm_max_concurrency": int(cfg.get("llm_max_concurrency", 1)),
+        }
+        runtime_snapshot = {
+            "learn_weight": self._learn_weight,
+            "search_top_k": self._search_top_k,
+            "default_confidence": self._default_confidence,
+            "chunk_size": self._chunk_size,
+            "chunk_overlap": self._chunk_overlap,
+            "enable_active_learn_hint": self._enable_active_learn_hint,
+            "enable_web_search": self._enable_web_search,
+            "priority_topics": list(self._priority_topics),
+            "knowledge_domain_scope": list(self._knowledge_domain_scope),
+            "enable_cross_domain": self._enable_cross_domain,
+        }
         return json_response({
             "db_path": str(self._db_path),
             "schema_version": self.store._schema_version,
@@ -1613,6 +1658,8 @@ class ActiveLearnerPlugin(Star):
             "priority_boost": round(self._priority_boost, 2),
             "tools_registered": [t.name for t in self._tools],
             "token_stats": self.llm_service.get_token_stats(),
+            "config": config_snapshot,
+            "runtime": runtime_snapshot,
         })
 
     @staticmethod
@@ -2737,13 +2784,22 @@ class ActiveLearnerPlugin(Star):
                 resp[name] = updated[name]
         return json_response(resp)
 
+    def _sync_config_snapshot(self, settings: dict) -> dict:
+        """刷新所有模块共享的配置快照，并返回完整合并值。"""
+        cfg = self.config_manager.all()
+        cfg.update({k: v for k, v in settings.items() if v is not None})
+        self.config = dict(cfg)
+        return cfg
+
     def _apply_config_to_runtime(self, settings: dict) -> None:
         """把保存后的设置立即应用到运行时变量（无需重启 AstrBot）。
 
         合并优先级：settings（自管存储）覆盖 self.config（schema 默认）。
         """
-        cfg = dict(self.config or {})
-        cfg.update({k: v for k, v in settings.items() if v is not None})
+        # tools.py、verifier.py、_get_admin_ids() 等运行路径会直接读取
+        # plugin.config；必须先刷新公开快照，否则管理页保存后诊断和实际功能
+        # 都会继续使用启动时旧参数。
+        cfg = self._sync_config_snapshot(settings)
 
         # 容量与置信度阈值
         try:

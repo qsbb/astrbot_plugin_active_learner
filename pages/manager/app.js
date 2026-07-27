@@ -609,7 +609,53 @@ async function loadDebug() {
       .map((s) => `<li>${escapeHtml(s.scope_type)}:${escapeHtml(s.scope_id)} — ${s.count} 条</li>`)
       .join("");
     const toolsList = (d.tools_registered || []).join(", ") || "（无）";
-    // token 统计：1天 / 3天 / 7天 / 总计 + 近7天按 provider 分组
+    const cfg = d.config || {};
+    const runtime = d.runtime || {};
+    const formatDebugValue = (value) => {
+      if (value === true) return "开启";
+      if (value === false) return "关闭";
+      if (Array.isArray(value)) return value.length ? value.join(", ") : "（未设置）";
+      if (value === "" || value == null) return "（未设置）";
+      return String(value);
+    };
+    const configRows = [
+      ["配置 Provider", cfg.llm_provider_id],
+      ["实际 Provider", cfg.effective_provider_id],
+      ["记忆容量", cfg.max_entries],
+      ["最低置信度", cfg.min_confidence],
+      ["主动学习提示", cfg.enable_active_learn_hint],
+      ["学习权重", cfg.learn_weight],
+      ["搜索条数", cfg.search_top_k],
+      ["默认置信度", cfg.default_confidence],
+      ["分块大小", cfg.chunk_size],
+      ["分块重叠", cfg.chunk_overlap],
+      ["向量检索", cfg.embedding_enabled],
+      ["混合检索权重", cfg.hybrid_search_weight],
+      ["验证搜索源", cfg.verifier_search_source],
+      ["联网搜索", cfg.enable_web_search],
+      ["B站搜索", cfg.enable_bilibili],
+      ["关心领域", cfg.priority_topics],
+      ["知识领域范围", cfg.knowledge_domain_scope],
+      ["允许跨领域", cfg.enable_cross_domain],
+      ["LLM 最大并发", cfg.llm_max_concurrency],
+    ].map(([label, value]) =>
+      `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(formatDebugValue(value))}</dd>`
+    ).join("");
+    const runtimeRows = [
+      ["学习权重", runtime.learn_weight],
+      ["搜索条数", runtime.search_top_k],
+      ["默认置信度", runtime.default_confidence],
+      ["分块大小", runtime.chunk_size],
+      ["分块重叠", runtime.chunk_overlap],
+      ["主动学习提示", runtime.enable_active_learn_hint],
+      ["联网搜索", runtime.enable_web_search],
+      ["关心领域", runtime.priority_topics],
+      ["知识领域范围", runtime.knowledge_domain_scope],
+      ["允许跨领域", runtime.enable_cross_domain],
+    ].map(([label, value]) =>
+      `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(formatDebugValue(value))}</dd>`
+    ).join("");
+    // token 统计：1天 / 3天 / 7天 + 总计 + 近7天按 provider 分组
     const ts = d.token_stats || {};
     const fmtNum = (n) => (n ?? 0).toLocaleString("en-US");
     const w1 = ts["1d"] || { total_tokens: 0, calls: 0 };
@@ -674,6 +720,14 @@ async function loadDebug() {
         <dt>关心领域</dt><dd>${d.priority_topics && d.priority_topics.length ? escapeHtml(d.priority_topics.join(", ")) : "（未设置）"}</dd>
         <dt>当前 Boost</dt><dd>${d.priority_boost ?? "—"}</dd>
       </dl>
+      <div class="debug-section">
+        <dt>当前配置（统一配置源）</dt>
+        <dd><dl>${configRows || "<dt>状态</dt><dd>无配置数据</dd>"}</dl></dd>
+      </div>
+      <div class="debug-section">
+        <dt>实际运行值</dt>
+        <dd><dl>${runtimeRows || "<dt>状态</dt><dd>无运行数据</dd>"}</dl></dd>
+      </div>
       ${tokenHtml}
       ${scopesList ? `<div class="debug-section"><dt>Scope 列表</dt><ul class="debug-scope-list">${scopesList}</ul></div>` : ""}
     `;
