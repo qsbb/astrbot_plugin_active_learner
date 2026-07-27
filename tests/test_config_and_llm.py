@@ -72,6 +72,81 @@ def test_numeric_getters_clamp_and_fallback(tmp_path):
     assert cfg.get_int("missing_key", 3) == 3
 
 
+# ---------- 两个配置页的双向同步 ----------
+
+
+class _FakeNativeConfig(dict):
+    """模拟 AstrBot 注入的 AstrBotConfig：dict + save_config()。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.saved = 0
+
+    def save_config(self):
+        self.saved += 1
+
+
+def test_manager_page_writes_back_to_astrbot_plugin_config(tmp_path):
+    """管理页保存后必须回写 AstrBot 插件配置页，否则两页显示的值会分叉。"""
+    native = _FakeNativeConfig({"learn_weight": 0.7})
+    cfg = ConfigManager(tmp_path, native, native_config=native)
+    cfg.update(learn_weight=1.0)
+    assert native["learn_weight"] == 1.0
+    assert native.saved == 1
+
+
+def test_astrbot_page_edit_wins_over_stale_overlay(tmp_path):
+    """核心回归：管理页写过之后，插件配置页的修改不能被 overlay 永久压制。"""
+    native = _FakeNativeConfig({"learn_weight": 0.7})
+    ConfigManager(tmp_path, native, native_config=native).update(learn_weight=1.0)
+
+    # 用户随后在 AstrBot 插件配置页把它改成 0.3，插件重启后带着新值加载
+    reloaded = ConfigManager(tmp_path, {"learn_weight": 0.3})
+    assert reloaded.get("learn_weight") == 0.3
+    # 过期的 overlay 项应被清理，避免下次启动又冒出来
+    assert "learn_weight" not in reloaded.overlay_all()
+
+
+def test_overlay_still_wins_when_astrbot_config_unchanged(tmp_path):
+    """插件配置页没动过时，overlay 仍应优先，避免修复引入回退。"""
+    native = _FakeNativeConfig({"learn_weight": 0.7, "search_top_k": 5})
+    ConfigManager(tmp_path, native, native_config=native).update(search_top_k=12)
+
+    # 重启：插件配置页仍是回写后的值
+    reloaded = ConfigManager(tmp_path, dict(native))
+    assert reloaded.get("search_top_k") == 12
+
+
+def test_baseline_marker_is_not_exposed_as_a_setting(tmp_path):
+    """基线快照是内部字段，不能出现在 overlay/all 里被前端当成配置项。"""
+    native = _FakeNativeConfig({"learn_weight": 0.7})
+    cfg = ConfigManager(tmp_path, native, native_config=native)
+    cfg.update(learn_weight=0.9)
+    reloaded = ConfigManager(tmp_path, dict(native))
+    assert ConfigManager._BASELINE_KEY not in reloaded.overlay_all()
+    assert ConfigManager._BASELINE_KEY not in reloaded.all()
+    # 且确实已落盘，供下次启动比对
+    raw = json.loads(
+        (tmp_path / "active_learner_settings.json").read_text(encoding="utf-8")
+    )
+    assert ConfigManager._BASELINE_KEY in raw
+
+
+def test_native_write_failure_degrades_to_overlay_only(tmp_path):
+    """回写失败（旧版 AstrBot）时不能抛错，需退化为仅用 overlay。"""
+
+    class _Broken(_FakeNativeConfig):
+        def save_config(self):
+            raise RuntimeError("no permission")
+
+    native = _Broken({"learn_weight": 0.7})
+    cfg = ConfigManager(tmp_path, native, native_config=native)
+    cfg.update(learn_weight=1.0)
+    assert cfg.get("learn_weight") == 1.0
+    reloaded = ConfigManager(tmp_path, {"learn_weight": 0.7})
+    assert reloaded.get("learn_weight") == 1.0
+
+
 # ---------- LLMService 并发控制 ----------
 
 

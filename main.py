@@ -92,7 +92,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "凝心溯溪-知，知识学习、检索与验证，支持自动上下文注入、多源学习、统一记忆池与版本管理",
-    "1.2.6",
+    "1.2.7",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -107,6 +107,11 @@ class ActiveLearnerPlugin(Star):
         # 2. 旧版：context.get_config() 返回全局配置，需取插件子键
         # 3. 兜底：空字典
         cfg = getattr(self, "config", None) or {}
+        # AstrBot 注入的 config 是 AstrBotConfig 实例，带 save_config() 可写回
+        # 插件配置页对应的持久化文件。下面 self.config 会被替换成合并后的普通
+        # dict，因此必须先把原生对象单独存起来，否则管理页的修改无法回写 AstrBot，
+        # 会导致 overlay 永久压制插件配置页（页面改了却完全不生效）。
+        self._native_config = cfg if hasattr(cfg, "save_config") else None
         if not cfg and hasattr(context, "get_config"):
             try:
                 raw = context.get_config()
@@ -174,7 +179,9 @@ class ActiveLearnerPlugin(Star):
 
         # v1.1.5.0：统一服务层。ConfigManager 独占 Dashboard 配置文件，
         # 避免两个缓存同时读取同一文件后产生运行时旧值。
-        self.config_manager = ConfigManager(StarTools.get_data_dir(), cfg)
+        self.config_manager = ConfigManager(
+            StarTools.get_data_dir(), cfg, native_config=self._native_config
+        )
         cfg = self.config_manager.all()
         self.config = cfg
         self.llm_service = LLMService(self)
@@ -295,7 +302,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"凝心溯溪-知 v1.2.6 已加载 | max_entries={max_entries} | "
+                f"凝心溯溪-知 v1.2.7 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
