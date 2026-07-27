@@ -75,6 +75,14 @@ class LLMService:
 
     def __init__(self, plugin):
         self._plugin = plugin
+        # 插件内部的精炼、验证、后置学习共用同一低 RPM Provider。
+        # 默认串行，避免后台任务与主工具续轮形成瞬时请求风暴。
+        raw_concurrency = plugin.config_manager.get("llm_max_concurrency", 1)
+        try:
+            concurrency = max(1, min(4, int(raw_concurrency)))
+        except (TypeError, ValueError):
+            concurrency = 1
+        self._semaphore = asyncio.Semaphore(concurrency)
         # 估算调用计数（运行时内存，仅用于诊断「有多少次是字符估算」）
         self._estimated_calls = 0
 
@@ -103,10 +111,11 @@ class LLMService:
         logger.info(f"LLM 调用 [model={provider_id}] prompt={prompt_preview!r}")
 
         try:
-            resp = await self._plugin.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=prompt,
-            )
+            async with self._semaphore:
+                resp = await self._plugin.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=prompt,
+                )
             text = getattr(resp, "completion_text", "") or ""
             if not text:
                 text = str(resp) if resp else ""

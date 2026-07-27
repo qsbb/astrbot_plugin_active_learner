@@ -16,7 +16,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.provider import ProviderRequest
@@ -47,7 +47,6 @@ from .runtime import (
     should_apply_domain_restriction,
 )
 from .searcher import WebSearcher
-from .settings_store import SettingsStore
 from .slang_capture import (
     build_batch_prompt,
     extract_candidates,
@@ -64,6 +63,13 @@ from .llm_service import LLMService
 from .importer import Importer  # noqa: F811
 
 PLUGIN_NAME = "astrbot_plugin_active_learner"
+_TOOL_NAMES = (
+    "search_and_learn",
+    "recall_memory",
+    "verify_knowledge",
+    "search_bilibili",
+    "save_memory",
+)
 
 # 普通请求检索/注入预算：先全库 FTS，命中不足才限时调用 Embedding。
 _FTS_SUFFICIENT_HITS = 3
@@ -86,7 +92,7 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
     "astrbot_plugin_active_learner",
     "凌溪",
     "凝心溯溪-知，知识学习、检索与验证，支持自动上下文注入、多源学习、统一记忆池与版本管理",
-    "1.2.4",
+    "1.2.6",
     "https://github.com/qsbb/astrbot_plugin_active_learner",
 )
 class ActiveLearnerPlugin(Star):
@@ -165,18 +171,12 @@ class ActiveLearnerPlugin(Star):
                 f"llm_provider_id 为空! cfg 中 provider 相关字段: {provider_keys}"
             )
         self.refiner = KnowledgeRefiner(self)
-        self._settings = SettingsStore(
-            StarTools.get_data_dir() / "active_learner_settings.json"
-        )
-        # v1.1.4.8：Dashboard 设置覆盖 AstrBot 配置，确保两边修改都生效
-        dash_cfg = self._settings.all()
-        if isinstance(dash_cfg, dict):
-            cfg.update({k: v for k, v in dash_cfg.items() if v is not None})
 
-        # v1.1.5.0：统一服务层
-        self.config_manager = ConfigManager(
-            StarTools.get_data_dir(), cfg
-        )
+        # v1.1.5.0：统一服务层。ConfigManager 独占 Dashboard 配置文件，
+        # 避免两个缓存同时读取同一文件后产生运行时旧值。
+        self.config_manager = ConfigManager(StarTools.get_data_dir(), cfg)
+        cfg = self.config_manager.all()
+        self.config = cfg
         self.llm_service = LLMService(self)
         self.importer = Importer(self)
 
@@ -279,9 +279,10 @@ class ActiveLearnerPlugin(Star):
             cfg.get("cross_domain_exclude_admin", True)
         )
 
-        # 注册 LLM 工具
+        # 注册 LLM 工具。先清理热重载可能残留的旧实例。
         self._tools = []
         try:
+            self._cleanup_llm_tools()
             tools = create_tools(self)
             if tools:
                 self._tools = tools
@@ -294,7 +295,7 @@ class ActiveLearnerPlugin(Star):
         try:
             total = self.store.count_all()
             logger.info(
-                f"凝心溯溪-知 v1.2.4 已加载 | max_entries={max_entries} | "
+                f"凝心溯溪-知 v1.2.6 已加载 | max_entries={max_entries} | "
                 f"bili={'on' if self.bili_source.is_available() else 'off'} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
@@ -335,11 +336,42 @@ class ActiveLearnerPlugin(Star):
             await self._background_tasks.close()
         except Exception:
             pass
+        self._cleanup_llm_tools()
         try:
             self.store.close()
         except Exception:
             pass
-        logger.info("ActiveLearner 已卸载，后台任务已回收，记忆已持久化")
+        logger.info("ActiveLearner 已卸载，后台任务与 LLM 工具已回收，记忆已持久化")
+
+    def _cleanup_llm_tools(self) -> None:
+        """清理本插件工具，避免热重载后残留同名旧实例。"""
+        for method_name in (
+            "remove_llm_tool",
+            "remove_llm_tools",
+            "unregister_llm_tool",
+        ):
+            method = getattr(self.context, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                for name in _TOOL_NAMES:
+                    method(name)
+                return
+            except Exception as exc:
+                logger.debug(f"通过 {method_name} 清理 LLM 工具失败: {exc}")
+
+        try:
+            manager = getattr(self.context, "_func_tool_manager", None) or getattr(
+                self.context, "func_tool_manager", None
+            )
+            tools = getattr(manager, "tools", None)
+            if not isinstance(tools, list):
+                return
+            manager.tools = [
+                tool for tool in tools if getattr(tool, "name", "") not in _TOOL_NAMES
+            ]
+        except Exception as exc:
+            logger.debug(f"清理残留 LLM 工具失败: {exc}")
 
     @staticmethod
     def _parse_hybrid_weights(s: str) -> tuple[float, float]:
@@ -517,32 +549,51 @@ class ActiveLearnerPlugin(Star):
         return len(original) - len(cleaned)
 
     def _get_learn_prompt(self) -> str | None:
-        """根据 learn_weight 返回对应强度的学习提示。None=不注入。"""
+        """根据 learn_weight 返回对应强度的学习提示。None=不注入。
+
+        提示必须同时覆盖两个方向，缺一个就会出现「不掌握却硬答」：
+        1. 用户在科普/纠正 → 把新知识存进记忆库；
+        2. 用户在提问而本地无记忆 → 先检索再回答，不要凭印象编。
+        方向 2 曾被遗漏，导致模型判断「用户没在科普」后直接用训练数据拼答案，
+        在版本更新频繁的领域（游戏配置、时效信息）尤其容易答错。
+        """
         w = self._learn_weight
         if w <= 0.0 or not self._enable_active_learn_hint:
             return None
         if w < 0.4:
-            return ("[学习提示] 如果这是你原本不掌握的新知识点（对方在科普），"
-                    "可考虑调用 search_and_learn 工具学习。")
+            return ("[学习提示] 本地记忆没有相关记录。如果这是你原本不掌握的新知识点"
+                    "（对方在科普），可考虑调用 search_and_learn 工具学习；"
+                    "如果用户是在向你提问而你并不确定答案，也可以先检索再回答。")
         if w < 0.7:
-            return ("[学习提示] 如果这是对方在科普新知识，"
-                    "建议调用 search_and_learn 工具存入记忆库，以免以后遗忘。")
+            return ("[学习提示] 本地记忆没有相关记录。如果这是对方在科普新知识，"
+                    "建议调用 search_and_learn 工具存入记忆库，以免以后遗忘；"
+                    "如果用户是在提问而你对答案没有把握，建议先调用该工具核实，"
+                    "不要凭印象作答。")
         # 0.7 ~ 0.9（默认 0.7）
         if w < 1.0:
-            return ("[学习提示] 你刚刚收到了一条新信息。如果这是你原本不掌握的知识点"
-                    "（即对方在向你科普/教你新东西），请立即调用 search_and_learn"
-                    " 工具将其存入记忆库，以免以后遗忘。"
-                    "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。")
+            return ("[学习提示] 本地记忆没有相关记录，请按下面两种情况处理。\n"
+                    "一、如果对方在向你科普/教你新东西，且这是你原本不掌握的知识点，"
+                    "请立即调用 search_and_learn 工具将其存入记忆库，以免以后遗忘。"
+                    "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。\n"
+                    "二、如果用户是在向你提问，而你对答案并不确定"
+                    "（涉及具体人名、术语、版本、数值、搭配或推荐方案时尤其要警惕），"
+                    "请先调用 search_and_learn 检索，再根据检索结果回答。"
+                    "不要凭训练数据里的印象拼凑答案，也不要把不确定的内容说得像事实。\n"
+                    "确实检索不到时，直接说明你不清楚，不要编造，"
+                    "也不要反问用户「要不要我搜一下」——需要检索就直接检索。")
         # 1.0：激进模式
         return (
-            "[学习提示] **重要指令**：请判断以下对话是否包含新知识点"
-            "（用户可能在科普、纠正或教你新东西）。如果是，请**立即调用** "
-            "search_and_learn 工具搜索并存入记忆库。\n"
-            "判断标准：\n"
+            "[学习提示] **重要指令**：本地记忆没有相关记录，请按以下规则判断是否检索。\n"
+            "必须调用 search_and_learn 的情况：\n"
             "- 出现你不熟悉的人名/术语/概念 → 调用\n"
             "- 用户说「其实是」「是XX不是XX」等纠正性表述 → 调用\n"
             "- 用户主动介绍某个知识 → 调用\n"
+            "- 用户提问，而你对答案没有把握 → 调用\n"
+            "- 问题涉及版本、数值、搭配、推荐方案等易随时间变化的内容 → 调用\n"
+            "不需要调用的情况：\n"
             "- 你自己完全确定且明确知道的内容 → 不调用\n"
+            "回答要求：以检索结果为准，不要凭印象补全细节；"
+            "检索不到就直说不清楚，不要编造，也不要反问用户要不要帮他搜。\n"
             "调用后无需告知用户，直接继续回复即可。"
         )
 
@@ -1635,7 +1686,7 @@ class ActiveLearnerPlugin(Star):
         )
         if not provider_id:
             # 诊断信息：列出当前可用的解析路径状态
-            settings_pid = self._settings.get("llm_provider_id") or ""
+            settings_pid = self.config_manager.get("llm_provider_id", "") or ""
             cfg_pid = self._cfg_llm_provider_id or ""
             pm = getattr(self.context, "provider_manager", None)
             pm_providers = []
@@ -2377,7 +2428,7 @@ class ActiveLearnerPlugin(Star):
     async def _resolve_plugin_provider_id(self, umo: str = "") -> str:
         """4 层 fallback 解析插件使用的 LLM Provider ID。
 
-        1. self._settings 中的 llm_provider_id（Dashboard 设置，最高优先级）
+        1. ConfigManager 中的 llm_provider_id（Dashboard 设置，最高优先级）
         2. self._cfg_llm_provider_id（_conf_schema.json 中的字段）
         3. context.get_current_chat_provider_id(umo=...) （事件 scope 默认）
         4. self._resolve_default_provider_id() （同步兜底）
@@ -2385,7 +2436,7 @@ class ActiveLearnerPlugin(Star):
         每个候选都先经 _provider_exists 校验，避免选了已删除的 provider。
         """
         # 1. Dashboard 设置
-        pid = self._settings.get("llm_provider_id") or ""
+        pid = self.config_manager.get("llm_provider_id", "") or ""
         if pid:
             if self._provider_exists(pid):
                 logger.info(f"provider 解析 [1/4 Dashboard]: {pid!r}")
@@ -2414,37 +2465,121 @@ class ActiveLearnerPlugin(Star):
 
         # 4. 同步兜底
         fallback = self._resolve_default_provider_id()
-        logger.info(f"provider 解析 [4/4 兜底]: {fallback!r} (settings_pid={self._settings.get('llm_provider_id')!r}, cfg_pid={self._cfg_llm_provider_id!r})")
+        configured = self.config_manager.get("llm_provider_id", "")
+        logger.info(
+            f"provider 解析 [4/4 兜底]: {fallback!r} "
+            f"(settings_pid={configured!r}, cfg_pid={self._cfg_llm_provider_id!r})"
+        )
         return fallback
 
     # ---------- 设置与 Provider API ----------
 
-    async def _web_providers(self):
-        """列出所有可用 LLM Provider + 当前选中的。"""
+    @staticmethod
+    def _normalize_provider(provider: Any) -> dict[str, str] | None:
+        """兼容 AstrBot 不同版本的 Provider 实例与配置字典。"""
+        if isinstance(provider, dict):
+            provider_id = str(provider.get("id") or "").strip()
+            if not provider_id:
+                return None
+            return {
+                "id": provider_id,
+                "name": str(provider.get("name") or provider_id).strip(),
+                "type": str(
+                    provider.get("provider_type") or provider.get("type") or ""
+                ).strip(),
+                "model": str(provider.get("model") or "").strip(),
+            }
+
+        meta = None
+        meta_fn = getattr(provider, "meta", None)
+        if callable(meta_fn):
+            try:
+                meta = meta_fn()
+            except Exception:
+                meta = None
+        provider_config = getattr(provider, "provider_config", None)
+        config = provider_config if isinstance(provider_config, dict) else {}
+        provider_id = str(
+            getattr(meta, "id", "")
+            or config.get("id")
+            or getattr(provider, "id", "")
+            or getattr(provider, "name", "")
+            or ""
+        ).strip()
+        if not provider_id:
+            return None
+        return {
+            "id": provider_id,
+            "name": str(
+                getattr(meta, "name", "")
+                or config.get("name")
+                or getattr(provider, "name", "")
+                or provider_id
+            ).strip(),
+            "type": str(
+                getattr(meta, "provider_type", "")
+                or getattr(meta, "type", "")
+                or config.get("provider_type")
+                or config.get("type")
+                or getattr(provider, "type", "")
+                or ""
+            ).strip(),
+            "model": str(
+                getattr(meta, "model", "")
+                or config.get("model")
+                or getattr(provider, "model", "")
+                or ""
+            ).strip(),
+        }
+
+    def _list_provider_candidates(self) -> list[dict[str, str]]:
+        candidates: list[Any] = []
+        getter = getattr(self.context, "get_all_providers", None)
+        if callable(getter):
+            try:
+                candidates.extend(list(getter() or []))
+            except Exception as exc:
+                logger.debug(f"读取 Provider 列表失败: {exc}")
         pm = getattr(self.context, "provider_manager", None)
-        providers_list = []
         if pm is not None:
-            for p in getattr(pm, "providers", None) or []:
-                providers_list.append({
-                    "id": str(getattr(p, "id", "") or ""),
-                    "name": str(getattr(p, "name", "") or ""),
-                    "type": str(getattr(p, "type", "") or ""),
-                })
-        # 兜底：provider_manager 为空时从 cmd_config.json 读取
-        if not providers_list:
-            _, cfg_providers = self._get_providers_from_config()
-            for p in cfg_providers:
-                providers_list.append({
-                    "id": p["id"],
-                    "name": f"{p['model']} ({p['id']})" if p["model"] else p["id"],
-                    "type": p["type"],
-                })
-        current = (
-            self._settings.get("llm_provider_id")
-            or self._cfg_llm_provider_id
-            or self._resolve_default_provider_id()
-        )
-        return json_response({"providers": providers_list, "current": current})
+            for attr in ("providers", "provider_insts"):
+                candidates.extend(list(getattr(pm, attr, None) or []))
+            inst_map = getattr(pm, "inst_map", None)
+            if isinstance(inst_map, dict):
+                candidates.extend(inst_map.values())
+            configs = getattr(pm, "providers_config", None)
+            if isinstance(configs, list):
+                candidates.extend(configs)
+
+        items: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            item = self._normalize_provider(candidate)
+            if item is None or item["id"] in seen:
+                continue
+            seen.add(item["id"])
+            items.append(item)
+        if not items:
+            _, configured = self._get_providers_from_config()
+            for candidate in configured:
+                item = self._normalize_provider(candidate)
+                if item is not None and item["id"] not in seen:
+                    seen.add(item["id"])
+                    items.append(item)
+        return items
+
+    async def _web_providers(self):
+        """列出 Provider，并区分用户显式配置与实际生效值。"""
+        configured = str(
+            self.config_manager.get("llm_provider_id", "") or ""
+        ).strip()
+        effective = configured or self._cfg_llm_provider_id or self._resolve_default_provider_id()
+        return json_response({
+            "providers": self._list_provider_candidates(),
+            "configured": configured,
+            "effective": effective,
+            "current": effective,
+        })
 
     async def _web_get_settings(self):
         """返回当前插件设置（含默认值填充）。
@@ -2453,8 +2588,11 @@ class ActiveLearnerPlugin(Star):
         中设置的 llm_provider_id 等字段也能被前端读到。
         """
         data = self.config_manager.all()
+        configured = str(data.get("llm_provider_id", "") or "").strip()
+        effective = configured or self._cfg_llm_provider_id or self._resolve_default_provider_id()
         return json_response({
-            "llm_provider_id": data.get("llm_provider_id", ""),
+            "llm_provider_id": configured,
+            "effective_provider_id": effective,
             "refine_on_search": bool(data.get("refine_on_search", True)),
             "refine_on_import": bool(data.get("refine_on_import", True)),
             "refine_on_verify": bool(data.get("refine_on_verify", True)),
@@ -2491,13 +2629,10 @@ class ActiveLearnerPlugin(Star):
         return {}
 
     async def _web_config_schema(self):
-        """返回 _conf_schema.json 全量字段 + 当前合并值。
-
-        值优先级：self._settings（Dashboard 设置）→ self.config（schema 默认）
-        """
+        """返回 _conf_schema.json 全量字段 + 当前合并值。"""
         schema = self._load_schema()
-        settings = self._settings.all()
-        config = self.config or {}
+        settings = self.config_manager.overlay_all()
+        config = self.config_manager.all()
         fields = []
         for name, spec in schema.items():
             if not isinstance(spec, dict):

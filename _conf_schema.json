@@ -115,6 +115,14 @@
         "hint": "选择本插件进行搜索学习 / 导入精炼 / 验证 时使用的 LLM。留空则回退到 AstrBot 当前对话模型。Dashboard「⚙ 设置」页的同名字段优先级更高。",
         "default": ""
     },
+    "llm_max_concurrency": {
+        "description": "插件内部 LLM 最大并发数",
+        "type": "int",
+        "hint": "精炼、验证和后台学习共用的并发上限。低 RPM Provider 建议保持 1；额度充足时可设为 2-4。",
+        "default": 1,
+        "minimum": 1,
+        "maximum": 4
+    },
     "embedding_enabled": {
         "description": "启用向量检索",
         "type": "bool",

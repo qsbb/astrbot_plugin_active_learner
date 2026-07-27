@@ -1,11 +1,12 @@
 """统一配置管理。
 
 职责：
-- 封装三层配置源：AstrBot config → SettingsStore（Dashboard）→ 运行时缓存
+- 封装两层配置源：AstrBot 插件配置页（_conf_schema.json）→ Dashboard overlay
 - 对外提供统一的 get/set/update/all 接口
-- 每次 update 立即持久化并应用到运行时
+- 每次 update 立即原子持久化并应用到运行时
 
-消除 config 读取逻辑分散在 __init__、_apply_config_to_runtime、_web_save_settings 的现状。
+本模块是插件唯一的配置来源：Dashboard 设置页与运行时读取同一份数据，
+避免出现「页面显示与实际生效的 Provider 不一致」。
 """
 
 from __future__ import annotations

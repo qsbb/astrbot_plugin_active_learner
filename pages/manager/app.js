@@ -11,6 +11,10 @@ const state = {
   currentDetailId: null,
   selectedIds: new Set(),
   currentItems: [],
+  providers: {
+    configured: "",
+    effective: "",
+  },
   settings: {
     llm_provider_id: "",
     refine_on_search: true,
@@ -508,13 +512,8 @@ async function exportData() {
 }
 
 async function refreshAll() {
-  await Promise.all([
-    loadScopes(),
-    loadStats(),
-    loadMemories(),
-    loadProviders(),
-    loadSettings(),
-  ]);
+  await Promise.all([loadScopes(), loadStats(), loadMemories()]);
+  await loadProviderSettings();
 }
 
 function showVerifyDetail(result) {
@@ -834,7 +833,7 @@ function bindEvents() {
 function openSettingsModal() {
   const modal = document.getElementById("settings-modal");
   modal.classList.remove("hidden");
-  Promise.all([loadProviders(), loadSettings()]).catch((e) => {
+  loadProviderSettings().catch((e) => {
     showToast(`加载设置失败: ${e.message}`, true);
   });
 }
@@ -845,27 +844,27 @@ function closeSettingsModal() {
 
 async function loadProviders() {
   const select = document.getElementById("settings-provider");
-  try {
-    const data = await bridge.apiGet("providers");
-    const providers = data.providers || [];
-    const current = data.current || "";
-    select.innerHTML = '<option value="">（使用事件默认 Provider）</option>';
-    for (const p of providers) {
-      const opt = document.createElement("option");
-      opt.value = p.id;
-      opt.textContent = `${p.name || p.id} (${p.type || "?"})`;
-      select.appendChild(opt);
-    }
-    select.value = current || "";
-    updateNoProviderHint(select.value);
-  } catch (e) {
-    showToast(`加载 Provider 列表失败: ${e.message}`, true);
+  const data = await bridge.apiGet("providers");
+  const providers = data.providers || [];
+  state.providers = {
+    configured: data.configured || "",
+    effective: data.effective || data.current || "",
+  };
+  select.innerHTML = '<option value="">（使用事件默认 Provider）</option>';
+  for (const p of providers) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    const detail = p.model || p.type || "";
+    opt.textContent = detail ? `${p.name || p.id} (${detail})` : (p.name || p.id);
+    select.appendChild(opt);
   }
+  return data;
 }
 
 async function loadSettings() {
   try {
     const s = await bridge.apiGet("settings");
+    state.providers.effective = s.effective_provider_id || state.providers.effective || "";
     state.settings = {
       llm_provider_id: s.llm_provider_id || "",
       refine_on_search: s.refine_on_search !== false,
@@ -908,18 +907,36 @@ async function loadSettings() {
     renderDomainScopeTags(state.settings.knowledge_domain_scope);
     document.getElementById("settings-enable-cross-domain").checked = state.settings.enable_cross_domain;
     document.getElementById("settings-cross-domain-exclude-admin").checked = state.settings.cross_domain_exclude_admin;
-    updateNoProviderHint(state.settings.llm_provider_id);
+    updateNoProviderHint(
+      state.settings.llm_provider_id,
+      state.providers.effective,
+    );
+    return s;
   } catch (e) {
     showToast(`加载设置失败: ${e.message}`, true);
+    throw e;
   }
 }
 
-function updateNoProviderHint(providerId) {
+async function loadProviderSettings() {
+  await loadProviders();
+  return loadSettings();
+}
+
+function updateNoProviderHint(configuredId, effectiveId = "") {
   const hint = document.getElementById("settings-no-provider-hint");
-  if (!providerId) {
-    hint.classList.remove("hidden");
-  } else {
+  if (configuredId) {
     hint.classList.add("hidden");
+    hint.textContent = "";
+    return;
+  }
+  hint.classList.remove("hidden");
+  if (effectiveId) {
+    hint.textContent = `未显式选择，将使用事件默认 Provider：${effectiveId}`;
+    hint.classList.remove("error");
+  } else {
+    hint.textContent = "未找到可用 Provider，精炼将降级为原内容直存";
+    hint.classList.add("error");
   }
 }
 
@@ -1053,13 +1070,13 @@ function bindSettingsEvents() {
       el.addEventListener("click", closeSettingsModal);
     });
   document.getElementById("settings-save").addEventListener("click", saveSettings);
-  document.getElementById("btn-refresh-providers").addEventListener("click", loadProviders);
+  document.getElementById("btn-refresh-providers").addEventListener("click", loadProviderSettings);
   document.querySelectorAll(".settings-tab").forEach((btn) => {
     btn.addEventListener("click", () => switchSettingsTab(btn.dataset.tab));
   });
   bindDomainScopeTags();
   document.getElementById("settings-provider").addEventListener("change", (e) => {
-    updateNoProviderHint(e.target.value);
+    updateNoProviderHint(e.target.value, state.providers.effective);
   });
   document.getElementById("settings-learn-weight").addEventListener("input", (e) => {
     document.getElementById("settings-learn-weight-val").textContent = e.target.value;
