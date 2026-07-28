@@ -1,4 +1,8 @@
-"""诊断页与运行时配置同步回归测试。"""
+"""诊断页与运行时配置同步回归测试。
+
+v1.2.9：_sync_config_snapshot / _web_debug 随 main.py 分层重构迁至 web_api.py 的
+WebApiMixin，本文件只跟随源码位置调整，断言与被测行为均未改动。
+"""
 
 import ast
 import textwrap
@@ -6,13 +10,13 @@ from pathlib import Path
 
 
 _ROOT = Path(__file__).resolve().parents[1]
-_MAIN = _ROOT / "main.py"
+_WEB_API = _ROOT / "web_api.py"
 _APP = _ROOT / "pages" / "manager" / "app.js"
 _INDEX = _ROOT / "pages" / "manager" / "index.html"
 
 
 def _extract_function(name: str):
-    source = _MAIN.read_text(encoding="utf-8")
+    source = _WEB_API.read_text(encoding="utf-8")
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
@@ -20,7 +24,7 @@ def _extract_function(name: str):
             namespace = {}
             exec(compile(text, f"<{name}>", "exec"), namespace)
             return namespace[name]
-    raise AssertionError(f"main.py 中未找到 {name}")
+    raise AssertionError(f"{_WEB_API.name} 中未找到 {name}")
 
 
 class _ConfigManager:
@@ -49,7 +53,7 @@ def test_save_refreshes_shared_plugin_config_snapshot():
 
 
 def test_debug_endpoint_uses_unified_config_and_omits_secrets():
-    source = _MAIN.read_text(encoding="utf-8")
+    source = _WEB_API.read_text(encoding="utf-8")
     debug_src = textwrap.dedent(
         ast.get_source_segment(
             source,

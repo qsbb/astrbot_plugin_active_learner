@@ -3,6 +3,9 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
 .venv/
 venv/

@@ -4,6 +4,32 @@
 
 > 当前系列归属：知、言、序、情、声、核；本文件下方版本条目均为真实历史记录，不因系列命名调整而改写。
 
+## [1.2.9] - 2026-07-28
+
+### 变更
+
+- **`main.py` 分层重构**：单文件 3334 行长期承载生命周期、检索、学习、Dashboard 后端四类职责，定位改动点成本高。现按职责拆为三个 mixin，`main.py` 降至 972 行：
+  - `web_api.py`（`WebApiMixin`）：`_register_web_apis` 与全部 `_web_*` / `_priority_learn_*` 路由实现，以及 Provider 解析、配置读写与运行时应用等辅助方法；日志缓冲 `_BufferHandler` 随其迁出。
+  - `retrieval.py`（`RetrievalMixin`）：记忆检索、注入裁剪、外部源并发搜索、混合权重与搜索源优先级解析。
+  - `learning.py`（`LearningMixin`）：后置学习分析与群黑话批量学习。
+  - 类声明改为 `ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star)`。
+- **带装饰器的方法一律留在 `main.py`**：AstrBot 靠扫描类上的装饰器注册功能，`@register`、`@filter.on_llm_request`、`@filter.on_llm_response`、`memory_cmd` 指令组及其全部子指令若迁出即无法注册。因此本次只搬运无装饰器的实现体；`on_llm_response` 钩子留在原处，其实现 `_post_learn_analysis_bg` / `_post_learn_analysis` 迁入 `LearningMixin`。
+- **新增 `constants.py`**：共享常量（`PLUGIN_NAME`、检索与注入预算、知识桥接契约常量等）集中存放。三个 mixin 与 `main.py` 都需引用这批常量，若继续留在 `main.py` 会形成 `mixin -> main -> mixin` 的循环导入；该模块不导入包内任何其他模块，可被安全引入。
+- **版本号单一事实来源**：新增 `PLUGIN_VERSION`，`@register` 与启动日志改为引用该常量，不再硬编码字面量，避免发版时漏改其中一处。
+- **README 不再登记具体版本号**：原「当前版本：`1.2.8`」一行在 metadata 升到 1.2.9 后即失准。README 里的版本号没有任何机制保证它跟着发布走，只会单向腐烂，读者据此判断兼容性反而被误导。现改为指向 `metadata.yaml` 与 `CHANGELOG.md`。
+
+本次为纯结构调整：迁移方法逐行原样搬运，经 AST 比对确认 81 个方法全部守恒、mixin 间无重名、方法体规范化后逐字未变，无行为变更。
+
+### 新增
+
+- **知识桥接契约化**：对外声明 `knowledge_contract()` 与 `recall()`，供消费方（序 `astrbot_plugin_identity_guardian`）在启动时显式校验版本兼容性。契约 `active_learner.knowledge` 版本 `1.0`，`recall()` 为只读检索——不写库、不计访问次数、不触发学习，每条证据含 `content` / `source` / `score` / `topic` / `verified` / `confidence` 字段。
+  - 背景：0.x 时期序靠 duck-typing 探测 `recall` 方法，而知从未提供该方法，桥接长期静默失效——既不报错也无证据，排查成本极高。契约化后由消费方按 major 版本判断兼容性并在失配时告警，失效原因可见。
+  - 失败或无命中一律返回空列表，消费方将空结果视为 unavailable 并保持待审，不因桥接异常而放行或拒绝。
+
+### 测试
+
+- `tests/test_learn_prompt.py` 与 `tests/test_diagnostic_config.py` 通过解析源码提取被测函数，随 `_get_learn_prompt`、`_sync_config_snapshot`、`_web_debug` 的迁移同步调整源文件指向（`main.py` → `retrieval.py` / `web_api.py`）；断言与被测行为均未改动。
+
 ## [1.2.8] - 2026-07-28
 
 ### 修复

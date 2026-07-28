@@ -8,8 +8,11 @@
 1. 用户在科普/纠正 → 存入记忆库；
 2. 用户在提问而本地无记忆 → 先检索再回答，不要凭印象编。
 
-这里不导入 main.py（它依赖 astrbot 运行时），改为直接绑定未包装的函数，
+这里不导入插件模块（它依赖 astrbot 运行时），改为直接绑定未包装的函数，
 只提供 _get_learn_prompt 实际用到的两个属性。
+
+v1.2.9：_get_learn_prompt 随 main.py 分层重构迁至 retrieval.py 的 RetrievalMixin，
+本文件只跟随源码位置调整，断言与被测行为均未改动。
 """
 
 import ast
@@ -19,21 +22,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-_MAIN_PY = Path(__file__).resolve().parents[1] / "main.py"
+_SOURCE_PY = Path(__file__).resolve().parents[1] / "retrieval.py"
 
 
 def _load_get_learn_prompt():
-    """从 main.py 源码中摘出 _get_learn_prompt 并独立编译。"""
-    tree = ast.parse(_MAIN_PY.read_text(encoding="utf-8"))
+    """从 retrieval.py 源码中摘出 _get_learn_prompt 并独立编译。"""
+    source = _SOURCE_PY.read_text(encoding="utf-8")
+    tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_get_learn_prompt":
-            src = textwrap.dedent(ast.get_source_segment(
-                _MAIN_PY.read_text(encoding="utf-8"), node
-            ))
+            src = textwrap.dedent(ast.get_source_segment(source, node))
             namespace: dict = {}
             exec(compile(src, "<_get_learn_prompt>", "exec"), namespace)
             return namespace["_get_learn_prompt"]
-    raise AssertionError("main.py 中未找到 _get_learn_prompt")
+    raise AssertionError(f"{_SOURCE_PY.name} 中未找到 _get_learn_prompt")
 
 
 _get_learn_prompt = _load_get_learn_prompt()
