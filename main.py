@@ -63,6 +63,17 @@ from .constants import (
     _TOOL_NAMES,
 )
 from .learning import LearningMixin
+from .request_context import (
+    OWNER_ACTIVE_LEARNER,
+    OWNER_IDENTITY_GUARDIAN,
+    PHASE_LLM_REQUEST,
+    PHASE_LLM_RESPONSE,
+    add_reason,
+    ensure_context,
+    get_flag,
+    set_artifact,
+    set_flag,
+)
 from .retrieval import RetrievalMixin
 from .web_api import _WEB_AVAILABLE, WebApiMixin, _BufferHandler
 
@@ -79,6 +90,8 @@ _ON_LLM_RESPONSE_AVAILABLE = callable(getattr(filter, "on_llm_response", None))
 )
 class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
     """凝心溯溪-知：面向知识学习、检索与验证的插件。"""
+
+    PLUGIN_HEALTH_CONTRACT = "plugin.health@1.0"
 
     # ---------- 生命周期 ----------
 
@@ -328,6 +341,20 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         else:
             logger.info("当前 AstrBot 版本不支持 Plugin Pages，跳过 Dashboard 页面注册")
 
+    def plugin_health(self) -> dict[str, object]:
+        checks = {
+            "storage_ready": getattr(self, "store", None) is not None,
+            "config_ready": isinstance(getattr(self, "config", None), dict),
+            "retrieval_ready": getattr(self, "_retrieval_semaphore", None) is not None,
+        }
+        reasons = [name.upper() for name, passed in checks.items() if not passed]
+        return {
+            "status": "ok" if not reasons else "unhealthy",
+            "checks": checks,
+            "reasons": reasons,
+            "version": PLUGIN_VERSION,
+        }
+
     # ---------- 跨插件知识桥接（公开契约） ----------
 
     def knowledge_contract(self) -> dict:
@@ -506,6 +533,22 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
     @filter.on_llm_request(priority=700)
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
         """LLM 请求前的统一钩子：检索记忆 + 质疑检测 + 主动学习提示。"""
+        request_context = ensure_context(event, PHASE_LLM_REQUEST)
+        identity_ready = bool(
+            get_flag(
+                request_context,
+                OWNER_IDENTITY_GUARDIAN,
+                "boundary_ready",
+                False,
+            )
+        )
+        add_reason(
+            request_context,
+            OWNER_ACTIVE_LEARNER,
+            "IDENTITY_BOUNDARY_PRESENT"
+            if identity_ready
+            else "IDENTITY_BOUNDARY_UNAVAILABLE",
+        )
         try:
             msg = event.get_message_str()
         except Exception:
@@ -672,6 +715,29 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 state.hinted = False
             self._active_learn_hinted = False
 
+        set_flag(
+            request_context,
+            OWNER_ACTIVE_LEARNER,
+            "knowledge_ready",
+            True,
+        )
+        set_artifact(
+            request_context,
+            OWNER_ACTIVE_LEARNER,
+            "retrieval",
+            {
+                "mode": retrieval_mode,
+                "hit_count": len(hits),
+                "injected_count": len(injected_hits),
+                "domain_restricted": bool(domain_restricted),
+            },
+        )
+        add_reason(
+            request_context,
+            OWNER_ACTIVE_LEARNER,
+            "KNOWLEDGE_CONTEXT_READY",
+        )
+
         # 4. 注入
         if not parts:
             return
@@ -704,10 +770,22 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 from astrbot.core.agent.message import TextPart
 
                 req.extra_user_content_parts.append(TextPart(text=injection))
+                set_flag(
+                    request_context,
+                    OWNER_ACTIVE_LEARNER,
+                    "prompt_injected",
+                    True,
+                )
                 logger.info(f"注入上下文 [{'/'.join(tags)}] (scope: {scope})")
             else:
                 # 兜底：修改 system_prompt（会破坏 prompt 缓存，仅降级用）
                 req.system_prompt = (req.system_prompt or "") + "\n" + injection
+                set_flag(
+                    request_context,
+                    OWNER_ACTIVE_LEARNER,
+                    "prompt_injected",
+                    True,
+                )
                 logger.warning(
                     "extra_user_content_parts 不可用，降级用 system_prompt 注入"
                 )
@@ -736,6 +814,12 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         @filter.on_llm_response(priority=700)  # type: ignore[misc]
         async def on_llm_response(self, event: AstrMessageEvent, response):
             """追踪主动学习提示 + 回复完成后置学习分析。"""
+            request_context = ensure_context(event, PHASE_LLM_RESPONSE)
+            add_reason(
+                request_context,
+                OWNER_ACTIVE_LEARNER,
+                "POST_LEARN_ANALYSIS_SCHEDULED",
+            )
             # 请求级追踪，避免并发会话共享实例布尔值造成串扰。
             state = get_request_learning_state(event, create=False)
             if state is not None and state.hinted:

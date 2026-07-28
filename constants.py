@@ -12,7 +12,7 @@ PLUGIN_NAME = "astrbot_plugin_active_learner"
 
 # 插件版本。@register 装饰器与 metadata.yaml 必须保持一致，
 # 这里作为唯一事实来源，避免版本号散落在多处后漏改。
-PLUGIN_VERSION = "1.2.9"
+PLUGIN_VERSION = "1.2.10"
 
 _TOOL_NAMES = (
     "search_and_learn",
