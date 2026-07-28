@@ -142,9 +142,9 @@
         "default": 30
     },
     "enable_scope_fallback": {
-        "description": "启用跨 scope 回退检索",
+        "description": "启用全局知识回退检索",
         "type": "bool",
-        "hint": "private scope 命中不足时回退到 group/global，带 0.8/0.6 分数惩罚",
+        "hint": "当前私聊或群聊可额外读取 global:global 知识；不同私聊、不同群聊之间始终隔离",
         "default": true
     },
     "priority_topics": {

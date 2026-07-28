@@ -14,7 +14,7 @@ from typing import Optional
 
 from .plugin_logger import logger
 
-from .models import MemoryEntry
+from .models import MemoryEntry, Scope
 
 
 class VerificationResult:
@@ -170,6 +170,7 @@ class Verifier:
             verified=verified,
             reason=reason,
             snapshot=True,
+            scope=Scope(entry.scope_type, entry.scope_id),
         )
 
         mode_tag = "LLM-only" if llm_only else f"{len(sources)}源"

@@ -283,13 +283,19 @@ class MemoryStore:
         keywords: Optional[list[str]] = None,
         reason: str = "",
         snapshot: bool = True,
+        scope: Optional[Scope] = None,
     ) -> bool:
-        """更新记忆内容。snapshot=True 时先写一条版本快照。"""
+        """更新记忆内容。传入 scope 时必须与记录归属一致。"""
         now = now_ts()
+        where = "id = ?"
+        where_params: tuple = (entry_id,)
+        if scope is not None:
+            where += " AND scope_type = ? AND scope_id = ?"
+            where_params = (entry_id, scope.type, scope.id)
         with self._lock:
             row = self._conn.execute(
-                "SELECT content, confidence, source, keywords FROM memories WHERE id = ?",
-                (entry_id,),
+                "SELECT content, confidence, source, keywords FROM memories WHERE " + where,
+                where_params,
             ).fetchone()
             if not row:
                 return False
@@ -311,59 +317,95 @@ class MemoryStore:
             if verified is not None:
                 self._conn.execute(
                     """UPDATE memories SET content = ?, confidence = ?, source = ?,
-                       keywords = ?, verified = ?, updated_at = ? WHERE id = ?""",
-                    (content, confidence, source, keywords_str, 1 if verified else 0, now, entry_id),
+                       keywords = ?, verified = ?, updated_at = ? WHERE """ + where,
+                    (
+                        content,
+                        confidence,
+                        source,
+                        keywords_str,
+                        1 if verified else 0,
+                        now,
+                        *where_params,
+                    ),
                 )
             else:
                 self._conn.execute(
                     """UPDATE memories SET content = ?, confidence = ?, source = ?,
-                       keywords = ?, updated_at = ? WHERE id = ?""",
-                    (content, confidence, source, keywords_str, now, entry_id),
+                       keywords = ?, updated_at = ? WHERE """ + where,
+                    (content, confidence, source, keywords_str, now, *where_params),
                 )
             return True
 
-    def inc_challenge(self, entry_id: str) -> None:
+    def inc_challenge(self, entry_id: str, scope: Optional[Scope] = None) -> None:
+        where = "id = ?"
+        params: tuple = (now_ts(), entry_id)
+        if scope is not None:
+            where += " AND scope_type = ? AND scope_id = ?"
+            params = (params[0], entry_id, scope.type, scope.id)
         with self._lock:
             self._conn.execute(
                 """UPDATE memories
                    SET challenge_count = challenge_count + 1, last_challenged_at = ?
-                   WHERE id = ?""",
-                (now_ts(), entry_id),
+                   WHERE """ + where,
+                params,
             )
 
-    def inc_access(self, entry_id: str) -> None:
+    def inc_access(self, entry_id: str, scope: Optional[Scope] = None) -> None:
+        where = "id = ?"
+        params: tuple = (entry_id,)
+        if scope is not None:
+            where += " AND scope_type = ? AND scope_id = ?"
+            params = (entry_id, scope.type, scope.id)
         with self._lock:
             self._conn.execute(
-                "UPDATE memories SET access_count = access_count + 1 WHERE id = ?",
-                (entry_id,),
+                "UPDATE memories SET access_count = access_count + 1 WHERE " + where,
+                params,
             )
 
-    def set_verified(self, entry_id: str, verified: bool, confidence: Optional[float] = None) -> None:
+    def set_verified(
+        self,
+        entry_id: str,
+        verified: bool,
+        confidence: Optional[float] = None,
+        scope: Optional[Scope] = None,
+    ) -> None:
         now = now_ts()
+        where = "id = ?"
+        where_params: tuple = (entry_id,)
+        if scope is not None:
+            where += " AND scope_type = ? AND scope_id = ?"
+            where_params = (entry_id, scope.type, scope.id)
         with self._lock:
             if confidence is not None:
                 self._conn.execute(
-                    "UPDATE memories SET verified = ?, confidence = ?, updated_at = ? WHERE id = ?",
-                    (1 if verified else 0, confidence, now, entry_id),
+                    """UPDATE memories SET verified = ?, confidence = ?, updated_at = ?
+                       WHERE """ + where,
+                    (1 if verified else 0, confidence, now, *where_params),
                 )
             else:
                 self._conn.execute(
-                    "UPDATE memories SET verified = ?, updated_at = ? WHERE id = ?",
-                    (1 if verified else 0, now, entry_id),
+                    "UPDATE memories SET verified = ?, updated_at = ? WHERE " + where,
+                    (1 if verified else 0, now, *where_params),
                 )
 
     def forget(self, scope: Scope, topic: str) -> tuple[bool, Optional[MemoryEntry]]:
         """软删除：先写版本留痕，再 DELETE。返回 (是否删除, 被删除的 entry)。"""
-        entry = self.search(scope, topic, top_k=1)
+        entry = self.search(scope, topic, top_k=1, include_global=False)
         if not entry:
             return False, None
         target = entry[0].entry
+        if target.scope_type != scope.type or target.scope_id != scope.id:
+            return False, None
         with self._lock:
             self._save_version_locked(
                 target.id, target.content, target.confidence, target.source, "manual_forget"
             )
-            self._conn.execute("DELETE FROM memories WHERE id = ?", (target.id,))
-            return True, target
+            cursor = self._conn.execute(
+                """DELETE FROM memories
+                   WHERE id = ? AND scope_type = ? AND scope_id = ?""",
+                (target.id, scope.type, scope.id),
+            )
+            return cursor.rowcount > 0, target if cursor.rowcount > 0 else None
 
     def _save_version_locked(self, entry_id: str, content: str, confidence: float, source: str, reason: str) -> None:
         row = self._conn.execute(
@@ -403,17 +445,52 @@ class MemoryStore:
 
     # ---------- 读操作 ----------
 
-    def get_entry_by_id(self, entry_id: str) -> Optional[MemoryEntry]:
+    def get_entry_by_id(
+        self,
+        entry_id: str,
+        scope: Optional[Scope] = None,
+        *,
+        include_global: bool = False,
+    ) -> Optional[MemoryEntry]:
+        """按 ID 读取记忆。
+
+        传入 ``scope`` 时强制校验记录归属；``include_global`` 只额外允许规范的
+        ``global:global`` 记录，不能把其他私聊或群聊记录带入当前请求。
+        ``scope=None`` 保留给 Dashboard 等受信任的全库管理路径。
+        """
         with self._lock:
-            row = self._conn.execute(
-                f"SELECT {SELECT_COLS} FROM memories WHERE id = ?",
-                (entry_id,),
-            ).fetchone()
+            if scope is None:
+                row = self._conn.execute(
+                    f"SELECT {SELECT_COLS} FROM memories WHERE id = ?",
+                    (entry_id,),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    f"""SELECT {SELECT_COLS} FROM memories
+                        WHERE id = ?
+                          AND ((scope_type = ? AND scope_id = ?)
+                               OR (? AND scope_type = ? AND scope_id = ?))""",
+                    (
+                        entry_id,
+                        scope.type,
+                        scope.id,
+                        include_global,
+                        SCOPE_GLOBAL,
+                        SCOPE_GLOBAL,
+                    ),
+                ).fetchone()
             if not row:
                 return None
             return MemoryEntry.from_row(row)
 
-    def search(self, scope: Scope, query: str, top_k: int = 3) -> list[SearchHit]:
+    def search(
+        self,
+        scope: Scope,
+        query: str,
+        top_k: int = 3,
+        *,
+        include_global: bool = True,
+    ) -> list[SearchHit]:
         """FTS5 全文检索 + scope 过滤 + 置信度加权排序。
 
         v1.1.2.0 起推荐用 search_hybrid 替代（带向量检索）。
@@ -433,9 +510,18 @@ class MemoryStore:
                         FROM memories_fts f
                         JOIN memories m ON m.rowid = f.rowid
                         WHERE memories_fts MATCH ?
-                          AND ((m.scope_type = ? AND m.scope_id = ?) OR m.scope_type = ?)
+                          AND ((m.scope_type = ? AND m.scope_id = ?)
+                               OR (? AND m.scope_type = ? AND m.scope_id = ?))
                         LIMIT ?""",
-                    (match_expr, scope.type, scope.id, SCOPE_GLOBAL, top_k * 3),
+                    (
+                        match_expr,
+                        scope.type,
+                        scope.id,
+                        include_global,
+                        SCOPE_GLOBAL,
+                        SCOPE_GLOBAL,
+                        top_k * 3,
+                    ),
                 ).fetchall()
             except sqlite3.OperationalError:
                 return []
@@ -453,7 +539,9 @@ class MemoryStore:
         hits.sort(key=lambda h: h.score, reverse=True)
         # 命中后增加 access_count
         for h in hits[:top_k]:
-            self.inc_access(h.entry.id)
+            self.inc_access(
+                h.entry.id, Scope(h.entry.scope_type, h.entry.scope_id)
+            )
         return hits[:top_k]
 
     # ---------- v1.1.2.0 向量检索 ----------
@@ -463,10 +551,12 @@ class MemoryStore:
         scope: Scope,
         query: str,
         limit: int,
+        *,
+        include_global: bool = True,
     ) -> list[tuple[MemoryEntry, float]]:
         """FTS5 检索 + bm25 分数。返回 [(entry, bm25_score), ...]。
 
-        v1.1.2.9：不再按 scope 硬过滤，检索所有记忆——scope 退化为软权重，在 search_hybrid 里施加。
+        只检索当前 scope，并可选包含规范的 global scope。私聊和群聊之间始终硬隔离。
         bm25 分数越小越好（FTS5 默认），调用方需取负转为"越大越好"。
         """
         match_expr = _build_match_query(query)
@@ -479,8 +569,18 @@ class MemoryStore:
                     FROM memories_fts f
                     JOIN memories m ON m.rowid = f.rowid
                     WHERE memories_fts MATCH ?
+                      AND ((m.scope_type = ? AND m.scope_id = ?)
+                           OR (? AND m.scope_type = ? AND m.scope_id = ?))
                     LIMIT ?""",
-                (match_expr, limit),
+                (
+                    match_expr,
+                    scope.type,
+                    scope.id,
+                    include_global,
+                    SCOPE_GLOBAL,
+                    SCOPE_GLOBAL,
+                    limit,
+                ),
             ).fetchall()
         except sqlite3.OperationalError:
             return []
@@ -496,21 +596,33 @@ class MemoryStore:
         self,
         scope: Scope,
         embedder,
+        *,
+        include_global: bool = True,
     ) -> tuple[Any, list[str]]:
         """加载所有记忆的向量到 numpy 矩阵。带内存缓存。
 
-        v1.1.2.9：不再按 scope 过滤——所有记忆的向量统一加载，scope 退化为软权重。
+        矩阵只包含当前 scope，并可选包含规范的 global scope。缓存键包含作用域，
+        避免先查询某个会话后把其候选矩阵复用于另一个会话。
         必须在 self._lock 内调用。
         """
         import numpy as np
-        cache_key = "__all__"
+        cache_key = f"scope:{scope.type}:{scope.id}:global:{int(include_global)}"
         if cache_key in embedder._matrix_cache:
             return embedder._matrix_cache[cache_key]
         rows = self._conn.execute(
             """SELECT e.memory_id, e.embedding, e.dim
                FROM memories_embedding e
                JOIN memories m ON m.id = e.memory_id
+               WHERE ((m.scope_type = ? AND m.scope_id = ?)
+                      OR (? AND m.scope_type = ? AND m.scope_id = ?))
                ORDER BY e.memory_id""",
+            (
+                scope.type,
+                scope.id,
+                include_global,
+                SCOPE_GLOBAL,
+                SCOPE_GLOBAL,
+            ),
         ).fetchall()
         if not rows:
             result = (np.zeros((0, embedder.dim), dtype=np.float32), [])
@@ -541,13 +653,17 @@ class MemoryStore:
         query_vec: list[float],
         top_k: int,
         embedder,
+        *,
+        include_global: bool = True,
     ) -> list[tuple[str, float]]:
         """numpy 余弦相似度检索。返回 [(memory_id, similarity), ...]。
 
         必须在 self._lock 内调用；query_vec 必须在锁外计算。
         """
         from .embedder import cosine_similarity_batch
-        matrix, ids = self._load_scope_vectors(scope, embedder)
+        matrix, ids = self._load_scope_vectors(
+            scope, embedder, include_global=include_global
+        )
         if len(ids) == 0:
             return []
         scores = cosine_similarity_batch(query_vec, matrix)
@@ -571,7 +687,7 @@ class MemoryStore:
         priority_boost: float = 1.3,
         track_access: bool = True,
     ) -> list[SearchHit]:
-        """混合检索：FTS5 + 向量 + scope 回退 + 衰减分数。
+        """混合检索：FTS5 + 向量 + 安全的 global 回退 + 衰减分数。
 
         query_vec 必须在锁外计算后传入（避免阻塞写入）。
         无 query_vec 时降级为纯 FTS5。
@@ -586,13 +702,24 @@ class MemoryStore:
         now = _time.time()
 
         with self._lock:
-            # 1. FTS5 检索（v1.1.2.9：检索所有记忆，不按 scope 过滤）
-            fts_results = self._search_fts(scope, query, top_k * 5)
+            # 1. FTS5 检索：当前 scope 与可选的 global，绝不读取其他会话 scope。
+            fts_results = self._search_fts(
+                scope,
+                query,
+                top_k * 5,
+                include_global=enable_scope_fallback,
+            )
 
             # 2. 向量检索（如有 query_vec 和 embedder）
             vec_results: list[tuple[str, float]] = []
             if query_vec is not None and embedder is not None and embedder.available:
-                vec_results = self.search_by_vector(scope, query_vec, top_k * 5, embedder)
+                vec_results = self.search_by_vector(
+                    scope,
+                    query_vec,
+                    top_k * 5,
+                    embedder,
+                    include_global=enable_scope_fallback,
+                )
 
             # 3. 合并 FTS 和向量结果（按 memory_id 去重）
             all_ids: set[str] = set()
@@ -625,7 +752,12 @@ class MemoryStore:
                     elif entry.scope_type == scope.type and entry.scope_id == scope.id:
                         scope_map[mid] = "current"
                     else:
-                        scope_map[mid] = "other"
+                        # 即使缓存或数据库中出现异常候选，也不能让其他会话 scope
+                        # 进入结果集。这是 SQL 过滤之外的第二道边界。
+                        continue
+
+            # 仅让通过第二道 scope 校验的候选参与归一化，避免异常候选间接改变分数。
+            all_ids = set(entries)
 
             # 5. 分数归一化 + 加权 + scope penalty + decay
             fts_scores = [fts_map.get(mid, 0.0) for mid in all_ids]
@@ -640,15 +772,14 @@ class MemoryStore:
                 entry = entries[mid]
                 # 加权混合分数
                 hybrid = fts_weight * fts_norm[i] + vec_weight * vec_norm[i]
-                # scope penalty（v1.1.2.9：软权重，不硬过滤）
+                # 当前 scope 与 global 之间仅用于排序；安全隔离已在候选层硬过滤。
                 scope_tag = scope_map.get(mid, "other")
                 if scope_tag == "current":
                     penalty = 1.0
                 elif scope_tag == "global":
                     penalty = 0.9
                 else:
-                    # other scope（如 group 但当前是 private）—— 软权重保留
-                    penalty = 0.8
+                    continue
                 # decay score: confidence * 0.5^(days / half_life)
                 last_access = entry.last_accessed_at or entry.created_at
                 days = max(0.0, (now - last_access) / 86400.0)
@@ -677,30 +808,64 @@ class MemoryStore:
             import time as _time
             ts = _time.time()
         for hit in hits:
-            self.inc_access(hit.entry.id)
-            self.update_last_accessed(hit.entry.id, ts)
+            entry_scope = Scope(hit.entry.scope_type, hit.entry.scope_id)
+            self.inc_access(hit.entry.id, entry_scope)
+            self.update_last_accessed(hit.entry.id, ts, scope=entry_scope)
 
-    def update_last_accessed(self, entry_id: str, ts: float = None) -> None:
+    def update_last_accessed(
+        self,
+        entry_id: str,
+        ts: float = None,
+        *,
+        scope: Optional[Scope] = None,
+    ) -> None:
         """更新 last_accessed_at 字段。"""
         from .models import now_ts
         if ts is None:
             ts = now_ts()
+        where = "id = ?"
+        params: tuple = (ts, entry_id)
+        if scope is not None:
+            where += " AND scope_type = ? AND scope_id = ?"
+            params = (ts, entry_id, scope.type, scope.id)
         with self._lock:
             self._conn.execute(
-                "UPDATE memories SET last_accessed_at = ? WHERE id = ?",
-                (ts, entry_id),
+                "UPDATE memories SET last_accessed_at = ? WHERE " + where,
+                params,
             )
 
-    def get_entries_by_ids(self, entry_ids: list[str]) -> list[MemoryEntry]:
-        """按 ID 批量查询 entry（引用 footer 用）。"""
+    def get_entries_by_ids(
+        self,
+        entry_ids: list[str],
+        scope: Optional[Scope] = None,
+        *,
+        include_global: bool = False,
+    ) -> list[MemoryEntry]:
+        """按 ID 批量查询 entry；传入 scope 时逐条强制归属校验。"""
         if not entry_ids:
             return []
         with self._lock:
             placeholders = ",".join("?" * len(entry_ids))
-            rows = self._conn.execute(
-                f"SELECT {SELECT_COLS} FROM memories WHERE id IN ({placeholders})",
-                entry_ids,
-            ).fetchall()
+            if scope is None:
+                rows = self._conn.execute(
+                    f"SELECT {SELECT_COLS} FROM memories WHERE id IN ({placeholders})",
+                    entry_ids,
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    f"""SELECT {SELECT_COLS} FROM memories
+                        WHERE id IN ({placeholders})
+                          AND ((scope_type = ? AND scope_id = ?)
+                               OR (? AND scope_type = ? AND scope_id = ?))""",
+                    [
+                        *entry_ids,
+                        scope.type,
+                        scope.id,
+                        include_global,
+                        SCOPE_GLOBAL,
+                        SCOPE_GLOBAL,
+                    ],
+                ).fetchall()
             return [MemoryEntry.from_row(r) for r in rows]
 
     def save_embedding(
@@ -778,7 +943,7 @@ class MemoryStore:
     def search_by_topic(self, scope: Scope, topic: str) -> Optional[MemoryEntry]:
         """按 topic 精确查找（同 scope）。"""
         entry_id = make_memory_id(scope, topic)
-        return self.get_entry_by_id(entry_id)
+        return self.get_entry_by_id(entry_id, scope)
 
     def list_memories(self, scope: Scope, page: int = 1, per_page: int = 10) -> tuple[list[MemoryEntry], int, int]:
         """分页列出当前 scope 记忆。返回 (entries, total, total_pages)。"""
@@ -802,12 +967,37 @@ class MemoryStore:
                 entries.append(MemoryEntry.from_row(r))
             return entries, total, total_pages
 
-    def list_versions(self, entry_id: str) -> list[MemoryVersion]:
+    def list_versions(
+        self,
+        entry_id: str,
+        scope: Optional[Scope] = None,
+        *,
+        include_global: bool = False,
+    ) -> list[MemoryVersion]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM memory_versions WHERE memory_id = ? ORDER BY version_no ASC",
-                (entry_id,),
-            ).fetchall()
+            if scope is None:
+                rows = self._conn.execute(
+                    """SELECT * FROM memory_versions
+                       WHERE memory_id = ? ORDER BY version_no ASC""",
+                    (entry_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """SELECT v.* FROM memory_versions v
+                       JOIN memories m ON m.id = v.memory_id
+                       WHERE v.memory_id = ?
+                         AND ((m.scope_type = ? AND m.scope_id = ?)
+                              OR (? AND m.scope_type = ? AND m.scope_id = ?))
+                       ORDER BY v.version_no ASC""",
+                    (
+                        entry_id,
+                        scope.type,
+                        scope.id,
+                        include_global,
+                        SCOPE_GLOBAL,
+                        SCOPE_GLOBAL,
+                    ),
+                ).fetchall()
             return [
                 MemoryVersion(
                     version_id=r["version_id"],

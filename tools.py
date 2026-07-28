@@ -327,7 +327,9 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
         entry = plugin.store.search_by_topic(scope, topic)
         if entry is None:
             # 模糊查找
-            hits = plugin.store.search(scope, topic, top_k=1)
+            hits = plugin.store.search(
+                scope, topic, top_k=1, include_global=False
+            )
             if hits:
                 entry = hits[0].entry
 
@@ -335,7 +337,7 @@ class VerifyKnowledgeTool(FunctionTool):  # type: ignore[misc]
             return (f"记忆库中未找到关于「{topic}」的记忆，请先调用 search_and_learn 学习。")
 
         # 标记质疑
-        plugin.store.inc_challenge(entry.id)
+        plugin.store.inc_challenge(entry.id, scope)
 
         # 取 LLM provider
         event = _get_event(context)

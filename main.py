@@ -653,7 +653,11 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         if is_challenge and hits:
             target = hits[0].entry
             try:
-                await asyncio.to_thread(self.store.inc_challenge, target.id)
+                await asyncio.to_thread(
+                    self.store.inc_challenge,
+                    target.id,
+                    Scope(target.scope_type, target.scope_id),
+                )
             except Exception:
                 pass
             parts.append(
@@ -953,7 +957,9 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         scope = Scope.from_event(event)
         entry = self.store.search_by_topic(scope, topic)
         if entry is None:
-            hits = self.store.search(scope, topic, top_k=1)
+            hits = self.store.search(
+                scope, topic, top_k=1, include_global=False
+            )
             entry = hits[0].entry if hits else None
         if entry is None:
             yield event.plain_result(f"❌ 未找到关于「{topic}」的记忆，请先学习该主题")
@@ -982,7 +988,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             return
 
         # 读取更新后的 entry
-        updated = self.store.get_entry_by_id(entry.id)
+        updated = self.store.get_entry_by_id(entry.id, scope)
         if updated:
             extra = f"\n\n更新后置信度: {updated.confidence:.0%}"
             if updated.verified:
@@ -1021,7 +1027,9 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         if entry is None:
             yield event.plain_result(f"❌ 未找到关于「{topic}」的记忆")
             return
-        versions = self.store.list_versions(entry.id)
+        versions = self.store.list_versions(
+            entry.id, scope, include_global=True
+        )
         if not versions:
             yield event.plain_result(f"📝 「{entry.topic}」暂无历史版本")
             return
@@ -1044,12 +1052,14 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         scope = Scope.from_event(event)
         entry = self.store.search_by_topic(scope, topic)
         if entry is None:
-            hits = self.store.search(scope, topic, top_k=1)
+            hits = self.store.search(
+                scope, topic, top_k=1, include_global=False
+            )
             entry = hits[0].entry if hits else None
         if entry is None:
             yield event.plain_result(f"❌ 未找到关于「{topic}」的记忆")
             return
-        self.store.update_last_accessed(entry.id)
+        self.store.update_last_accessed(entry.id, scope=scope)
         yield event.plain_result(
             f"🔄 已刷新「{entry.topic}」的访问时间，衰减分数已恢复。\n"
             f"当前置信度: {entry.confidence:.0%}"

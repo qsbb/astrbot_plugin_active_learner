@@ -517,6 +517,15 @@ def test_forget_does_not_touch_other_scope(store):
     assert store.get_entry_by_id(group_entry.id) is not None
 
 
+def test_forget_does_not_delete_global_fallback_from_private_scope(store):
+    global_entry = store.add_or_update(
+        GLOBAL, "Shared", "共同内容 alpha", confidence=0.9
+    )
+
+    assert store.forget(PRIVATE, "Shared") == (False, None)
+    assert store.get_entry_by_id(global_entry.id) is not None
+
+
 def test_forget_uses_fuzzy_search_and_may_delete_a_different_topic(store):
     """缺陷记录：forget 走 FTS 模糊检索取 top1，而非按 topic 精确定位。
 
@@ -710,6 +719,13 @@ def test_search_by_topic_exact_and_missing(store):
     assert store.search_by_topic(GROUP, "Merge") is None, "scope 不同即查不到"
 
 
+def test_search_by_topic_rejects_id_with_mismatched_stored_scope(store):
+    forged_id = make_memory_id(PRIVATE, "Forged")
+    store.add_chunk(forged_id, GROUP, "Forged", "其他群的内容")
+
+    assert store.search_by_topic(PRIVATE, "Forged") is None
+
+
 def test_search_fts_returns_negated_bm25(store):
     store.add_or_update(PRIVATE, "T", "命中词 alpha", confidence=0.5)
     results = store._search_fts(PRIVATE, "alpha", 10)
@@ -720,12 +736,24 @@ def test_search_fts_returns_negated_bm25(store):
     assert score > 0
 
 
-def test_search_fts_ignores_scope_filter(store):
+def test_search_fts_hard_filters_unrelated_scopes(store):
     store.add_or_update(PRIVATE, "mine", "共享词 alpha", confidence=0.5)
+    store.add_or_update(GLOBAL, "globalone", "共享词 alpha", confidence=0.5)
     store.add_or_update(GROUP, "otherone", "共享词 alpha", confidence=0.5)
-    # v1.1.2.9 起 _search_fts 不按 scope 硬过滤，scope 退化为 search_hybrid 里的软权重
     topics = sorted(e.topic for e, _ in store._search_fts(PRIVATE, "alpha", 10))
-    assert topics == ["mine", "otherone"]
+    assert topics == ["globalone", "mine"]
+
+
+def test_search_fts_can_disable_global_fallback(store):
+    store.add_or_update(PRIVATE, "mine", "共享词 alpha", confidence=0.5)
+    store.add_or_update(GLOBAL, "globalone", "共享词 alpha", confidence=0.5)
+    topics = [
+        e.topic
+        for e, _ in store._search_fts(
+            PRIVATE, "alpha", 10, include_global=False
+        )
+    ]
+    assert topics == ["mine"]
 
 
 def test_search_fts_empty_query_short_circuits(store):
@@ -782,10 +810,10 @@ def test_load_scope_vectors_empty_db_returns_zero_matrix(store):
     assert ids == []
     assert matrix.shape == (0, 4), "无向量时返回 (0, dim) 空矩阵而非 None"
     # 空结果也要写缓存，避免每次检索都重扫表
-    assert "__all__" in emb._matrix_cache
+    assert "scope:private:u1:global:1" in emb._matrix_cache
 
 
-def test_load_scope_vectors_uses_cache_key_all(store):
+def test_load_scope_vectors_uses_scope_specific_cache(store):
     entry = store.add_or_update(PRIVATE, "T", "内容", confidence=0.5)
     store.save_embedding(entry.id, [1.0, 0.0, 0.0, 0.0], 4, "m")
     emb = FakeEmbedder(dim=4)
@@ -795,6 +823,19 @@ def test_load_scope_vectors_uses_cache_key_all(store):
     # 第二次调用直接命中缓存，返回同一对象
     cached = store._load_scope_vectors(PRIVATE, emb)
     assert cached[1] is ids
+
+
+def test_load_scope_vectors_excludes_unrelated_scopes(store):
+    mine = store.add_or_update(PRIVATE, "mine", "内容", confidence=0.5)
+    shared = store.add_or_update(GLOBAL, "shared", "内容", confidence=0.5)
+    other = store.add_or_update(GROUP, "other", "内容", confidence=0.5)
+    for entry in (mine, shared, other):
+        store.save_embedding(entry.id, [1.0, 0.0, 0.0, 0.0], 4, "m")
+
+    _, ids = store._load_scope_vectors(PRIVATE, FakeEmbedder(dim=4))
+
+    assert set(ids) == {mine.id, shared.id}
+    assert other.id not in ids
 
 
 def test_load_scope_vectors_skips_dim_mismatch(store):
@@ -955,23 +996,35 @@ def test_search_hybrid_skips_vector_when_query_vec_missing(store):
     assert hits[0].score == pytest.approx(0.5 * 0.6, rel=1e-3)
 
 
-def test_search_hybrid_applies_scope_penalty_order(store):
-    """scope 是软权重：current(1.0) > global(0.9) > other(0.8)，不再硬过滤。"""
-    # 三条 topic/content/confidence 完全相同，只有 scope 不同，
-    # 这样 FTS bm25 一致、归一化后各 0.5，分差只来自 scope penalty
+def test_search_hybrid_hard_filters_unrelated_scopes(store):
+    """current 与 global 可见，其他私聊/群聊不能仅靠降权混入结果。"""
     store.add_or_update(PRIVATE, "shared", "alpha beta gamma", confidence=0.5)
     store.add_or_update(GLOBAL, "shared", "alpha beta gamma", confidence=0.5)
     store.add_or_update(GROUP, "shared", "alpha beta gamma", confidence=0.5)
     hits = store.search_hybrid(PRIVATE, "alpha", top_k=3, track_access=False)
-    assert len(hits) == 3
+    assert len(hits) == 2
     assert [h.entry.scope_type for h in hits] == [
         SCOPE_PRIVATE,
         SCOPE_GLOBAL,
-        SCOPE_GROUP,
     ]
     assert hits[0].score == pytest.approx(0.5 * 1.0 * 0.5, rel=1e-3)
     assert hits[1].score == pytest.approx(0.5 * 0.9 * 0.5, rel=1e-3)
-    assert hits[2].score == pytest.approx(0.5 * 0.8 * 0.5, rel=1e-3)
+
+
+def test_search_hybrid_scope_fallback_only_controls_global(store):
+    store.add_or_update(PRIVATE, "mine", "alpha", confidence=0.5)
+    store.add_or_update(GLOBAL, "shared", "alpha", confidence=0.5)
+    store.add_or_update(GROUP, "other", "alpha", confidence=0.5)
+
+    hits = store.search_hybrid(
+        PRIVATE,
+        "alpha",
+        top_k=3,
+        enable_scope_fallback=False,
+        track_access=False,
+    )
+
+    assert [h.entry.topic for h in hits] == ["mine"]
 
 
 def test_search_hybrid_decay_lowers_stale_entries(store):
@@ -1139,6 +1192,52 @@ def test_get_entries_by_ids_returns_matching_only(store):
 def test_get_entries_by_ids_empty_input_short_circuits(store):
     # 空列表必须提前返回，否则 IN () 会是非法 SQL
     assert store.get_entries_by_ids([]) == []
+
+
+def test_id_reads_require_matching_scope_when_scope_is_supplied(store):
+    mine = store.add_or_update(PRIVATE, "mine", "内容", confidence=0.5)
+    shared = store.add_or_update(GLOBAL, "shared", "内容", confidence=0.5)
+    other = store.add_or_update(GROUP, "other", "内容", confidence=0.5)
+
+    assert store.get_entry_by_id(mine.id, PRIVATE).id == mine.id
+    assert store.get_entry_by_id(other.id, PRIVATE) is None
+    assert store.get_entry_by_id(shared.id, PRIVATE) is None
+    assert (
+        store.get_entry_by_id(shared.id, PRIVATE, include_global=True).id
+        == shared.id
+    )
+
+    visible = store.get_entries_by_ids(
+        [mine.id, shared.id, other.id], PRIVATE, include_global=True
+    )
+    assert {entry.id for entry in visible} == {mine.id, shared.id}
+
+
+def test_id_mutations_and_version_reads_reject_other_scope(store):
+    other = store.add_or_update(GROUP, "other", "原内容", confidence=0.5)
+    store.update_content(other.id, "生成一条历史版本", 0.6)
+    before = store.get_entry_by_id(other.id)
+
+    assert (
+        store.update_content(
+            other.id, "越权内容", 0.9, verified=True, scope=PRIVATE
+        )
+        is False
+    )
+    store.inc_challenge(other.id, PRIVATE)
+    store.inc_access(other.id, PRIVATE)
+    store.set_verified(other.id, True, confidence=1.0, scope=PRIVATE)
+    store.update_last_accessed(other.id, 999.0, scope=PRIVATE)
+
+    after = store.get_entry_by_id(other.id)
+    assert after.content == before.content
+    assert after.confidence == before.confidence
+    assert after.verified == before.verified
+    assert after.challenge_count == before.challenge_count
+    assert after.access_count == before.access_count
+    assert after.last_accessed_at == before.last_accessed_at
+    assert store.list_versions(other.id, PRIVATE) == []
+    assert len(store.list_versions(other.id, GROUP)) == 1
 
 
 def test_add_chunk_inserts_with_parent_doc_id(store):
