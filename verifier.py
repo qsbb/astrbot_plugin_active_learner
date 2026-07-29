@@ -71,11 +71,20 @@ class Verifier:
         # 仅使用最高优先级来源
         if getattr(self._plugin, "_web_search_only_highest_priority", False):
             priority = getattr(self._plugin, "_knowledge_source_priority", ["web"])
-            top = priority[0] if priority else "web"
+            availability = getattr(self._plugin, "_source_available", None)
+            if callable(availability):
+                top = next(
+                    (source for source in priority if availability(source)),
+                    "web",
+                )
+            else:
+                top = priority[0] if priority else "web"
             if top == "web":
                 return "web"
             if top == "bilibili":
                 return "bilibili"
+            if top == "url":
+                return "url"
             return "llm"
 
         return cfg
@@ -223,10 +232,11 @@ class Verifier:
         source_cfg: str = "auto",
         keywords: list[str] | None = None,
     ) -> list[dict]:
-        """根据配置从对应搜索源收集证据。Web 搜索和 B 站搜索并行执行。"""
+        """根据配置从对应搜索源收集证据，各已启用来源并行执行。"""
         sources: list[dict] = []
         keywords = keywords or []
 
+        use_url = source_cfg in ("auto", "url")
         use_web = source_cfg in ("auto", "web", "web+bilibili")
         use_bili = source_cfg in ("auto", "bilibili", "web+bilibili")
 
@@ -234,8 +244,10 @@ class Verifier:
         search_query = " ".join(keywords[:3]) if keywords else topic
 
         # 所有搜索通过插件级控制器执行，统一分源超时、总 deadline 与限流。
-        if use_web or use_bili:
+        if use_url or use_web or use_bili:
             allowed = set()
+            if use_url:
+                allowed.add("url")
             if use_web:
                 allowed.add("web")
             if use_bili:
@@ -243,6 +255,7 @@ class Verifier:
             sources.extend(
                 await self._plugin._search_external_sources(
                     search_query,
+                    url_limit=3,
                     web_limit=5,
                     bili_limit=3,
                     allowed_sources=allowed,

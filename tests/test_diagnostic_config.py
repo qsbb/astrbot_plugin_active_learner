@@ -84,6 +84,11 @@ def test_diagnostic_page_renders_config_and_runtime_values():
 
 
 def test_page_assets_have_version_query_to_avoid_stale_webview_cache():
+    import re
+
     html = _INDEX.read_text(encoding="utf-8")
-    assert 'href="./style.css?v=1.2.8"' in html
-    assert 'src="./app.js?v=1.2.8"' in html
+    style_match = re.search(r'href="\./style\.css\?v=([^"]+)"', html)
+    script_match = re.search(r'src="\./app\.js\?v=([^"]+)"', html)
+    assert style_match and style_match.group(1)
+    assert script_match and script_match.group(1)
+    assert style_match.group(1) == script_match.group(1)

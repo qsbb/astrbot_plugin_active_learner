@@ -2,7 +2,7 @@
 
 功能：
 1. 自动检索记忆并注入 LLM 上下文
-2. 主动学习新知识（关键词触发 + LLM 工具调用）
+2. 主动学习新知识（主模型语义判断 + LLM 工具调用）
 3. 按用户/群聊双层隔离的 SQLite 记忆库
 4. 质疑时多源交叉验证 + LLM 自辩论 + 版本化
 """
@@ -32,7 +32,6 @@ from .runtime import (
     ExternalSearchController,
     build_factual_grounding_instruction,
     build_missing_comparison_instruction,
-    detect_explicit_search_request,
     get_request_learning_state,
     mark_request_learning_hinted,
     should_apply_domain_restriction,
@@ -42,6 +41,7 @@ from .slang_capture import extract_candidates
 from .storage import MemoryStore
 from .triggers import CHALLENGE_PATTERNS
 from .tools import create_tools
+from .url_sources import UrlSourceRegistry
 from .verifier import Verifier
 
 # v1.1.5.0：架构重构 —— 统一服务层
@@ -127,7 +127,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self.config = cfg  # 统一保存，供 tools.py 等模块读取
 
         # 存储层
-        db_path = StarTools.get_data_dir() / "memory.db"
+        data_dir = StarTools.get_data_dir()
+        db_path = data_dir / "memory.db"
         self._db_path = db_path
         self.store = MemoryStore(
             db_path=db_path,
@@ -137,6 +138,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
 
         # 搜索器与验证器
         self.searcher = WebSearcher()
+        self.url_sources = UrlSourceRegistry(data_dir, self.searcher)
         # 从 AstrBot 配置读取搜索 API（Tavily / BoCha / Brave）
         provider_settings = cfg.get("provider_settings") or {}
         if isinstance(provider_settings, dict):
@@ -150,7 +152,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self._retrieval_semaphore = asyncio.Semaphore(_RETRIEVAL_CONCURRENCY)
         self._external_search = ExternalSearchController(
             concurrency=3,
-            source_timeouts={"web": 8.0, "bilibili": 6.0},
+            source_timeouts={"url": 5.0, "web": 8.0, "bilibili": 6.0},
             total_deadline=_EXTERNAL_SEARCH_DEADLINE_SECONDS,
             first_result_grace=float(
                 cfg.get(
@@ -178,7 +180,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         # v1.1.5.0：统一服务层。ConfigManager 独占 Dashboard 配置文件，
         # 避免两个缓存同时读取同一文件后产生运行时旧值。
         self.config_manager = ConfigManager(
-            StarTools.get_data_dir(), cfg, native_config=self._native_config
+            data_dir, cfg, native_config=self._native_config
         )
         cfg = self.config_manager.all()
         self.config = cfg
@@ -278,7 +280,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             cfg.get("web_search_only_highest_priority", False)
         )
         self._knowledge_source_priority = self._parse_source_priority(
-            cfg.get("knowledge_source_priority", "web,bilibili")
+            cfg.get("knowledge_source_priority", "url,web,bilibili")
         )
         self._knowledge_domain_scope = [
             d.strip().lower()
@@ -561,13 +563,6 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
 
         scope = Scope.from_event(event)
         parts: list[str] = []
-        explicit_search_requested = detect_explicit_search_request(msg)
-        if explicit_search_requested:
-            add_reason(
-                request_context,
-                OWNER_ACTIVE_LEARNER,
-                "EXPLICIT_FACT_CHECK_REQUESTED",
-            )
 
         # 1. 普通请求先做全库 FTS；命中不足时才限时 Embedding + 混合检索。
         retrieval_started = time.perf_counter()
@@ -701,7 +696,6 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             )
 
         factual_grounding = build_factual_grounding_instruction(
-            explicit_search_requested=explicit_search_requested,
             has_memory_hits=bool(injected_hits),
             domain_restricted=domain_restricted,
         )
@@ -712,33 +706,23 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 OWNER_ACTIVE_LEARNER,
                 "FACTUAL_GROUNDING_APPLIED",
             )
-        if explicit_search_requested and not domain_restricted:
-            mark_request_learning_hinted(event)
-            self._active_learn_hinted = True  # 兼容旧版扩展读取
-
-        # 3. 主动学习提示（v1.1.5.0：所有用户按 learn_weight 触发，不限于管理员）
+        # 3. 自主检索提示（所有用户按连续倾向值调整，不增加额外 LLM 请求）
         # 缺失对象提示本身就是强制学习请求，不受通用主动学习开关影响。
-        if missing_instruction or (explicit_search_requested and not domain_restricted):
+        if missing_instruction:
             pass
         elif not domain_restricted and self._enable_active_learn_hint:
-            if not hits:
-                hint = self._get_learn_prompt()
-                if hint:
-                    state = get_request_learning_state(event)
-                    if state is not None:
-                        state.hinted = True
-                    self._active_learn_hinted = True  # 兼容旧版扩展读取
-                    parts.append(hint)
-                    logger.info(
-                        f"ℹ️ 已注入学习提示 (weight={self._learn_weight}, scope: {scope})"
-                    )
-                else:
-                    logger.info(f"ℹ️ learn_weight=0，跳过主动学习 (scope: {scope})")
-            elif self._learn_weight >= 0.5:
-                # 即使有记忆命中，也注入简短工具提醒
-                parts.append(
-                    "（如果用户提供了你原本不掌握的新知识点，可调用 search_and_learn 工具学习）"
+            hint = self._get_learn_prompt(has_memory_hits=bool(injected_hits))
+            if hint:
+                state = get_request_learning_state(event)
+                if state is not None:
+                    state.hinted = True
+                self._active_learn_hinted = True  # 兼容旧版扩展读取
+                parts.append(hint)
+                logger.info(
+                    f"ℹ️ 已注入自主检索策略 (propensity={self._learn_weight}, scope: {scope})"
                 )
+            else:
+                logger.info(f"ℹ️ 检索倾向为 0，跳过自主检索策略 (scope: {scope})")
         else:
             state = get_request_learning_state(event, create=False)
             if state is not None:
@@ -760,7 +744,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 "hit_count": len(hits),
                 "injected_count": len(injected_hits),
                 "domain_restricted": bool(domain_restricted),
-                "explicit_search_requested": bool(explicit_search_requested),
+                "search_policy": "semantic",
+                "search_propensity": self._learn_weight,
                 "factual_grounding": bool(factual_grounding),
             },
         )
@@ -779,15 +764,11 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             parts.append(
                 "[行为规范] 请仅按上面的领域限制直接回复，不要调用任何工具或搜索网络。"
             )
-        elif explicit_search_requested:
-            parts.append(
-                "[行为规范] 请先完成上述强制外部核验再回答；不要预告搜索过程，"
-                "也不要在工具失败时回退为猜测。"
-            )
         else:
             parts.append(
                 "[行为规范] 有记忆就直接答；需调用工具时直接调用，"
                 '不要在回复里预告"让我查查看"、"我搜一下"、"让我想想"等话术。'
+                "一次回答只使用一条搜索链，失败后不要换其他搜索工具连续重试。"
             )
 
         injection = "\n".join(parts)
@@ -802,7 +783,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 "retrieval_mode": retrieval_mode,
                 "hit_count": len(hits),
                 "domain_restricted": bool(domain_restricted),
-                "explicit_search_requested": bool(explicit_search_requested),
+                "search_policy": "semantic",
+                "search_propensity": self._learn_weight,
                 "factual_grounding": bool(factual_grounding),
             },
         )
@@ -814,11 +796,9 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             tags.append("质疑提示")
         if domain_restricted:
             tags.append("领域限制")
-        if explicit_search_requested:
-            tags.append("强制核验")
         request_state = get_request_learning_state(event, create=False)
         if request_state is not None and request_state.hinted:
-            tags.append("学习提示")
+            tags.append("语义检索策略")
         try:
             if hasattr(req, "extra_user_content_parts"):
                 from astrbot.core.agent.message import TextPart

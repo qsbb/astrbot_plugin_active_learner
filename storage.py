@@ -491,7 +491,7 @@ class MemoryStore:
         *,
         include_global: bool = True,
     ) -> list[SearchHit]:
-        """FTS5 全文检索 + scope 过滤 + 置信度加权排序。
+        """FTS5 全文检索 + scope 过滤 + 相关性主导排序。
 
         v1.1.2.0 起推荐用 search_hybrid 替代（带向量检索）。
         本方法保留作为降级路径和无 embedding provider 时的兜底。
@@ -506,12 +506,13 @@ class MemoryStore:
         with self._lock:
             try:
                 rows = self._conn.execute(
-                    f"""SELECT {m_cols}
+                    f"""SELECT {m_cols}, bm25(memories_fts) AS bm25_score
                         FROM memories_fts f
                         JOIN memories m ON m.rowid = f.rowid
                         WHERE memories_fts MATCH ?
                           AND ((m.scope_type = ? AND m.scope_id = ?)
                                OR (? AND m.scope_type = ? AND m.scope_id = ?))
+                        ORDER BY bm25(memories_fts)
                         LIMIT ?""",
                     (
                         match_expr,
@@ -520,7 +521,7 @@ class MemoryStore:
                         include_global,
                         SCOPE_GLOBAL,
                         SCOPE_GLOBAL,
-                        top_k * 3,
+                        top_k * 5,
                     ),
                 ).fetchall()
             except sqlite3.OperationalError:
@@ -529,11 +530,25 @@ class MemoryStore:
             if not rows:
                 return []
 
+            raw_relevance = [-float(r["bm25_score"]) for r in rows]
+            low = min(raw_relevance)
+            high = max(raw_relevance)
+            if high == low:
+                relevance_scores = [1.0] * len(rows)
+            else:
+                relevance_scores = [
+                    (score - low) / (high - low) for score in raw_relevance
+                ]
+
             hits: list[SearchHit] = []
-            for r in rows:
+            for r, relevance in zip(rows, relevance_scores):
                 entry = MemoryEntry.from_row(r)
-                # 评分：置信度为主，访问次数微调
-                score = entry.confidence + (min(entry.access_count, 50) / 50.0) * 0.1
+                # 相关性决定主体排序；置信度和访问热度只做有限微调。
+                score = (
+                    relevance * 0.8
+                    + entry.confidence * 0.15
+                    + (min(entry.access_count, 50) / 50.0) * 0.05
+                )
                 hits.append(SearchHit(entry=entry, score=score))
 
         hits.sort(key=lambda h: h.score, reverse=True)

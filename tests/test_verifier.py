@@ -81,11 +81,12 @@ class _FakePlugin:
         self.search_calls = []
 
     async def _search_external_sources(
-        self, query, web_limit=5, bili_limit=3, allowed_sources=None
+        self, query, url_limit=3, web_limit=5, bili_limit=3, allowed_sources=None
     ):
         self.search_calls.append(
             {
                 "query": query,
+                "url_limit": url_limit,
                 "web_limit": web_limit,
                 "bili_limit": bili_limit,
                 "allowed_sources": set(allowed_sources or set()),
@@ -192,6 +193,7 @@ def test_get_search_source_forced_to_llm_when_web_search_disabled():
     [
         (["web", "bilibili"], "web"),
         (["bilibili", "web"], "bilibili"),
+        (["url", "web"], "url"),
         (["local"], "llm"),
         ([], "web"),
     ],
@@ -204,8 +206,18 @@ def test_get_search_source_only_highest_priority(priority, expected):
             priority=priority,
         )
     )
-    # 仅用最高优先级来源时，取 priority[0]；非 web/bilibili 的来源没有搜索实现，退回 llm
+    # 仅用最高优先级来源时，取 priority[0]；未知来源退回 llm
     assert verifier._get_search_source() == expected
+
+
+def test_get_search_source_skips_unavailable_highest_priority_source():
+    plugin = _FakePlugin(
+        config={"verifier_search_source": "auto"},
+        only_highest_priority=True,
+        priority=["url", "web", "bilibili"],
+    )
+    plugin._source_available = lambda source: source == "web"
+    assert Verifier(plugin)._get_search_source() == "web"
 
 
 # ---------- _safe_llm_generate ----------
@@ -297,7 +309,7 @@ def test_extract_keywords_without_provider_uses_placeholder_reply():
 # ---------- _collect_sources ----------
 
 
-def test_collect_sources_auto_uses_both_sources_and_keyword_query():
+def test_collect_sources_auto_uses_all_sources_and_keyword_query():
     plugin = _FakePlugin(
         search_batches=[
             [_source("主搜索结果"), _source("B站视频", source_type="bilibili")],
@@ -310,8 +322,8 @@ def test_collect_sources_auto_uses_both_sources_and_keyword_query():
         )
     )
     main_call, alt_call = plugin.search_calls
-    # auto 模式同时放开 web 与 bilibili，主 query 取前 3 个关键词拼接
-    assert main_call["allowed_sources"] == {"web", "bilibili"}
+    # auto 模式同时放开 URL、web 与 bilibili，主 query 取前 3 个关键词拼接
+    assert main_call["allowed_sources"] == {"url", "web", "bilibili"}
     assert main_call["query"] == "三体 刘慈欣 科幻"
     # 第二次是事实核查补搜：只走 web，query 为 topic + 首关键词
     assert alt_call["allowed_sources"] == {"web"}

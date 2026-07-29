@@ -21,33 +21,81 @@ _TRAILING_NOISE = re.compile(
     r"|哪个好|哪个更[0-9a-z\u4e00-\u9fff_-]{0,16}|怎么样|如何|怎么选|如何选|吗|呢|？|\?)\s*$",
     re.IGNORECASE,
 )
-_SEARCH_VERB = r"(?:搜(?:索)?|检索|查(?:询)?|核实|核对|验证)"
-_NEGATED_SEARCH_REQUEST = re.compile(
-    rf"(?:不用|不要|别|无需|不必|不需要)\s*"
-    rf"(?:(?:你|再|重新|去|帮我|替我|给我)\s*){{0,3}}{_SEARCH_VERB}",
-    re.IGNORECASE,
+_GENERIC_TOPIC_TERMS = {
+    "wiki",
+    "百科",
+    "介绍",
+    "信息",
+    "资料",
+    "内容",
+    "详情",
+    "角色",
+    "人物",
+    "设定",
+    "最新",
+    "武器",
+    "定位",
+    "技能",
+    "配音",
+    "中配",
+    "日配",
+    "特点",
+    "解释",
+    "解释一下",
+    "是什么",
+    "意思",
+    "这个",
+    "那个",
+    "是",
+    "有",
+    "和",
+    "与",
+    "或",
+    "吗",
+    "呢",
+    "吧",
+}
+_GENERIC_TOPIC_PREFIXES = (
+    "麻烦你帮我",
+    "可以帮我",
+    "我想知道",
+    "你知不知道",
+    "你知道",
+    "你认识",
+    "你看看",
+    "帮我看看",
+    "帮我",
+    "告诉我",
+    "介绍一下",
+    "解释一下",
+    "请问",
+    "请",
+    "看看",
+    "关于",
+    "如何",
+    "怎么",
 )
-_SELF_DIRECTED_SEARCH = re.compile(
-    rf"(?:^|[，。！？!?\s])我(?:刚|已经|刚才|之前|先|去|来|自己|再)+\s*{_SEARCH_VERB}",
-    re.IGNORECASE,
-)
-_EXPLICIT_SEARCH_REQUESTS = (
-    re.compile(
-        rf"(?:请|麻烦|劳驾|帮我|帮忙|替我|能不能|可不可以|可以帮我|"
-        rf"你(?:再|重新|去|帮我|给我)?|再|重新|联网|上网)\s*"
-        rf"(?:再|重新|去|帮我|给我)?\s*{_SEARCH_VERB}",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        rf"{_SEARCH_VERB}(?:一?下|一遍|看看|看|清楚|资料|信息|来源|出处|吧|呗)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:^|[.!?，。！？]\s*)(?:please\s+|can\s+you\s+|could\s+you\s+|"
-        r"would\s+you\s+)?(?:search|look(?:\s+(?:this|that|it))?\s+up|"
-        r"browse|verify|fact[- ]?check)\b",
-        re.IGNORECASE,
-    ),
+_GENERIC_TOPIC_SUFFIXES = (
+    "是什么角色",
+    "是什么人物",
+    "是什么意思",
+    "有什么特点",
+    "有哪些特点",
+    "相关资料",
+    "相关信息",
+    "是什么",
+    "是谁",
+    "怎么样",
+    "的资料",
+    "的介绍",
+    "的信息",
+    "百科",
+    "wiki",
+    "角色",
+    "人物",
+    "呢",
+    "吗",
+    "吧",
 )
 
 
@@ -78,6 +126,56 @@ def extract_comparison_objects(query: str, max_objects: int = 4) -> list[str]:
 
 def normalize_match_text(value: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (value or "").lower())
+
+
+def topic_terms(value: str) -> list[str]:
+    """提取主题中的核心实体词，用于阻止仅命中宽泛词的错误短路。"""
+    chunks = re.findall(r"[0-9a-z]+|[\u4e00-\u9fff]+", (value or "").lower())
+    terms: list[str] = []
+    for chunk in chunks:
+        cleaned = chunk
+        changed = True
+        while changed and cleaned:
+            changed = False
+            for prefix in _GENERIC_TOPIC_PREFIXES:
+                if cleaned.startswith(prefix) and len(cleaned) > len(prefix):
+                    cleaned = cleaned[len(prefix) :]
+                    changed = True
+                    break
+            for suffix in _GENERIC_TOPIC_SUFFIXES:
+                if cleaned.endswith(suffix) and len(cleaned) > len(suffix):
+                    cleaned = cleaned[: -len(suffix)]
+                    changed = True
+                    break
+        for part in re.split(r"(?:中的|里的|当中的|关于|的)", cleaned):
+            normalized = normalize_match_text(part)
+            is_single_cjk = bool(re.fullmatch(r"[\u4e00-\u9fff]", normalized))
+            if (
+                (len(normalized) < 2 and not is_single_cjk)
+                or normalized in _GENERIC_TOPIC_TERMS
+                or normalized in terms
+            ):
+                continue
+            terms.append(normalized)
+    return terms
+
+
+def entry_covers_topic(topic: str, hit: Any) -> bool:
+    """要求命中条目覆盖主题的全部核心实体，而不是只覆盖其中一个宽泛词。"""
+    entry = getattr(hit, "entry", hit)
+    fields = [
+        getattr(entry, "topic", "") or "",
+        *(getattr(entry, "keywords", None) or []),
+        getattr(entry, "content", "") or "",
+    ]
+    haystack = normalize_match_text(" ".join(str(field) for field in fields))
+    terms = topic_terms(topic)
+    return bool(terms) and all(term in haystack for term in terms)
+
+
+def select_covering_hit(topic: str, hits: Iterable[Any]) -> Any | None:
+    """按原排序返回首个完整覆盖主题实体的命中。"""
+    return next((hit for hit in hits if entry_covers_topic(topic, hit)), None)
 
 
 def object_is_covered(obj: str, hits: Iterable[Any]) -> bool:
@@ -116,42 +214,14 @@ def build_missing_comparison_instruction(missing_objects: Iterable[str]) -> str:
     )
 
 
-def detect_explicit_search_request(query: str) -> bool:
-    """识别用户明确要求联网搜索或事实核验的指令。"""
-    normalized = re.sub(r"\s+", " ", (query or "").strip())
-    if (
-        not normalized
-        or _NEGATED_SEARCH_REQUEST.search(normalized)
-        or _SELF_DIRECTED_SEARCH.search(normalized)
-    ):
-        return False
-    return any(pattern.search(normalized) for pattern in _EXPLICIT_SEARCH_REQUESTS)
-
-
 def build_factual_grounding_instruction(
     *,
-    explicit_search_requested: bool,
     has_memory_hits: bool,
     domain_restricted: bool,
 ) -> str:
     """生成不受主动学习权重影响的事实可靠性约束。"""
     if domain_restricted:
-        if not explicit_search_requested:
-            return ""
-        return (
-            "【事实核验受领域限制】用户明确要求搜索或核实，但当前领域策略禁止联网搜索。"
-            "请直接说明当前无法核实，不得声称已经搜索，也不要凭印象补全具体事实。"
-        )
-
-    if explicit_search_requested:
-        return (
-            "【强制事实核验】用户明确要求搜索、查询或核实，这不是可选的学习建议，"
-            "也不受主动学习开关或权重影响。回答可核查的具体事实前，必须调用 "
-            "search_and_learn，并将 force_refresh 设为 true，以跳过旧的本地记忆并实际检索外部来源。"
-            "只有在明确验证某条已存记忆时，才可改用 verify_knowledge。"
-            "工具不可用、无结果或没有返回外部来源时，请明确说尚未核实；"
-            "不得把训练数据印象或旧记忆冒充本次搜索结果。"
-        )
+        return ""
 
     if not has_memory_hits:
         return (
@@ -162,6 +232,27 @@ def build_factual_grounding_instruction(
         )
 
     return ""
+
+
+def build_semantic_search_instruction(
+    search_propensity: float,
+    *,
+    has_memory_hits: bool,
+) -> str:
+    """让主模型在当前推理中判断检索需要，不增加一次额外 LLM 请求。"""
+    propensity = max(0.0, min(1.0, float(search_propensity)))
+    threshold = 0.75 - 0.35 * propensity
+    memory_state = "已有本地候选记忆" if has_memory_hits else "没有可靠的本地候选记忆"
+    return (
+        f"【自主检索策略】当前检索倾向为 {propensity:.2f}，参考触发阈值为 "
+        f"{threshold:.2f}，且{memory_state}。这不是概率，也不是强制搜索比例。"
+        "请在本次推理中根据事实不确定性、时效性、实体是否完整匹配以及答错代价，"
+        "自行判断是否需要调用 search_and_learn。闲聊、创作、主观交流或已有可靠且实体完整的"
+        "依据时不要搜索；对具体但不确定、易变化、实体冲突或用户要求核实时优先搜索。"
+        "需要刷新旧记忆时将 force_refresh 设为 true。一次回答最多启动一条搜索链；"
+        "search_and_learn 无结果或报错后不要再换用其他搜索工具连续重试，"
+        "应明确说明本次未能核实。不要向用户输出倾向值或内部判断分数。"
+    )
 
 
 def should_apply_domain_restriction(

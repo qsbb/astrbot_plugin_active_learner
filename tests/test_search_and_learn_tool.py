@@ -10,15 +10,20 @@ from astrbot_plugin_active_learner.tools import SearchAndLearnTool
 
 
 class _Store:
-    def __init__(self):
+    def __init__(self, entry_topic="测试主题", keywords=None):
         self.search_calls = 0
+        self.entry_topic = entry_topic
+        self.keywords = keywords or [entry_topic]
 
     def search(self, scope, topic, top_k=3):
         self.search_calls += 1
         return [
             SimpleNamespace(
                 entry=SimpleNamespace(
-                    topic="旧知识", content="旧内容", confidence=0.8
+                    topic=self.entry_topic,
+                    keywords=self.keywords,
+                    content=f"关于{self.entry_topic}的旧内容",
+                    confidence=0.8,
                 )
             )
         ]
@@ -81,10 +86,31 @@ def test_force_refresh_skips_local_memory_and_calls_external_search():
             query="测试主题 最新资料",
             force_refresh=True,
         )
-        assert "未找到结果" in result
+        assert "未找到可用来源" in result
+        assert "不要改用其他搜索工具连续重试" in result
         assert plugin.store.search_calls == 0
         assert plugin.external_calls == 1
         assert state.called is True
         assert plugin._active_learn_was_called is True
+
+    asyncio.run(scenario())
+
+
+def test_entity_mismatch_does_not_short_circuit_external_search():
+    async def scenario():
+        plugin = _Plugin()
+        plugin.store = _Store(
+            entry_topic="卡拉彼丘令（牢令）角色",
+            keywords=["卡拉彼丘", "令"],
+        )
+        context, _ = _context()
+        result = await _tool(plugin).call(
+            context,
+            topic="卡拉彼丘 诺诺",
+            query="卡拉彼丘 诺诺",
+        )
+        assert "未找到可用来源" in result
+        assert plugin.store.search_calls == 1
+        assert plugin.external_calls == 1
 
     asyncio.run(scenario())

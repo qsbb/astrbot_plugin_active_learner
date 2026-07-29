@@ -674,11 +674,11 @@ def test_search_includes_global_but_excludes_other_scope(store):
     assert topics == ["globalone", "mine"]
 
 
-def test_search_scores_by_confidence_plus_access_bonus(store):
+def test_search_score_is_relevance_led_with_bounded_quality_bonuses(store):
     entry = store.add_or_update(PRIVATE, "T", "命中词 alpha", confidence=0.5)
     hit = store.search(PRIVATE, "alpha")[0]
-    # score = confidence + min(access,50)/50*0.1；新建 access_count=1 → +0.002
-    assert hit.score == pytest.approx(0.5 + (1 / 50.0) * 0.1)
+    # 单条结果的相关性归一为 1；置信度和访问热度只提供有限加分。
+    assert hit.score == pytest.approx(0.8 + 0.5 * 0.15 + (1 / 50.0) * 0.05)
     assert hit.entry.id == entry.id
     assert hit.confidence == 0.5, "SearchHit 代理 entry.confidence"
 
@@ -690,6 +690,25 @@ def test_search_ranks_higher_confidence_first(store):
         "high",
         "low",
     ]
+
+
+def test_search_relevance_beats_high_confidence_generic_overlap(store):
+    store.add_or_update(
+        PRIVATE,
+        "卡拉彼丘令（牢令）角色",
+        "另一位角色",
+        keywords=["卡拉彼丘", "令"],
+        confidence=0.99,
+    )
+    store.add_or_update(
+        PRIVATE,
+        "卡拉彼丘 诺诺",
+        "诺诺的角色资料",
+        keywords=["卡拉彼丘", "诺诺"],
+        confidence=0.6,
+    )
+    hits = store.search(PRIVATE, "卡拉彼丘 诺诺", top_k=2)
+    assert hits[0].entry.topic == "卡拉彼丘 诺诺"
 
 
 def test_search_respects_top_k(store):

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=1.2.8" />
+  <link rel="stylesheet" href="./style.css?v=20260729-url-sources" />
 </head>
 <body>
   <div class="shell">
@@ -139,6 +139,7 @@
           <button type="button" class="settings-tab active" data-tab="llm" role="tab">LLM</button>
           <button type="button" class="settings-tab" data-tab="learn" role="tab">学习</button>
           <button type="button" class="settings-tab" data-tab="search" role="tab">搜索 / 领域</button>
+          <button type="button" class="settings-tab" data-tab="sources" role="tab">URL 来源</button>
           <button type="button" class="settings-tab" data-tab="other" role="tab">其它</button>
         </div>
 
@@ -173,16 +174,17 @@
 
           <div class="settings-panel" data-panel="learn">
             <div class="settings-section">
-              <div class="settings-label">主动学习</div>
+              <div class="settings-label">自主检索与学习</div>
               <label class="checkbox-row">
                 <input type="checkbox" id="settings-enable-learn" />
-                <span>启用主动学习提示</span>
+                <span>启用自主检索策略</span>
               </label>
               <div class="settings-row">
-                <span class="settings-label-sm">学习权重（0=关闭，1=激进）</span>
+                <span class="settings-label-sm">自主检索倾向（0=关闭，1=更积极）</span>
                 <input type="range" id="settings-learn-weight" min="0" max="1" step="0.1" class="settings-slider" />
                 <span id="settings-learn-weight-val">0.7</span>
               </div>
+              <p class="hint">由当前对话模型结合不确定性、时效性、实体匹配和答错代价判断是否检索，不会额外增加一次模型调用。数值是倾向，不是搜索概率。</p>
               <div class="settings-row">
                 <span class="settings-label-sm">搜索返回条数</span>
                 <input type="number" id="settings-search-top-k" min="1" max="20" class="settings-number" />
@@ -224,7 +226,7 @@
                 <input type="checkbox" id="settings-enable-web-search" />
                 <span>启用联网搜索</span>
               </label>
-              <p class="hint">关闭后 search_and_learn、B 站搜索、主动学习等依赖联网的功能将不可用。</p>
+              <p class="hint">关闭后手动 URL、百科、网页搜索、B 站搜索和主动学习等联网功能均不可用。</p>
               <label class="checkbox-row">
                 <input type="checkbox" id="settings-web-search-only-top" />
                 <span>联网搜索仅使用最高优先级来源</span>
@@ -232,13 +234,15 @@
               <div class="settings-row">
                 <span class="settings-label-sm">知识搜索源优先级</span>
                 <select id="settings-knowledge-source-priority" class="settings-select">
-                  <option value="web,bilibili">网页搜索优先（web → bilibili）</option>
-                  <option value="bilibili,web">B 站搜索优先（bilibili → web）</option>
+                  <option value="url,web,bilibili">手动来源优先（URL → Web → B站）</option>
+                  <option value="web,url,bilibili">网页搜索优先（Web → URL → B站）</option>
+                  <option value="bilibili,url,web">B 站搜索优先（B站 → URL → Web）</option>
+                  <option value="url">仅手动 URL / 百科</option>
                   <option value="web">仅网页搜索（web）</option>
                   <option value="bilibili">仅 B 站搜索（bilibili）</option>
                 </select>
               </div>
-              <p class="hint">选择外部搜索源的优先级顺序；开启「仅最高优先级」时只使用第一个来源。本地记忆默认优先检索，不需要选择。</p>
+              <p class="hint">开启「仅最高优先级」时会使用列表中第一个当前可用的来源，未添加 URL 时会自动跳到下一项。本地记忆始终优先。</p>
               <div class="settings-row">
                 <span class="settings-label-sm">知识领域范围</span>
                 <div class="tag-input" id="settings-knowledge-domain-scope-tags">
@@ -256,6 +260,32 @@
                 <input type="checkbox" id="settings-cross-domain-exclude-admin" />
                 <span>拒绝跨领域搜索时排除管理员</span>
               </label>
+            </div>
+          </div>
+
+          <div class="settings-panel" data-panel="sources">
+            <div class="settings-section">
+              <div class="settings-label">手动 URL / 百科来源</div>
+              <form id="url-source-form" class="url-source-form">
+                <div class="settings-row">
+                  <span class="settings-label-sm">来源名称</span>
+                  <input type="text" id="url-source-name" class="settings-text" maxlength="80" required placeholder="例如：萌娘百科" />
+                </div>
+                <div class="settings-row">
+                  <span class="settings-label-sm">URL</span>
+                  <input type="url" id="url-source-url" class="settings-text" required placeholder="https://example.org/wiki/" />
+                </div>
+                <div class="settings-row">
+                  <span class="settings-label-sm">来源类型</span>
+                  <select id="url-source-type" class="settings-select">
+                    <option value="page">固定网页</option>
+                    <option value="mediawiki">MediaWiki 百科</option>
+                  </select>
+                  <button type="submit" class="primary">添加</button>
+                </div>
+              </form>
+              <p class="hint">固定网页会抓取该页并检查主题；MediaWiki 会通过站点 API 搜索相关词条。最多保存 20 个来源，每次最多查询 5 个已启用来源。</p>
+              <div id="url-source-list" class="url-source-list" aria-live="polite"></div>
             </div>
           </div>
 
@@ -697,6 +727,6 @@
   </div>
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script type="module" src="./app.js?v=1.2.8"></script>
+  <script type="module" src="./app.js?v=20260729-url-sources"></script>
 </body>
 </html>

@@ -11,12 +11,15 @@ from astrbot_plugin_active_learner.runtime import (
     ExternalSearchController,
     build_factual_grounding_instruction,
     build_missing_comparison_instruction,
+    build_semantic_search_instruction,
     comparison_coverage,
-    detect_explicit_search_request,
+    entry_covers_topic,
     extract_comparison_objects,
     get_request_learning_state,
     mark_request_learning_hinted,
+    select_covering_hit,
     should_apply_domain_restriction,
+    topic_terms,
 )
 
 
@@ -57,49 +60,44 @@ def test_missing_comparison_instruction_only_names_missing_objects():
     assert build_missing_comparison_instruction([]) == ""
 
 
-def test_explicit_search_request_detection_covers_retry_and_fact_check():
-    positives = (
-        "你再搜一下看看",
-        "帮我查一下这个角色",
-        "重新搜索资料",
-        "联网核实一下",
-        "帮忙搜一下来源",
-        "不要凭印象，去搜一下",
-        "please look this up",
-        "can you fact-check this",
+def test_topic_coverage_requires_every_core_entity():
+    unrelated = SimpleNamespace(
+        entry=SimpleNamespace(
+            topic="卡拉彼丘令（牢令）角色",
+            keywords=["卡拉彼丘", "令"],
+            content="这是另一位角色。",
+        )
     )
-    assert all(detect_explicit_search_request(text) for text in positives)
-
-
-def test_explicit_search_request_detection_avoids_statements_and_negation():
-    negatives = (
-        "不用再搜了，按你知道的说",
-        "不需要你再查了",
-        "我刚查了一下资料",
-        "搜索功能好像坏了",
-        "这篇文章介绍检索算法",
-        "核实结果已经出来了",
+    matching = SimpleNamespace(
+        entry=SimpleNamespace(
+            topic="卡拉彼丘 诺诺",
+            keywords=["卡拉彼丘", "诺诺"],
+            content="诺诺是游戏角色。",
+        )
     )
-    assert not any(detect_explicit_search_request(text) for text in negatives)
+    assert topic_terms("卡拉彼丘 诺诺") == ["卡拉彼丘", "诺诺"]
+    assert topic_terms("卡拉彼丘 令") == ["卡拉彼丘", "令"]
+    assert entry_covers_topic("卡拉彼丘 诺诺", unrelated) is False
+    assert entry_covers_topic("卡拉彼丘 诺诺", matching) is True
+    assert select_covering_hit("卡拉彼丘 诺诺", [unrelated, matching]) is matching
+    assert topic_terms("你看看诺诺是什么角色") == ["诺诺"]
+    assert topic_terms("卡拉彼丘中的诺诺有什么特点") == ["卡拉彼丘", "诺诺"]
+    assert topic_terms("这个是什么意思") == []
 
 
-def test_explicit_search_builds_force_refresh_instruction():
-    instruction = build_factual_grounding_instruction(
-        explicit_search_requested=True,
-        has_memory_hits=True,
-        domain_restricted=False,
-    )
-    assert "强制事实核验" in instruction
-    assert "search_and_learn" in instruction
-    assert "force_refresh" in instruction
-    assert "true" in instruction
-    assert "旧记忆" in instruction
-    assert "主动学习开关或权重" in instruction
+def test_semantic_search_policy_is_continuous_and_not_keyword_driven():
+    low = build_semantic_search_instruction(0.2, has_memory_hits=False)
+    high = build_semantic_search_instruction(0.9, has_memory_hits=True)
+    assert "自主检索策略" in low
+    assert "0.20" in low and "0.90" in high
+    assert "不是概率" in low
+    assert "关键词" not in low
+    assert "一次回答最多启动一条搜索链" in high
+    assert "不要再换用其他搜索工具连续重试" in high
 
 
 def test_missing_memory_builds_fact_guard_without_forcing_refresh():
     instruction = build_factual_grounding_instruction(
-        explicit_search_requested=False,
         has_memory_hits=False,
         domain_restricted=False,
     )
@@ -108,7 +106,6 @@ def test_missing_memory_builds_fact_guard_without_forcing_refresh():
     assert "force_refresh" not in instruction
     assert (
         build_factual_grounding_instruction(
-            explicit_search_requested=False,
             has_memory_hits=True,
             domain_restricted=False,
         )
@@ -116,15 +113,14 @@ def test_missing_memory_builds_fact_guard_without_forcing_refresh():
     )
 
 
-def test_domain_restriction_wins_over_explicit_search_request():
-    instruction = build_factual_grounding_instruction(
-        explicit_search_requested=True,
-        has_memory_hits=False,
-        domain_restricted=True,
+def test_domain_restriction_owns_its_prompt_without_duplicate_fact_guard():
+    assert (
+        build_factual_grounding_instruction(
+            has_memory_hits=False,
+            domain_restricted=True,
+        )
+        == ""
     )
-    assert "事实核验受领域限制" in instruction
-    assert "禁止联网搜索" in instruction
-    assert "force_refresh" not in instruction
 
 
 def test_request_learning_state_is_isolated():

@@ -22,9 +22,12 @@ from .constants import (
 )
 from .models import Scope
 from .runtime import (
+    build_semantic_search_instruction,
     comparison_coverage,
+    entry_covers_topic,
     extract_comparison_objects,
     object_is_covered,
+    topic_terms,
 )
 
 
@@ -46,7 +49,7 @@ class RetrievalMixin:
     def _parse_source_priority(s: str) -> list[str]:
         """解析外部知识搜索源优先级字符串，返回去重后的小写列表。
 
-        本地记忆不属于外部搜索源，因此只接受 web / bilibili。
+        本地记忆不属于外部搜索源，因此只接受 url / web / bilibili。
         """
         try:
             parts = [p.strip().lower() for p in str(s).split(",") if p.strip()]
@@ -54,38 +57,67 @@ class RetrievalMixin:
             seen: set[str] = set()
             unique: list[str] = []
             for p in parts:
-                if p in ("web", "bilibili") and p not in seen:
+                if p in ("url", "web", "bilibili") and p not in seen:
                     seen.add(p)
                     unique.append(p)
             if unique:
                 return unique
         except Exception:
             pass
-        return ["web", "bilibili"]
+        return ["url", "web", "bilibili"]
+
+    def _source_available(self, source: str) -> bool:
+        if source == "url":
+            registry = getattr(self, "url_sources", None)
+            return bool(registry and registry.enabled_count > 0)
+        if source == "web":
+            return bool(getattr(self.searcher, "is_available", False))
+        if source == "bilibili":
+            return bool(self.bili_source and self.bili_source.is_available())
+        return False
 
     def _is_source_enabled(self, source: str) -> bool:
         """判断某个外部知识搜索源是否在当前配置下启用。"""
         source = source.lower()
-        if source not in ("web", "bilibili"):
+        if source not in ("url", "web", "bilibili"):
             return False
         if source not in self._knowledge_source_priority:
             return False
         if self._web_search_only_highest_priority:
-            return self._knowledge_source_priority[0] == source
+            first_available = next(
+                (
+                    item
+                    for item in self._knowledge_source_priority
+                    if self._source_available(item)
+                ),
+                None,
+            )
+            return first_available == source
         return True
 
     async def _search_external_sources(
         self,
         query: str,
         *,
+        url_limit: int = 3,
         web_limit: int = 5,
         bili_limit: int = 3,
         allowed_sources: Optional[set[str]] = None,
     ) -> list[dict]:
         """在统一总 deadline 内并发搜索启用的外部源。"""
         calls = {}
+        allow_url = allowed_sources is None or "url" in allowed_sources
         allow_web = allowed_sources is None or "web" in allowed_sources
         allow_bili = allowed_sources is None or "bilibili" in allowed_sources
+        if (
+            allow_url
+            and url_limit > 0
+            and self._enable_web_search
+            and self._is_source_enabled("url")
+        ):
+            calls["url"] = lambda: self.url_sources.search(
+                query, max_results=url_limit
+            )
         if (
             allow_web
             and web_limit > 0
@@ -101,6 +133,11 @@ class RetrievalMixin:
             and self.bili_source.is_available()
         ):
             calls["bilibili"] = lambda: self.bili_source.search(query, limit=bili_limit)
+        calls = {
+            source: calls[source]
+            for source in self._knowledge_source_priority
+            if source in calls
+        }
         return await self._external_search.search(
             calls, deadline=_EXTERNAL_SEARCH_DEADLINE_SECONDS
         )
@@ -135,7 +172,7 @@ class RetrievalMixin:
             except Exception:
                 continue
         # 同时屏蔽 AstrBot 内置联网搜索工具（如果存在）
-        deny_names.add("web_search")
+        deny_names.update({"web_search", "astr_kb_search"})
 
         original = list(req.tools)
         cleaned: list = []
@@ -145,65 +182,20 @@ class RetrievalMixin:
                 name = t.get("function", {}).get("name")
             except Exception:
                 pass
-            if name in deny_names:
+            if name in deny_names or (name and name.startswith("web_search_")):
                 continue
             cleaned.append(t)
         req.tools = cleaned
         return len(original) - len(cleaned)
 
-    def _get_learn_prompt(self) -> str | None:
-        """根据 learn_weight 返回对应强度的学习提示。None=不注入。
-
-        提示必须同时覆盖两个方向，缺一个就会出现「不掌握却硬答」：
-        1. 用户在科普/纠正 → 把新知识存进记忆库；
-        2. 用户在提问而本地无记忆 → 先检索再回答，不要凭印象编。
-        方向 2 曾被遗漏，导致模型判断「用户没在科普」后直接用训练数据拼答案，
-        在版本更新频繁的领域（游戏配置、时效信息）尤其容易答错。
-        """
+    def _get_learn_prompt(self, *, has_memory_hits: bool = False) -> str | None:
+        """返回连续强度的语义检索策略；判断由主模型完成，不增加 LLM 调用。"""
         w = self._learn_weight
         if w <= 0.0 or not self._enable_active_learn_hint:
             return None
-        if w < 0.4:
-            return (
-                "[学习提示] 本地记忆没有相关记录。如果这是你原本不掌握的新知识点"
-                "（对方在科普），可考虑调用 search_and_learn 工具学习；"
-                "如果用户是在向你提问而你并不确定答案，也可以先检索再回答。"
-            )
-        if w < 0.7:
-            return (
-                "[学习提示] 本地记忆没有相关记录。如果这是对方在科普新知识，"
-                "建议调用 search_and_learn 工具存入记忆库，以免以后遗忘；"
-                "如果用户是在提问而你对答案没有把握，建议先调用该工具核实，"
-                "不要凭印象作答。"
-            )
-        # 0.7 ~ 0.9（默认 0.7）
-        if w < 1.0:
-            return (
-                "[学习提示] 本地记忆没有相关记录，请按下面两种情况处理。\n"
-                "一、如果对方在向你科普/教你新东西，且这是你原本不掌握的知识点，"
-                "请立即调用 search_and_learn 工具将其存入记忆库，以免以后遗忘。"
-                "如果信息与已有认知冲突，同样调用 search_and_learn 核实后学习。\n"
-                "二、如果用户是在向你提问，而你对答案并不确定"
-                "（涉及具体人名、术语、版本、数值、搭配或推荐方案时尤其要警惕），"
-                "请先调用 search_and_learn 检索，再根据检索结果回答。"
-                "不要凭训练数据里的印象拼凑答案，也不要把不确定的内容说得像事实。\n"
-                "确实检索不到时，直接说明你不清楚，不要编造，"
-                "也不要反问用户「要不要我搜一下」——需要检索就直接检索。"
-            )
-        # 1.0：激进模式
-        return (
-            "[学习提示] **重要指令**：本地记忆没有相关记录，请按以下规则判断是否检索。\n"
-            "必须调用 search_and_learn 的情况：\n"
-            "- 出现你不熟悉的人名/术语/概念 → 调用\n"
-            "- 用户说「其实是」「是XX不是XX」等纠正性表述 → 调用\n"
-            "- 用户主动介绍某个知识 → 调用\n"
-            "- 用户提问，而你对答案没有把握 → 调用\n"
-            "- 问题涉及版本、数值、搭配、推荐方案等易随时间变化的内容 → 调用\n"
-            "不需要调用的情况：\n"
-            "- 你自己完全确定且明确知道的内容 → 不调用\n"
-            "回答要求：以检索结果为准，不要凭印象补全细节；"
-            "检索不到就直说不清楚，不要编造，也不要反问用户要不要帮他搜。\n"
-            "调用后无需告知用户，直接继续回复即可。"
+        return build_semantic_search_instruction(
+            w,
+            has_memory_hits=has_memory_hits,
         )
 
     def _hits_match_priority(self, hits) -> bool:
@@ -349,6 +341,10 @@ class RetrievalMixin:
                     selected.append(hit)
                     selected_ids.add(hit.entry.id)
             hits = selected
+        elif hits and topic_terms(query):
+            # 非对比问题要求单条候选完整覆盖当前主题实体。宽泛共同词命中不应
+            # 进入上下文，否则高置信度的另一实体会先入为主地污染主模型判断。
+            hits = [hit for hit in hits if entry_covers_topic(query, hit)]
 
         return hits[: self._context_inject_count], mode, coverage
 

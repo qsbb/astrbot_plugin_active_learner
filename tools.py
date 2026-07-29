@@ -1,7 +1,7 @@
 """LLM 工具：让大模型在对话中按需调用本插件的能力。
 
 工具列表：
-- search_and_learn:  搜索网络 → LLM 总结 → 存入记忆库
+- search_and_learn:  搜索外部来源 → LLM 总结 → 存入记忆库
 - recall_memory:     从记忆库检索已有知识
 - verify_knowledge:  验证某条记忆的准确性（多源 + 自辩论 + 版本化）
 - search_bilibili:   搜索 B 站视频（可选，需 bilibili-api-python）
@@ -29,7 +29,7 @@ except ImportError:  # 允许脱离 AstrBot 做语法检查
 from .plugin_logger import logger
 
 from .models import Scope
-from .runtime import get_request_learning_state
+from .runtime import get_request_learning_state, select_covering_hit
 
 
 def _get_event(context):
@@ -58,20 +58,17 @@ def _resolve_scope(context) -> Optional[Scope]:
 
 @pydantic_dataclass
 class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
-    """搜索并学习新知识。当用户问了你不确定的问题时使用。"""
+    """按语义风险判断搜索并学习新知识。"""
 
     name: str = "search_and_learn"
     description: str = (
-        "【必用工具】搜索网络学习新知识并存入长期记忆。"
-        "只要遇到以下情况，必须立即调用：\n"
-        "1. 用户提到你不熟悉的人名、术语、概念、事件；\n"
-        "2. 用户告诉你一个新信息（科普/教新知识）；\n"
-        "3. 你不太确定某个回答是否正确；\n"
-        "4. 记忆库未命中（你感觉「好像知道但不确定」）。\n"
-        "5. 用户明确要求搜索、再查或核实时，必须调用并设置 force_refresh=true。\n"
-        "调用后会：搜索多来源 → 总结 → 存入记忆库供日后使用。\n"
-        "无需预告「让我查查看」等话术，直接调用即可。\n"
-        "如果确认是自己已掌握的知识则无需调用；但用户明确要求搜索或核实时除外。"
+        "按需检索管理员配置的 URL、百科、Web 或 B 站来源，并把结果存入长期记忆。"
+        "请根据事实不确定性、时效性、实体匹配完整度和答错代价自主判断，而不是按关键词触发。"
+        "闲聊、创作、主观交流或已有可靠且实体完整的依据时不要调用；"
+        "具体但不确定、易变化、实体冲突或用户要求核实时优先调用。"
+        "旧记忆可能过时或不覆盖当前实体时设置 force_refresh=true。"
+        "一次回答只启动一条搜索链；本工具失败或无结果后不要再换其他搜索工具连续重试，"
+        "而应明确告诉用户本次未能核实。调用前无需预告搜索过程。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -87,7 +84,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
                 },
                 "force_refresh": {
                     "type": "boolean",
-                    "description": "是否跳过已有本地记忆并强制检索外部来源。用户明确要求搜索/再查/核实时必须为 true。",
+                    "description": "旧记忆过时、实体不完整或需要重新核实时，设为 true 以直接检索外部来源。",
                     "default": False,
                 },
             },
@@ -129,13 +126,19 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         )
         if not force_refresh:
             hits = plugin.store.search(scope, topic, top_k=3)
-            if hits:
-                top = hits[0].entry
+            covering_hit = select_covering_hit(topic, hits)
+            if covering_hit is not None:
+                top = covering_hit.entry
                 logger.info(f"搜索学习命中本地记忆，直接返回「{top.topic}」")
                 return (
                     f"已检索到本地记忆「{top.topic}」，无需联网搜索。\n"
                     f"内容: {top.content[:200]}\n"
                     f"置信度: {top.confidence:.0%}"
+                )
+            if hits:
+                ignored_topics = "、".join(hit.entry.topic for hit in hits[:3])
+                logger.info(
+                    f"本地候选未完整覆盖主题「{topic}」，继续外部检索: {ignored_topics}"
                 )
         else:
             logger.info(f"强制刷新「{query}」：跳过本地记忆，检索外部来源")
@@ -147,7 +150,11 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
 
         if not search_results:
             logger.info(f"搜索「{query}」无结果")
-            return (f"搜索「{query}」未找到结果，无法学习")
+            return (
+                f"搜索「{query}」未找到可用来源，无法学习。"
+                "请明确告诉用户本次未能核实，不要改用其他搜索工具连续重试，"
+                "也不要基于旧记忆猜测。"
+            )
 
         # 2. 整理搜索结果
         snippets = []
@@ -211,7 +218,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
                 logger.debug(f"融合检查失败: {e}")
 
         # 6. 存入记忆
-        source_tag = f"网络搜索 ({len(sources)}个来源)"
+        source_tag = f"外部检索 ({len(sources)}个来源)"
         if refine_result.refined:
             source_tag += "+精炼"
         _evt = _get_event(context)

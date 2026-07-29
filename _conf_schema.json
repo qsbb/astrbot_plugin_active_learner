@@ -12,15 +12,15 @@
         "default": 0.3
     },
     "enable_active_learn_hint": {
-        "description": "启用主动学习提示",
+        "description": "启用自主检索策略",
         "type": "bool",
-        "hint": "本地记忆无答案时，按学习强度提示 LLM 检索或学习。用户明确要求搜索/再查/核实时的强制事实核验不受此开关影响。",
+        "hint": "让当前对话模型根据不确定性、时效性、实体完整度和答错代价自行判断是否检索；不会额外调用一次 LLM。",
         "default": true
     },
     "learn_weight": {
-        "description": "主动学习强度 (0~1)",
+        "description": "自主检索倾向 (0~1)",
         "type": "float",
-        "hint": "0=关闭普通盲区提示；0.1~0.4=温和；0.5~0.7=默认；0.8~1.0=强提示。仅控制普通主动学习；用户明确要求搜索/再查/核实时始终强制事实核验。",
+        "hint": "连续调节模型启动检索的参考阈值。0=关闭策略注入，数值越高越愿意核实；它不是搜索概率，也不会按关键词强制触发。",
         "default": 0.7
     },
     "search_top_k": {
@@ -63,7 +63,7 @@
     "enable_web_search": {
         "description": "启用联网搜索",
         "type": "bool",
-        "hint": "关闭后 search_and_learn 等联网搜索工具将不可用，插件仅依赖本地记忆库。",
+        "hint": "关闭后手动 URL、MediaWiki、Web 和 B 站来源均不可用，插件仅依赖本地记忆库。",
         "default": true
     },
     "external_search_first_result_grace_seconds": {
@@ -81,8 +81,8 @@
     "knowledge_source_priority": {
         "description": "知识搜索源优先级",
         "type": "string",
-        "hint": "逗号分隔外部搜索源，例如 'web,bilibili'。排在前面的源优先级更高；开启「仅最高优先级」时只使用第一个来源。本地记忆默认始终优先检索，不需要放在此处。",
-        "default": "web,bilibili"
+        "hint": "逗号分隔外部搜索源，例如 'url,web,bilibili'。url 是管理页手动添加的网页或百科；开启「仅最高优先级」时使用第一个当前可用来源。本地记忆始终优先。",
+        "default": "url,web,bilibili"
     },
     "knowledge_domain_scope": {
         "description": "知识领域范围",

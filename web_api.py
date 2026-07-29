@@ -38,7 +38,7 @@ class WebApiMixin:
     """Dashboard 后端 API。由 ActiveLearnerPlugin 混入，依赖宿主的 store/config 等属性。"""
 
     def _register_web_apis(self, context: Context) -> None:
-        """注册 17 个 web API 路由供 Dashboard 页面调用。"""
+        """注册 Dashboard 页面所需的 web API 路由。"""
         context.register_web_api(
             f"/{PLUGIN_NAME}/stats", self._web_stats, ["GET"], "记忆库统计"
         )
@@ -140,6 +140,30 @@ class WebApiMixin:
             "保存插件设置",
         )
         context.register_web_api(
+            f"/{PLUGIN_NAME}/url_sources",
+            self._web_url_sources,
+            ["GET"],
+            "列出 URL 知识来源",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/url_sources",
+            self._web_add_url_source,
+            ["POST"],
+            "添加 URL 知识来源",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/url_sources/<source_id>/enabled",
+            self._web_set_url_source_enabled,
+            ["POST"],
+            "启用或停用 URL 知识来源",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/url_sources/<source_id>/delete",
+            self._web_delete_url_source,
+            ["POST"],
+            "删除 URL 知识来源",
+        )
+        context.register_web_api(
             f"/{PLUGIN_NAME}/config_schema",
             self._web_config_schema,
             ["GET"],
@@ -227,6 +251,7 @@ class WebApiMixin:
             "priority_topics": list(self._priority_topics),
             "knowledge_domain_scope": list(self._knowledge_domain_scope),
             "enable_cross_domain": self._enable_cross_domain,
+            "url_sources_enabled": self.url_sources.enabled_count,
         }
         return json_response(
             {
@@ -1358,7 +1383,7 @@ class WebApiMixin:
                     data.get("web_search_only_highest_priority", False)
                 ),
                 "knowledge_source_priority": str(
-                    data.get("knowledge_source_priority", "web,bilibili")
+                    data.get("knowledge_source_priority", "url,web,bilibili")
                 ),
                 "knowledge_domain_scope": str(data.get("knowledge_domain_scope", "")),
                 "enable_cross_domain": bool(data.get("enable_cross_domain", True)),
@@ -1367,6 +1392,40 @@ class WebApiMixin:
                 ),
             }
         )
+
+    async def _web_url_sources(self):
+        return json_response({"items": self.url_sources.list_sources()})
+
+    async def _web_add_url_source(self):
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("payload must be a JSON object", status_code=400)
+        try:
+            source = self.url_sources.add_source(
+                name=payload.get("name", ""),
+                url=payload.get("url", ""),
+                source_type=payload.get("type", "page"),
+                enabled=payload.get("enabled", True),
+            )
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        return json_response({"ok": True, "source": source})
+
+    async def _web_set_url_source_enabled(self, source_id: str):
+        payload = await request.json(default={}) or {}
+        try:
+            source = self.url_sources.set_enabled(
+                source_id,
+                bool(payload.get("enabled", True)),
+            )
+        except KeyError:
+            return error_response("URL source not found", status_code=404)
+        return json_response({"ok": True, "source": source})
+
+    async def _web_delete_url_source(self, source_id: str):
+        if not self.url_sources.remove_source(source_id):
+            return error_response("URL source not found", status_code=404)
+        return json_response({"ok": True})
 
     def _load_schema(self) -> dict:
         """读取 _conf_schema.json。失败时返回空 dict。"""
@@ -1608,7 +1667,7 @@ class WebApiMixin:
             cfg.get("web_search_only_highest_priority", False)
         )
         self._knowledge_source_priority = self._parse_source_priority(
-            cfg.get("knowledge_source_priority", "web,bilibili")
+            cfg.get("knowledge_source_priority", "url,web,bilibili")
         )
         self._knowledge_domain_scope = [
             d.strip().lower()

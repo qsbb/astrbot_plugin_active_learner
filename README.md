@@ -1,6 +1,6 @@
 # 凝心溯溪-知
 
-> 凝心溯溪系列知识模块：面向知识学习、检索与验证，支持自动上下文注入、主动多源学习、按用户/群聊隔离的 SQLite 记忆库、交叉验证与版本化。
+> 凝心溯溪系列知识模块：面向知识学习、检索与验证，支持自动上下文注入、自主多源检索、手动 URL / MediaWiki 来源、按用户/群聊隔离的 SQLite 记忆库、交叉验证与版本化。
 
 > **凝心溯溪系列** 当前完整插件清单为知、言、序、情、声、核：各插件职责独立、互不冲突，可按需组合使用，覆盖知识学习、对话调节、身份管理、关系状态、语音与更新管理。
 
@@ -25,8 +25,9 @@
 `astrbot_plugin_active_learner` 是一个为 [AstrBot](https://github.com/AstrBotDevel/AstrBot) 设计的知识学习、检索与验证插件。它通过长期记忆能力，让机器人能够：
 
 - **检索即注入**：每次 LLM 请求前，自动用 FTS5 全文检索相关记忆并注入上下文
-- **主动学习**：当用户问到知识盲区时，自动搜索网络（多源）→ LLM 总结 → 存入记忆库
-- **明确搜索必核验**：用户说“搜一下 / 再查 / 核实”时，强制跳过旧记忆并检索外部来源；失败时明确说明未核实，不凭印象补全
+- **自主检索**：由当前对话模型结合不确定性、时效性、实体完整度和答错代价，判断是否搜索外部来源
+- **受控知识来源**：可在管理页手动添加固定网页或 MediaWiki 百科，与 Web、B 站来源统一调度
+- **实体完整匹配**：本地候选必须覆盖主题中的全部核心实体，避免共同宽泛词把另一条高置信记忆误当答案
 - **三层作用域隔离**：按"私聊 / 群聊 / 全局"三层 scope 隔离记忆，互不污染
 - **质疑纠错**：用户质疑时触发多源搜索 + LLM 自辩论 + 交叉验证，并保留历史版本
 
@@ -41,28 +42,41 @@
 1. 提取用户消息文本
 2. 用 FTS5 在当前 scope 检索 Top-3 相关记忆
 3. 把检索结果登记为结构化提示片段，并保留 `extra_user_content_parts` 直接注入作为独立运行 fallback
-4. 同时检测质疑、知识盲区和明确搜索请求；明确搜索会登记不受学习权重影响的强制核验约束
+4. 同时检测质疑和对比对象缺失，并向主模型提供连续强度的语义检索策略
 
 安装“言”时，序、知、情登记的片段由言按“安全边界 → 知识事实 → 关系表达”稳定排序、
 按 key 与内容去重后合并为一次协同注入；未安装言时，本插件仍按原路径独立工作。
 
-### 2. 主动学习与强制事实核验
+### 2. 自主检索与主动学习
 
 LLM 工具 `search_and_learn`：
 
-1. 调用 `WebSearcher` 搜 DuckDuckGo（可选 B 站）
+1. 并行查询已启用的手动 URL / MediaWiki、Web 搜索服务和 B 站来源
 2. 收集多源搜索结果片段
 3. 让当前 LLM 总结为 200 字以内的简洁知识
 4. 自动提取关键词（中文 2 字以上、英文 3 字以上）
 5. 计算初始置信度（基于来源数，0.3 ~ 0.85）
 6. 写入 SQLite + FTS5 索引
 
-触发方式：
-- **明确搜索请求**：识别“搜一下 / 再搜 / 查一下 / 联网核实”等直接要求后，必须调用 `search_and_learn` 且设置 `force_refresh=true`。该路径不受 `enable_active_learn_hint` 和 `learn_weight` 影响，并会跳过可能过期或错误的本地记忆。
-- **普通知识盲区**：本地记忆无命中时，按 `learn_weight` 提示 LLM 检索；涉及人名、归属、配音、版本、数值、搭配等具体细节时，不确定就检索，无法检索就明确表达不确定。
-- **LLM 自主调用**：模型判断遇到不熟悉知识、用户科普或需要核实时直接调用。
+检索决策不再依赖“搜一下 / 查一下”等硬编码词表，也不会为了判断是否搜索而额外调用一次 LLM。插件把 `learn_weight` 作为连续的“自主检索倾向”交给当前主模型；模型在本次正常推理中综合事实不确定性、时效性、实体是否完整匹配和答错代价后决定是否调用工具。
 
-领域白名单仍是更高层约束：关闭跨领域回复且问题不在白名单时，即使用户要求搜索，插件也不会绕过限制；机器人应说明当前无法核实。
+- 闲聊、创作、主观交流或已有可靠且实体完整的依据时不搜索。
+- 具体但不确定、易变化、实体冲突或用户要求核实时优先搜索。
+- 旧记忆过时或不覆盖当前实体时，模型可设置 `force_refresh=true` 跳过本地短路。
+- 一次回答最多启动一条搜索链；`search_and_learn` 无结果或失败后，不再切换其它搜索工具连续重试，而是明确说明本次未能核实。
+
+`learn_weight=0.7` 表示较积极的检索倾向，不代表 70% 的消息会搜索。普通回复不会多一次模型请求，因此无检索时的回复速度基本不变；真正决定搜索后，耗时来自所选外部来源和后续精炼。
+
+领域白名单仍是更高层约束：关闭跨领域回复且问题不在白名单时，插件不会绕过限制发起搜索。
+
+#### 手动 URL / MediaWiki 来源
+
+在插件管理页打开“设置 → URL 来源”即可添加：
+
+- **固定网页**：每次按需抓取指定页面，只有页面正文包含查询主题的核心词时才作为来源返回。
+- **MediaWiki 百科**：填写 Wiki 首页、词条页或 `api.php` 地址，插件会推导 API 并动态搜索相关词条。
+
+来源清单保存在插件数据目录的 `url_knowledge_sources.json`。最多保存 20 个来源，每次搜索最多并行查询 5 个已启用来源；单来源超时 5 秒，并受联网总开关和来源优先级控制。管理员应只添加自己信任的站点。
 
 ### 3. 三层作用域隔离的 SQLite 记忆库
 
@@ -78,7 +92,7 @@ LLM 工具 `search_and_learn`：
 
 存储结构（`storage.py`）：
 - `memories` 表：主题、内容、关键词、来源、置信度、验证状态、访问计数、时间戳
-- `memories_fts` 虚拟表：FTS5 全文索引（`unicode61` 分词，原生支持中文按字匹配）
+- `memories_fts` 虚拟表：FTS5 全文索引（`unicode61` 分词；中文子串召回由关键词与可选向量检索补充）
 - `memory_versions` 表：质疑纠错 / 验证失败时的版本快照
 - 触发器自动同步 `memories` ↔ `memories_fts`
 
@@ -88,7 +102,7 @@ LLM 工具 `search_and_learn`：
 
 LLM 工具 `verify_knowledge` 或指令 `/memory verify <主题>` 触发：
 
-1. **多源搜索**：Web 主搜 + 真假验证搜 + B 站（可选）
+1. **多源搜索**：手动 URL / MediaWiki + Web 主搜 + 真假验证搜 + B 站（按配置启用）
 2. **LLM 自辩论 3 轮**：
    - Round A（支持方）：基于来源为原说法找支持证据
    - Round B（质疑方）：反驳支持方论证，挑事实错误 / 来源偏差 / 逻辑漏洞
@@ -142,11 +156,13 @@ aiohttp>=3.8.0
 |---|---|---|---|
 | `max_entries` | int | 500 | 单 scope 最大记忆条数，超出按置信度+访问频率淘汰 |
 | `min_confidence` | float | 0.3 | 最低置信度阈值，低于此值优先淘汰 |
-| `enable_active_learn_hint` | bool | true | 本地无答案时启用普通主动学习提示；不影响用户明确要求的强制核验 |
-| `learn_weight` | float | 0.7 | 普通知识盲区的提示强度；不影响用户明确要求的强制核验 |
+| `enable_active_learn_hint` | bool | true | 启用主模型语义检索策略；不会增加一次额外 LLM 调用 |
+| `learn_weight` | float | 0.7 | 自主检索倾向（0~1），是连续参考值而非搜索概率 |
+| `enable_web_search` | bool | true | 手动 URL、MediaWiki、Web 与 B 站来源的联网总开关 |
+| `knowledge_source_priority` | string | `url,web,bilibili` | 外部来源顺序；`url` 代表管理页维护的手动来源 |
+| `web_search_only_highest_priority` | bool | false | 只使用顺序中第一个当前可用的来源 |
 | `enable_bilibili` | bool | false | 启用 B 站搜索源（需自行安装 `bilibili-api-python`） |
 | `debate_rounds` | int | 2 | 质疑验证的自辩论轮数（2 = 支持方→质疑方→仲裁） |
-| `ddg_fallback` | bool | true | 无内置搜索时用 DuckDuckGo 兜底 |
 
 ## 使用
 
@@ -154,7 +170,7 @@ aiohttp>=3.8.0
 
 | 工具 | 作用 |
 |---|---|
-| `search_and_learn` | 搜索网络 → LLM 总结 → 存入记忆库；`force_refresh=true` 时跳过旧记忆并强制检索外部来源 |
+| `search_and_learn` | 搜索 URL / 百科 / Web / B 站来源 → LLM 总结 → 存入记忆库；`force_refresh=true` 时跳过旧记忆 |
 | `recall_memory` | 从记忆库检索已学知识 |
 | `verify_knowledge` | 多源搜索 + LLM 自辩论 + 交叉验证某条记忆 |
 | `search_bilibili` | 搜索 B 站视频（可选） |
@@ -195,11 +211,16 @@ astrbot_plugin_active_learner/
 ├── main.py              # 插件主入口、钩子、指令组
 ├── models.py            # Scope / MemoryEntry / MemoryVersion / SearchHit
 ├── storage.py           # SQLite + FTS5 存储层（含触发器、淘汰、版本化）
-├── searcher.py          # DuckDuckGo HTML 搜索 + URL 抓取
+├── retrieval.py         # 本地召回、来源调度与语义检索策略
+├── runtime.py           # 实体覆盖、请求状态、外部搜索并发控制
+├── searcher.py          # Web 搜索服务 + URL 抓取
+├── url_sources.py       # 手动网页 / MediaWiki 来源注册与持久化
 ├── bili_source.py       # B 站搜索源（可选）
 ├── verifier.py          # 多源验证 + LLM 自辩论 + 交叉验证
 ├── tools.py             # 4 个 LLM FunctionTool 定义
-├── triggers.py          # 主动学习 / 质疑检测正则模式
+├── web_api.py           # 管理页 API、配置热应用与 URL 来源管理
+├── pages/manager/       # 管理页前端
+├── triggers.py          # 质疑检测正则模式
 ├── _conf_schema.json    # 配置 schema
 ├── metadata.yaml        # AstrBot 插件元数据
 ├── requirements.txt     # 依赖
@@ -213,14 +234,13 @@ astrbot_plugin_active_learner/
    │
    ▼
 [on_llm_request 钩子]
-   ├─ FTS5 检索记忆 → 注入上下文
+   ├─ FTS5 / 向量检索记忆 → 核心实体覆盖检查 → 注入上下文
    ├─ 命中质疑模式？→ 提示 verify_knowledge
-   ├─ 用户明确要求搜索？→ 强制 search_and_learn(force_refresh=true)
-   └─ 普通知识盲区且无记忆？→ 按学习强度提示 search_and_learn
+   └─ 注入连续强度的语义检索策略（不增加 LLM 请求）
    │
    ▼
-LLM 推理（可能调用工具）
-   ├─ search_and_learn  → 多源搜 → LLM 总结 → 写库
+LLM 在当前推理中自主判断（可能调用工具）
+   ├─ search_and_learn  → URL / 百科 / Web / B站 → LLM 总结 → 写库
    ├─ recall_memory     → 检索记忆返回
    ├─ verify_knowledge  → 多源搜 → 自辩论 → 交叉验证 → 更新+版本化
    └─ search_bilibili   → B 站 API 或网页回退
@@ -231,7 +251,8 @@ SQLite 持久化（memories + memories_fts + memory_versions）
 
 ## 设计取舍
 
-- **为什么用 FTS5 而不是向量检索**：FTS5 零依赖、原生支持中文 unicode61 分词、单文件 SQLite 部署简单，对中小型记忆库（<1万条）足够好。
+- **为什么保留 FTS5 并可选向量检索**：FTS5 零依赖、精确词命中快；有 Embedding Provider 时再合并语义召回。两者都受 scope 硬隔离和实体完整覆盖约束。
+- **为什么不再用搜索关键词触发器**：自然语言表达无法靠有限词表稳定覆盖，且容易把普通陈述误判成命令。让当前主模型在原本的一次推理内评估风险，既减少硬规则误判，也不增加普通回复的模型往返。
 - **为什么注入到 `extra_user_content_parts` 而非 `system_prompt`**：后者会破坏 LLM 的 prompt 缓存，每次都重新编码全部 system prompt。
 - **为什么 LLM 自辩论要 3 轮而不是 1 轮**：单轮 LLM 容易"附和"用户或编造来源；支持方 vs 质疑方对抗能显著降低单边幻觉。
 - **为什么软删除留版本痕**：用户可能误删，且验证失败的历史记录对追溯有用。
@@ -247,6 +268,7 @@ SQLite 持久化（memories + memories_fts + memory_versions）
 ## 数据存储位置
 
 - 数据库：`<AstrBot 数据目录>/astrbot_plugin_active_learner/memory.db`
+- 手动来源：`<AstrBot 数据目录>/astrbot_plugin_active_learner/url_knowledge_sources.json`
 - 导出文件：`<AstrBot 数据目录>/astrbot_plugin_active_learner/memory_export_<scope>_<id>.json`
 
 ## 维护约定

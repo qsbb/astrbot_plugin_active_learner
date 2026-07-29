@@ -11,6 +11,7 @@ const state = {
   currentDetailId: null,
   selectedIds: new Set(),
   currentItems: [],
+  urlSources: [],
   providers: {
     configured: "",
     effective: "",
@@ -31,7 +32,7 @@ const state = {
     auto_learn_topic_limit: 100,
     enable_web_search: true,
     web_search_only_highest_priority: false,
-    knowledge_source_priority: "web,bilibili",
+    knowledge_source_priority: "url,web,bilibili",
     knowledge_domain_scope: "",
     enable_cross_domain: true,
     cross_domain_exclude_admin: true,
@@ -887,7 +888,7 @@ function bindEvents() {
 function openSettingsModal() {
   const modal = document.getElementById("settings-modal");
   modal.classList.remove("hidden");
-  loadProviderSettings().catch((e) => {
+  Promise.all([loadProviderSettings(), loadUrlSources()]).catch((e) => {
     showToast(`加载设置失败: ${e.message}`, true);
   });
 }
@@ -935,7 +936,7 @@ async function loadSettings() {
       auto_learn_topic_limit: s.auto_learn_topic_limit != null ? s.auto_learn_topic_limit : 100,
       enable_web_search: s.enable_web_search !== false,
       web_search_only_highest_priority: s.web_search_only_highest_priority === true,
-      knowledge_source_priority: s.knowledge_source_priority || "web,bilibili",
+      knowledge_source_priority: s.knowledge_source_priority || "url,web,bilibili",
       knowledge_domain_scope: s.knowledge_domain_scope || "",
       enable_cross_domain: s.enable_cross_domain !== false,
       cross_domain_exclude_admin: s.cross_domain_exclude_admin !== false,
@@ -956,7 +957,14 @@ async function loadSettings() {
     document.getElementById("settings-auto-learn-limit").value = state.settings.auto_learn_topic_limit;
     document.getElementById("settings-enable-web-search").checked = state.settings.enable_web_search;
     document.getElementById("settings-web-search-only-top").checked = state.settings.web_search_only_highest_priority;
-    document.getElementById("settings-knowledge-source-priority").value = state.settings.knowledge_source_priority;
+    const prioritySelect = document.getElementById("settings-knowledge-source-priority");
+    if (![...prioritySelect.options].some((opt) => opt.value === state.settings.knowledge_source_priority)) {
+      const option = document.createElement("option");
+      option.value = state.settings.knowledge_source_priority;
+      option.textContent = `自定义顺序（${state.settings.knowledge_source_priority}）`;
+      prioritySelect.appendChild(option);
+    }
+    prioritySelect.value = state.settings.knowledge_source_priority;
     document.getElementById("settings-knowledge-domain-scope").value = state.settings.knowledge_domain_scope;
     renderDomainScopeTags(state.settings.knowledge_domain_scope);
     document.getElementById("settings-enable-cross-domain").checked = state.settings.enable_cross_domain;
@@ -975,6 +983,73 @@ async function loadSettings() {
 async function loadProviderSettings() {
   await loadProviders();
   return loadSettings();
+}
+
+async function loadUrlSources() {
+  const data = await bridge.apiGet("url_sources");
+  state.urlSources = data.items || [];
+  renderUrlSources();
+}
+
+function renderUrlSources() {
+  const container = document.getElementById("url-source-list");
+  if (!state.urlSources.length) {
+    container.innerHTML = '<p class="muted">尚未添加 URL 来源</p>';
+    return;
+  }
+  container.innerHTML = state.urlSources.map((source) => {
+    const checked = source.enabled !== false ? "checked" : "";
+    const kind = source.type === "mediawiki" ? "MediaWiki" : "固定网页";
+    return `
+      <div class="url-source-item" data-source-id="${escapeHtmlAttr(source.id)}">
+        <label class="url-source-toggle" title="启用或停用此来源">
+          <input type="checkbox" data-act="toggle" ${checked} />
+          <span>${escapeHtml(source.name)}</span>
+        </label>
+        <span class="url-source-type">${kind}</span>
+        <a href="${escapeHtmlAttr(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.url)}</a>
+        <button type="button" data-act="delete" title="删除来源" aria-label="删除来源">×</button>
+      </div>
+    `;
+  }).join("");
+}
+
+async function addUrlSource(form) {
+  const payload = {
+    name: document.getElementById("url-source-name").value.trim(),
+    url: document.getElementById("url-source-url").value.trim(),
+    type: document.getElementById("url-source-type").value,
+    enabled: true,
+  };
+  try {
+    await bridge.apiPost("url_sources", payload);
+    form.reset();
+    await loadUrlSources();
+    showToast("URL 来源已添加");
+  } catch (e) {
+    showToast(`添加失败: ${e.message}`, true);
+  }
+}
+
+async function setUrlSourceEnabled(sourceId, enabled) {
+  try {
+    await bridge.apiPost(`url_sources/${sourceId}/enabled`, { enabled });
+    await loadUrlSources();
+  } catch (e) {
+    showToast(`更新来源失败: ${e.message}`, true);
+    await loadUrlSources();
+  }
+}
+
+async function deleteUrlSource(sourceId) {
+  if (!window.confirm("确定删除这个 URL 来源？")) return;
+  try {
+    await bridge.apiPost(`url_sources/${sourceId}/delete`, {});
+    await loadUrlSources();
+    showToast("URL 来源已删除");
+  } catch (e) {
+    showToast(`删除失败: ${e.message}`, true);
+  }
 }
 
 function updateNoProviderHint(configuredId, effectiveId = "") {
@@ -1096,7 +1171,7 @@ async function saveSettings() {
       auto_learn_topic_limit: result.auto_learn_topic_limit != null ? result.auto_learn_topic_limit : 100,
       enable_web_search: result.enable_web_search !== false,
       web_search_only_highest_priority: result.web_search_only_highest_priority === true,
-      knowledge_source_priority: result.knowledge_source_priority || "web,bilibili",
+      knowledge_source_priority: result.knowledge_source_priority || "url,web,bilibili",
       knowledge_domain_scope: result.knowledge_domain_scope || "",
       enable_cross_domain: result.enable_cross_domain !== false,
       cross_domain_exclude_admin: result.cross_domain_exclude_admin !== false,
@@ -1134,6 +1209,22 @@ function bindSettingsEvents() {
   });
   document.getElementById("settings-learn-weight").addEventListener("input", (e) => {
     document.getElementById("settings-learn-weight-val").textContent = e.target.value;
+  });
+  document.getElementById("url-source-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    addUrlSource(e.target);
+  });
+  document.getElementById("url-source-list").addEventListener("change", (e) => {
+    const input = e.target.closest('input[data-act="toggle"]');
+    if (!input) return;
+    const item = input.closest("[data-source-id]");
+    if (item) setUrlSourceEnabled(item.dataset.sourceId, input.checked);
+  });
+  document.getElementById("url-source-list").addEventListener("click", (e) => {
+    const button = e.target.closest('button[data-act="delete"]');
+    if (!button) return;
+    const item = button.closest("[data-source-id]");
+    if (item) deleteUrlSource(item.dataset.sourceId);
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
