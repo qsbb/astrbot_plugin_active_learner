@@ -695,10 +695,22 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 f"领域限制：无本地记忆且非兴趣领域，已移除 {removed} 个搜索工具 (query: {msg[:50]})"
             )
 
-        factual_grounding = build_factual_grounding_instruction(
-            has_memory_hits=bool(injected_hits),
-            domain_restricted=domain_restricted,
-        )
+        semantic_hint = None
+        if (
+            not missing_instruction
+            and not domain_restricted
+            and not injected_hits
+            and self._enable_active_learn_hint
+        ):
+            semantic_hint = self._get_learn_prompt(has_memory_hits=False)
+
+        # 启用语义检索策略时它已包含事实可靠性约束，避免重复注入同义长提示。
+        factual_grounding = ""
+        if not semantic_hint:
+            factual_grounding = build_factual_grounding_instruction(
+                has_memory_hits=bool(injected_hits),
+                domain_restricted=domain_restricted,
+            )
         if factual_grounding:
             parts.append(factual_grounding)
             add_reason(
@@ -710,19 +722,21 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         # 缺失对象提示本身就是强制学习请求，不受通用主动学习开关影响。
         if missing_instruction:
             pass
-        elif not domain_restricted and self._enable_active_learn_hint:
-            hint = self._get_learn_prompt(has_memory_hits=bool(injected_hits))
-            if hint:
-                state = get_request_learning_state(event)
-                if state is not None:
-                    state.hinted = True
-                self._active_learn_hinted = True  # 兼容旧版扩展读取
-                parts.append(hint)
-                logger.info(
-                    f"ℹ️ 已注入自主检索策略 (propensity={self._learn_weight}, scope: {scope})"
-                )
-            else:
-                logger.info(f"ℹ️ 检索倾向为 0，跳过自主检索策略 (scope: {scope})")
+        elif semantic_hint:
+            state = get_request_learning_state(event)
+            if state is not None:
+                state.hinted = True
+            self._active_learn_hinted = True  # 兼容旧版扩展读取
+            parts.append(semantic_hint)
+            logger.info(
+                f"ℹ️ 已注入自主检索策略 (propensity={self._learn_weight}, scope: {scope})"
+            )
+        elif not domain_restricted and not injected_hits:
+            state = get_request_learning_state(event, create=False)
+            if state is not None:
+                state.hinted = False
+            self._active_learn_hinted = False
+            logger.info(f"ℹ️ 检索倾向为 0，跳过自主检索策略 (scope: {scope})")
         else:
             state = get_request_learning_state(event, create=False)
             if state is not None:
