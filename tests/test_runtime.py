@@ -9,8 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot_plugin_active_learner.runtime import (
     BackgroundTaskHost,
     ExternalSearchController,
+    build_factual_grounding_instruction,
     build_missing_comparison_instruction,
     comparison_coverage,
+    detect_explicit_search_request,
     extract_comparison_objects,
     get_request_learning_state,
     mark_request_learning_hinted,
@@ -53,6 +55,76 @@ def test_missing_comparison_instruction_only_names_missing_objects():
     assert "「Go」" in instruction
     assert "Python" not in instruction
     assert build_missing_comparison_instruction([]) == ""
+
+
+def test_explicit_search_request_detection_covers_retry_and_fact_check():
+    positives = (
+        "你再搜一下看看",
+        "帮我查一下这个角色",
+        "重新搜索资料",
+        "联网核实一下",
+        "帮忙搜一下来源",
+        "不要凭印象，去搜一下",
+        "please look this up",
+        "can you fact-check this",
+    )
+    assert all(detect_explicit_search_request(text) for text in positives)
+
+
+def test_explicit_search_request_detection_avoids_statements_and_negation():
+    negatives = (
+        "不用再搜了，按你知道的说",
+        "不需要你再查了",
+        "我刚查了一下资料",
+        "搜索功能好像坏了",
+        "这篇文章介绍检索算法",
+        "核实结果已经出来了",
+    )
+    assert not any(detect_explicit_search_request(text) for text in negatives)
+
+
+def test_explicit_search_builds_force_refresh_instruction():
+    instruction = build_factual_grounding_instruction(
+        explicit_search_requested=True,
+        has_memory_hits=True,
+        domain_restricted=False,
+    )
+    assert "强制事实核验" in instruction
+    assert "search_and_learn" in instruction
+    assert "force_refresh" in instruction
+    assert "true" in instruction
+    assert "旧记忆" in instruction
+    assert "主动学习开关或权重" in instruction
+
+
+def test_missing_memory_builds_fact_guard_without_forcing_refresh():
+    instruction = build_factual_grounding_instruction(
+        explicit_search_requested=False,
+        has_memory_hits=False,
+        domain_restricted=False,
+    )
+    assert "事实可靠性" in instruction
+    assert "不要凭印象" in instruction
+    assert "force_refresh" not in instruction
+    assert (
+        build_factual_grounding_instruction(
+            explicit_search_requested=False,
+            has_memory_hits=True,
+            domain_restricted=False,
+        )
+        == ""
+    )
+
+
+def test_domain_restriction_wins_over_explicit_search_request():
+    instruction = build_factual_grounding_instruction(
+        explicit_search_requested=True,
+        has_memory_hits=False,
+        domain_restricted=True,
+    )
+    assert "事实核验受领域限制" in instruction
+    assert "禁止联网搜索" in instruction
+    assert "force_refresh" not in instruction
 
 
 def test_request_learning_state_is_isolated():

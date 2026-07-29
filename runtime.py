@@ -21,6 +21,34 @@ _TRAILING_NOISE = re.compile(
     r"|哪个好|哪个更[0-9a-z\u4e00-\u9fff_-]{0,16}|怎么样|如何|怎么选|如何选|吗|呢|？|\?)\s*$",
     re.IGNORECASE,
 )
+_SEARCH_VERB = r"(?:搜(?:索)?|检索|查(?:询)?|核实|核对|验证)"
+_NEGATED_SEARCH_REQUEST = re.compile(
+    rf"(?:不用|不要|别|无需|不必|不需要)\s*"
+    rf"(?:(?:你|再|重新|去|帮我|替我|给我)\s*){{0,3}}{_SEARCH_VERB}",
+    re.IGNORECASE,
+)
+_SELF_DIRECTED_SEARCH = re.compile(
+    rf"(?:^|[，。！？!?\s])我(?:刚|已经|刚才|之前|先|去|来|自己|再)+\s*{_SEARCH_VERB}",
+    re.IGNORECASE,
+)
+_EXPLICIT_SEARCH_REQUESTS = (
+    re.compile(
+        rf"(?:请|麻烦|劳驾|帮我|帮忙|替我|能不能|可不可以|可以帮我|"
+        rf"你(?:再|重新|去|帮我|给我)?|再|重新|联网|上网)\s*"
+        rf"(?:再|重新|去|帮我|给我)?\s*{_SEARCH_VERB}",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"{_SEARCH_VERB}(?:一?下|一遍|看看|看|清楚|资料|信息|来源|出处|吧|呗)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|[.!?，。！？]\s*)(?:please\s+|can\s+you\s+|could\s+you\s+|"
+        r"would\s+you\s+)?(?:search|look(?:\s+(?:this|that|it))?\s+up|"
+        r"browse|verify|fact[- ]?check)\b",
+        re.IGNORECASE,
+    ),
+)
 
 
 def _clean_comparison_object(value: str) -> str:
@@ -86,6 +114,54 @@ def build_missing_comparison_instruction(missing_objects: Iterable[str]) -> str:
         "必须调用 search_and_learn，仅搜索上述缺失对象并补齐信息；"
         "不要重复搜索已有命中的对象，也不能把此要求降级为可选提醒。"
     )
+
+
+def detect_explicit_search_request(query: str) -> bool:
+    """识别用户明确要求联网搜索或事实核验的指令。"""
+    normalized = re.sub(r"\s+", " ", (query or "").strip())
+    if (
+        not normalized
+        or _NEGATED_SEARCH_REQUEST.search(normalized)
+        or _SELF_DIRECTED_SEARCH.search(normalized)
+    ):
+        return False
+    return any(pattern.search(normalized) for pattern in _EXPLICIT_SEARCH_REQUESTS)
+
+
+def build_factual_grounding_instruction(
+    *,
+    explicit_search_requested: bool,
+    has_memory_hits: bool,
+    domain_restricted: bool,
+) -> str:
+    """生成不受主动学习权重影响的事实可靠性约束。"""
+    if domain_restricted:
+        if not explicit_search_requested:
+            return ""
+        return (
+            "【事实核验受领域限制】用户明确要求搜索或核实，但当前领域策略禁止联网搜索。"
+            "请直接说明当前无法核实，不得声称已经搜索，也不要凭印象补全具体事实。"
+        )
+
+    if explicit_search_requested:
+        return (
+            "【强制事实核验】用户明确要求搜索、查询或核实，这不是可选的学习建议，"
+            "也不受主动学习开关或权重影响。回答可核查的具体事实前，必须调用 "
+            "search_and_learn，并将 force_refresh 设为 true，以跳过旧的本地记忆并实际检索外部来源。"
+            "只有在明确验证某条已存记忆时，才可改用 verify_knowledge。"
+            "工具不可用、无结果或没有返回外部来源时，请明确说尚未核实；"
+            "不得把训练数据印象或旧记忆冒充本次搜索结果。"
+        )
+
+    if not has_memory_hits:
+        return (
+            "【事实可靠性】本地记忆没有可引用记录。涉及具体人名、归属、配音、版本、"
+            "数值、时间、搭配或其他易混淆/易变化细节时，只有完全确定才可直接回答；"
+            "否则先调用 search_and_learn，工具不可用或无结果就明确表达不确定，"
+            "不要凭印象补全后当作事实。"
+        )
+
+    return ""
 
 
 def should_apply_domain_restriction(

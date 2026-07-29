@@ -68,9 +68,10 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         "2. 用户告诉你一个新信息（科普/教新知识）；\n"
         "3. 你不太确定某个回答是否正确；\n"
         "4. 记忆库未命中（你感觉「好像知道但不确定」）。\n"
+        "5. 用户明确要求搜索、再查或核实时，必须调用并设置 force_refresh=true。\n"
         "调用后会：搜索多来源 → 总结 → 存入记忆库供日后使用。\n"
         "无需预告「让我查查看」等话术，直接调用即可。\n"
-        "如果确认是自己已掌握的知识则无需调用。"
+        "如果确认是自己已掌握的知识则无需调用；但用户明确要求搜索或核实时除外。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -84,6 +85,11 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
                     "type": "string",
                     "description": "搜索关键词，用于在网络上检索。可与主题不同，便于更精准搜索。",
                 },
+                "force_refresh": {
+                    "type": "boolean",
+                    "description": "是否跳过已有本地记忆并强制检索外部来源。用户明确要求搜索/再查/核实时必须为 true。",
+                    "default": False,
+                },
             },
             "required": ["topic", "query"],
         }
@@ -92,6 +98,7 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
     async def call(self, context, **kwargs) -> "ToolExecResult":  # type: ignore[override]
         topic = kwargs.get("topic", "").strip()
         query = kwargs.get("query", topic).strip()
+        force_refresh = kwargs.get("force_refresh") is True
         if not topic:
             return ("请提供要学习的主题")
 
@@ -99,6 +106,14 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         scope = _resolve_scope(context)
         if scope is None:
             return ("无法识别会话作用域，学习失败")
+
+        event = _get_event(context)
+        request_state = (
+            get_request_learning_state(event, create=False) if event else None
+        )
+        if request_state is not None:
+            request_state.called = True
+        plugin._active_learn_was_called = True  # 兼容旧版扩展读取
 
         # 0. 联网搜索总开关
         if not plugin._enable_web_search:
@@ -108,18 +123,22 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         # 1. 本地记忆默认优先检索（不属于「知识搜索源优先级」的外部源范畴）
         logger.info(
             f"搜索学习「{query}」(主题: {topic}, scope: {scope}, "
+            f"force_refresh={force_refresh}, "
             f"external_sources={plugin._knowledge_source_priority}, "
             f"only_top={plugin._web_search_only_highest_priority})"
         )
-        hits = plugin.store.search(scope, topic, top_k=3)
-        if hits:
-            top = hits[0].entry
-            logger.info(f"搜索学习命中本地记忆，直接返回「{top.topic}」")
-            return (
-                f"已检索到本地记忆「{top.topic}」，无需联网搜索。\n"
-                f"内容: {top.content[:200]}\n"
-                f"置信度: {top.confidence:.0%}"
-            )
+        if not force_refresh:
+            hits = plugin.store.search(scope, topic, top_k=3)
+            if hits:
+                top = hits[0].entry
+                logger.info(f"搜索学习命中本地记忆，直接返回「{top.topic}」")
+                return (
+                    f"已检索到本地记忆「{top.topic}」，无需联网搜索。\n"
+                    f"内容: {top.content[:200]}\n"
+                    f"置信度: {top.confidence:.0%}"
+                )
+        else:
+            logger.info(f"强制刷新「{query}」：跳过本地记忆，检索外部来源")
 
         # 2. 分源超时、总 deadline 和实例级限流由插件统一控制。
         search_results = await plugin._search_external_sources(
@@ -139,7 +158,6 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
         search_text = "\n---\n".join(snippets)
 
         # 3. LLM 精炼（2 步：抽取事实 + 结构化为知识卡）
-        event = _get_event(context)
         provider_id = await plugin.llm_service.resolve_provider_id(event=event)
 
         refine_result = await plugin.refiner.refine_search_results(
@@ -213,11 +231,6 @@ class SearchAndLearnTool(FunctionTool):  # type: ignore[misc]
             return (f"搜索学习「{topic}」失败（存储错误），请稍后重试。")
 
         logger.info(f"✅ 已学习「{topic}」(id: {entry.id}, 置信度{confidence:.0%}, 来源{len(sources)}, refined={refine_result.refined}, scope: {scope})")
-        request_state = get_request_learning_state(_evt, create=False) if _evt else None
-        if request_state is not None:
-            request_state.called = True
-        plugin._active_learn_was_called = True  # 兼容旧版扩展读取
-
         return (
             f"已学习「{topic}」并存入记忆库。\n"
             f"总结: {summary[:200]}\n"

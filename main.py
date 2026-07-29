@@ -30,7 +30,9 @@ from .refiner import KnowledgeRefiner
 from .runtime import (
     BackgroundTaskHost,
     ExternalSearchController,
+    build_factual_grounding_instruction,
     build_missing_comparison_instruction,
+    detect_explicit_search_request,
     get_request_learning_state,
     mark_request_learning_hinted,
     should_apply_domain_restriction,
@@ -559,6 +561,13 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
 
         scope = Scope.from_event(event)
         parts: list[str] = []
+        explicit_search_requested = detect_explicit_search_request(msg)
+        if explicit_search_requested:
+            add_reason(
+                request_context,
+                OWNER_ACTIVE_LEARNER,
+                "EXPLICIT_FACT_CHECK_REQUESTED",
+            )
 
         # 1. 普通请求先做全库 FTS；命中不足时才限时 Embedding + 混合检索。
         retrieval_started = time.perf_counter()
@@ -691,9 +700,25 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 f"领域限制：无本地记忆且非兴趣领域，已移除 {removed} 个搜索工具 (query: {msg[:50]})"
             )
 
+        factual_grounding = build_factual_grounding_instruction(
+            explicit_search_requested=explicit_search_requested,
+            has_memory_hits=bool(injected_hits),
+            domain_restricted=domain_restricted,
+        )
+        if factual_grounding:
+            parts.append(factual_grounding)
+            add_reason(
+                request_context,
+                OWNER_ACTIVE_LEARNER,
+                "FACTUAL_GROUNDING_APPLIED",
+            )
+        if explicit_search_requested and not domain_restricted:
+            mark_request_learning_hinted(event)
+            self._active_learn_hinted = True  # 兼容旧版扩展读取
+
         # 3. 主动学习提示（v1.1.5.0：所有用户按 learn_weight 触发，不限于管理员）
         # 缺失对象提示本身就是强制学习请求，不受通用主动学习开关影响。
-        if missing_instruction:
+        if missing_instruction or (explicit_search_requested and not domain_restricted):
             pass
         elif not domain_restricted and self._enable_active_learn_hint:
             if not hits:
@@ -735,6 +760,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 "hit_count": len(hits),
                 "injected_count": len(injected_hits),
                 "domain_restricted": bool(domain_restricted),
+                "explicit_search_requested": bool(explicit_search_requested),
+                "factual_grounding": bool(factual_grounding),
             },
         )
         add_reason(
@@ -751,6 +778,11 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         if domain_restricted:
             parts.append(
                 "[行为规范] 请仅按上面的领域限制直接回复，不要调用任何工具或搜索网络。"
+            )
+        elif explicit_search_requested:
+            parts.append(
+                "[行为规范] 请先完成上述强制外部核验再回答；不要预告搜索过程，"
+                "也不要在工具失败时回退为猜测。"
             )
         else:
             parts.append(
@@ -770,6 +802,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 "retrieval_mode": retrieval_mode,
                 "hit_count": len(hits),
                 "domain_restricted": bool(domain_restricted),
+                "explicit_search_requested": bool(explicit_search_requested),
+                "factual_grounding": bool(factual_grounding),
             },
         )
         # 标签汇总，让日志一眼看出注入了什么
@@ -780,6 +814,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             tags.append("质疑提示")
         if domain_restricted:
             tags.append("领域限制")
+        if explicit_search_requested:
+            tags.append("强制核验")
         request_state = get_request_learning_state(event, create=False)
         if request_state is not None and request_state.hinted:
             tags.append("学习提示")
@@ -843,7 +879,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             if state is not None and state.hinted:
                 state.hinted = False
                 if state.called:
-                    logger.info("主动学习已执行并存入记忆库")
+                    logger.info("主动学习工具已调用（结果以工具返回为准）")
                 else:
                     logger.info(
                         "主动学习提示已注入，LLM 未调用 search_and_learn（无需学习）"
