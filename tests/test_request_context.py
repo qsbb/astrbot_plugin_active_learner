@@ -114,3 +114,97 @@ def test_invalid_existing_context_is_rebuilt_without_leaking_old_data():
     assert rebuilt["request_id"] != "stale"
     assert rebuilt["flags"] == {}
 
+
+
+def test_prompt_fragments_are_sorted_replaced_and_deduplicated():
+    context = request_context.new_context()
+    request_context.add_prompt_fragment(
+        context,
+        request_context.OWNER_RELATIONSHIP,
+        "relationship.expression",
+        "relationship",
+        priority=300,
+    )
+    request_context.add_prompt_fragment(
+        context,
+        request_context.OWNER_IDENTITY_GUARDIAN,
+        "identity.boundary",
+        "identity-old",
+        priority=100,
+    )
+    request_context.add_prompt_fragment(
+        context,
+        request_context.OWNER_ACTIVE_LEARNER,
+        "knowledge.context",
+        "knowledge",
+        priority=200,
+    )
+    request_context.add_prompt_fragment(
+        context,
+        request_context.OWNER_IDENTITY_GUARDIAN,
+        "identity.boundary",
+        "identity",
+        priority=100,
+    )
+    request_context.add_prompt_fragment(
+        context,
+        request_context.OWNER_RELATIONSHIP,
+        "relationship.duplicate",
+        "knowledge",
+        priority=310,
+    )
+
+    rendered = request_context.render_prompt_fragments(context)
+
+    assert rendered["text"] == "identity\n\nknowledge\n\nrelationship"
+    assert [item["key"] for item in rendered["fragments"]] == [
+        "identity.boundary",
+        "knowledge.context",
+        "relationship.expression",
+    ]
+    assert rendered["chars"] == len(rendered["text"])
+    assert all("content" not in item for item in rendered["fragments"])
+
+
+def test_prompt_fragment_rejects_non_plain_metadata():
+    context = request_context.new_context()
+
+    with pytest.raises(request_context.RequestContextError):
+        request_context.add_prompt_fragment(
+            context,
+            request_context.OWNER_RELATIONSHIP,
+            "relationship.invalid",
+            "content",
+            metadata={"value": object()},
+        )
+
+    with pytest.raises(request_context.RequestContextError):
+        request_context.add_prompt_fragment(
+            context,
+            request_context.OWNER_RELATIONSHIP,
+            "relationship.invalid-type",
+            "content",
+            metadata=[("value", "invalid")],
+        )
+
+
+def test_prompt_fragment_reader_sanitizes_malformed_optional_fields():
+    context = request_context.new_context()
+    context["artifacts"][request_context.OWNER_RELATIONSHIP] = {
+        "prompt_fragments": [
+            {
+                "key": "relationship.expression",
+                "content": "safe content",
+                "priority": 300,
+                "index": "not-an-integer",
+                "source": {"not": "a string"},
+                "metadata": {"not_plain": object()},
+            }
+        ]
+    }
+
+    fragments = request_context.get_prompt_fragments(context)
+
+    assert fragments[0]["index"] == 0
+    assert fragments[0]["source"] == request_context.OWNER_RELATIONSHIP
+    assert fragments[0]["metadata"] == {}

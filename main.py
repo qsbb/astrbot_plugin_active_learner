@@ -67,6 +67,7 @@ from .request_context import (
     OWNER_ACTIVE_LEARNER,
     OWNER_IDENTITY_GUARDIAN,
     PHASE_LLM_REQUEST,
+    add_prompt_fragment,
     PHASE_LLM_RESPONSE,
     add_reason,
     ensure_context,
@@ -758,6 +759,19 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             )
 
         injection = "\n".join(parts)
+        add_prompt_fragment(
+            request_context,
+            OWNER_ACTIVE_LEARNER,
+            "knowledge.context",
+            injection,
+            priority=200,
+            source="astrbot_plugin_active_learner",
+            metadata={
+                "retrieval_mode": retrieval_mode,
+                "hit_count": len(hits),
+                "domain_restricted": bool(domain_restricted),
+            },
+        )
         # 标签汇总，让日志一眼看出注入了什么
         tags = []
         if hits:

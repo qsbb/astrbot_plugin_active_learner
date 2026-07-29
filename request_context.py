@@ -65,6 +65,9 @@ KNOWN_OWNERS: frozenset[str] = frozenset(
 
 # 单个 owner 的原因码上限。原因码用于诊断，不做业务判定，无需无界增长。
 MAX_REASONS_PER_OWNER = 32
+MAX_PROMPT_FRAGMENTS_PER_OWNER = 16
+MAX_PROMPT_FRAGMENT_CHARS = 24000
+PROMPT_FRAGMENTS_ARTIFACT = "prompt_fragments"
 
 class RequestContextError(RuntimeError):
     """上下文契约被违反（越界写入、非法值、phase 回退等）。"""
@@ -249,6 +252,165 @@ def get_artifact(
     if not isinstance(owned, dict):
         return default
     return owned.get(name, default)
+
+
+def add_prompt_fragment(
+    context: dict[str, Any],
+    owner: str,
+    key: str,
+    content: str,
+    *,
+    priority: int = 100,
+    source: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> bool:
+    """Register one deterministic prompt fragment in the owner's artifact area.
+
+    Re-registering the same key replaces its content without changing insertion order.
+    Empty or oversized content is rejected so diagnostics cannot become an unbounded
+    second prompt store.
+    """
+    _require_owner(owner)
+    if not isinstance(key, str) or not key.strip():
+        raise RequestContextError("prompt fragment key must be a non-empty str")
+    if not isinstance(content, str):
+        raise RequestContextError("prompt fragment content must be a str")
+    content = content.strip()
+    if not content:
+        return False
+    if len(content) > MAX_PROMPT_FRAGMENT_CHARS:
+        raise RequestContextError("prompt fragment content exceeds size limit")
+    if isinstance(priority, bool) or not isinstance(priority, int):
+        raise RequestContextError("prompt fragment priority must be an int")
+    if metadata is None:
+        metadata = {}
+    elif not isinstance(metadata, dict):
+        raise RequestContextError("prompt fragment metadata must be a dict")
+    else:
+        metadata = dict(metadata)
+    _require_plain(metadata, f"prompt fragment {owner}.{key} metadata")
+
+    owned = _owner_section(context, "artifacts", owner)
+    fragments = owned.setdefault(PROMPT_FRAGMENTS_ARTIFACT, [])
+    if not isinstance(fragments, list):
+        fragments = []
+        owned[PROMPT_FRAGMENTS_ARTIFACT] = fragments
+
+    normalized_key = key.strip()
+    payload = {
+        "key": normalized_key,
+        "content": content,
+        "priority": priority,
+        "source": source.strip() if isinstance(source, str) else owner,
+        "metadata": metadata,
+    }
+    for index, item in enumerate(fragments):
+        if isinstance(item, dict) and item.get("key") == normalized_key:
+            payload["index"] = int(item.get("index", index))
+            fragments[index] = payload
+            return True
+    if len(fragments) >= MAX_PROMPT_FRAGMENTS_PER_OWNER:
+        return False
+    payload["index"] = len(fragments)
+    fragments.append(payload)
+    return True
+
+
+def get_prompt_fragments(
+    context: dict[str, Any], owners: list[str] | tuple[str, ...] | None = None
+) -> list[dict[str, Any]]:
+    """Return validated, sorted and deduplicated prompt fragments."""
+    artifacts = context.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return []
+    selected = set(owners) if owners is not None else None
+    collected: list[dict[str, Any]] = []
+    for owner, owned in artifacts.items():
+        if selected is not None and owner not in selected:
+            continue
+        if not isinstance(owner, str) or not isinstance(owned, dict):
+            continue
+        fragments = owned.get(PROMPT_FRAGMENTS_ARTIFACT)
+        if not isinstance(fragments, list):
+            continue
+        for fallback_index, item in enumerate(fragments):
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            content = item.get("content")
+            priority = item.get("priority", 100)
+            if (
+                not isinstance(key, str)
+                or not key.strip()
+                or not isinstance(content, str)
+                or not content.strip()
+                or isinstance(priority, bool)
+                or not isinstance(priority, int)
+            ):
+                continue
+            raw_index = item.get("index", fallback_index)
+            index = (
+                raw_index
+                if isinstance(raw_index, int) and not isinstance(raw_index, bool)
+                else fallback_index
+            )
+            raw_metadata = item.get("metadata")
+            metadata = (
+                raw_metadata
+                if isinstance(raw_metadata, dict) and _is_plain_value(raw_metadata)
+                else {}
+            )
+            source = item.get("source")
+            collected.append(
+                {
+                    "owner": owner,
+                    "key": key.strip(),
+                    "content": content.strip(),
+                    "priority": priority,
+                    "source": source if isinstance(source, str) and source else owner,
+                    "index": index,
+                    "metadata": metadata,
+                }
+            )
+
+    collected.sort(
+        key=lambda item: (item["priority"], item["owner"], item["index"], item["key"])
+    )
+    rendered: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    seen_content: set[str] = set()
+    for item in collected:
+        normalized_key = item["key"].casefold()
+        normalized_content = " ".join(item["content"].split())
+        if normalized_key in seen_keys or normalized_content in seen_content:
+            continue
+        seen_keys.add(normalized_key)
+        seen_content.add(normalized_content)
+        rendered.append(item)
+    return rendered
+
+
+def render_prompt_fragments(
+    context: dict[str, Any], owners: list[str] | tuple[str, ...] | None = None
+) -> dict[str, Any]:
+    """Render registered fragments and expose a plain diagnostic description."""
+    fragments = get_prompt_fragments(context, owners)
+    text = "\n\n".join(item["content"] for item in fragments)
+    return {
+        "text": text,
+        "chars": len(text),
+        "fragments": [
+            {
+                "owner": item["owner"],
+                "key": item["key"],
+                "priority": item["priority"],
+                "source": item["source"],
+                "chars": len(item["content"]),
+                "metadata": item["metadata"],
+            }
+            for item in fragments
+        ],
+    }
 
 
 def add_reason(context: dict[str, Any], owner: str, reason: str) -> list[str]:
