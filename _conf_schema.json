@@ -48,16 +48,16 @@
         "default": 50
     },
     "enable_bilibili": {
-        "description": "启用 B 站搜索源",
+        "description": "启用 B 站补充搜索源",
         "type": "bool",
-        "hint": "需要自行 pip install bilibili-api-python。不可用时 search_bilibili 工具会回退到普通网页搜索（site:bilibili.com）",
+        "hint": "默认关闭。开启后才会注册 search_bilibili 工具并让通用搜索、学习和核验使用 B 站标题与简介；默认优先级排在 URL / Web 之后。需要自行 pip install bilibili-api-python，不可用时独立工具会回退到普通网页搜索（site:bilibili.com）。",
         "default": false
     },
     "verifier_search_source": {
         "description": "验证搜索源",
         "type": "string",
         "options": ["auto", "web", "bilibili", "web+bilibili", "llm"],
-        "hint": "验证记忆时使用的搜索源。auto=有API就用网页搜索+B站，没API则LLM；web=仅网页搜索(Tavily/BoCha/Brave)；bilibili=仅B站；web+bilibili=网页+B站；llm=纯LLM验证不搜索。",
+        "hint": "验证记忆时使用的搜索源。auto=优先使用手动 URL 与网页搜索，仅在 enable_bilibili 开启时补充 B 站；web=仅网页搜索(Tavily/BoCha/Brave)；bilibili=仅B站且仍需开启 B 站开关；web+bilibili=网页+B站且仍需开启 B 站开关；llm=纯LLM验证不搜索。",
         "default": "auto"
     },
     "enable_web_search": {
@@ -81,7 +81,7 @@
     "knowledge_source_priority": {
         "description": "知识搜索源优先级",
         "type": "string",
-        "hint": "逗号分隔外部搜索源，例如 'url,web,bilibili'。url 是管理页手动添加的网页或百科；开启「仅最高优先级」时使用第一个当前可用来源。本地记忆始终优先。",
+        "hint": "逗号分隔外部搜索源，例如 'url,web,bilibili'。url 是管理页手动添加的网页或百科；B 站还需单独开启 enable_bilibili。开启「仅最高优先级」时使用第一个当前可用且已启用的来源。本地记忆始终优先。",
         "default": "url,web,bilibili"
     },
     "knowledge_domain_scope": {

@@ -423,6 +423,9 @@ class SearchBilibiliTool(FunctionTool):  # type: ignore[misc]
         if not plugin._enable_web_search:
             logger.info(f"搜索 B站「{keyword}」被拒绝：联网搜索已关闭")
             return ("联网搜索已关闭，无法搜索 B 站。")
+        if not getattr(plugin, "_enable_bilibili", False):
+            logger.info(f"搜索 B站「{keyword}」被拒绝：B 站搜索源未启用")
+            return ("B 站搜索源未启用，无法执行本次搜索。")
 
         logger.info(f"搜索 B站: {keyword} (limit={limit})")
 
@@ -582,7 +585,7 @@ def create_tools(plugin) -> list:
         SaveMemoryTool,
     ]
     # B 站工具按配置启用
-    enable_bili = bool(plugin.config.get("enable_bilibili", False))
+    enable_bili = bool(getattr(plugin, "_enable_bilibili", False))
     if enable_bili:
         tool_classes.append(SearchBilibiliTool)
 

@@ -31,6 +31,7 @@ const state = {
     verifier_search_source: "auto",
     auto_learn_topic_limit: 100,
     enable_web_search: true,
+    enable_bilibili: false,
     web_search_only_highest_priority: false,
     knowledge_source_priority: "url,web,bilibili",
     knowledge_domain_scope: "",
@@ -935,6 +936,7 @@ async function loadSettings() {
       verifier_search_source: s.verifier_search_source || "auto",
       auto_learn_topic_limit: s.auto_learn_topic_limit != null ? s.auto_learn_topic_limit : 100,
       enable_web_search: s.enable_web_search !== false,
+      enable_bilibili: s.enable_bilibili === true,
       web_search_only_highest_priority: s.web_search_only_highest_priority === true,
       knowledge_source_priority: s.knowledge_source_priority || "url,web,bilibili",
       knowledge_domain_scope: s.knowledge_domain_scope || "",
@@ -956,6 +958,7 @@ async function loadSettings() {
     document.getElementById("settings-verifier-search-source").value = state.settings.verifier_search_source;
     document.getElementById("settings-auto-learn-limit").value = state.settings.auto_learn_topic_limit;
     document.getElementById("settings-enable-web-search").checked = state.settings.enable_web_search;
+    document.getElementById("settings-enable-bilibili").checked = state.settings.enable_bilibili;
     document.getElementById("settings-web-search-only-top").checked = state.settings.web_search_only_highest_priority;
     const prioritySelect = document.getElementById("settings-knowledge-source-priority");
     if (![...prioritySelect.options].some((opt) => opt.value === state.settings.knowledge_source_priority)) {
@@ -1147,6 +1150,7 @@ async function saveSettings() {
     verifier_search_source: document.getElementById("settings-verifier-search-source").value,
     auto_learn_topic_limit: parseInt(document.getElementById("settings-auto-learn-limit").value, 10) || 100,
     enable_web_search: document.getElementById("settings-enable-web-search").checked,
+    enable_bilibili: document.getElementById("settings-enable-bilibili").checked,
     web_search_only_highest_priority: document.getElementById("settings-web-search-only-top").checked,
     knowledge_source_priority: document.getElementById("settings-knowledge-source-priority").value,
     knowledge_domain_scope: document.getElementById("settings-knowledge-domain-scope").value,
@@ -1170,6 +1174,7 @@ async function saveSettings() {
       verifier_search_source: result.verifier_search_source || "auto",
       auto_learn_topic_limit: result.auto_learn_topic_limit != null ? result.auto_learn_topic_limit : 100,
       enable_web_search: result.enable_web_search !== false,
+      enable_bilibili: result.enable_bilibili === true,
       web_search_only_highest_priority: result.web_search_only_highest_priority === true,
       knowledge_source_priority: result.knowledge_source_priority || "url,web,bilibili",
       knowledge_domain_scope: result.knowledge_domain_scope || "",

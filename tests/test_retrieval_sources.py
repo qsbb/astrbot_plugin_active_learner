@@ -18,10 +18,11 @@ class _External:
 
 
 class _Sources(RetrievalMixin):
-    def __init__(self, enabled_urls=1, only_top=False):
+    def __init__(self, enabled_urls=1, only_top=False, enable_bilibili=True):
         self._knowledge_source_priority = ["url", "web", "bilibili"]
         self._web_search_only_highest_priority = only_top
         self._enable_web_search = True
+        self._enable_bilibili = enable_bilibili
         self.url_sources = SimpleNamespace(
             enabled_count=enabled_urls,
             search=lambda *args, **kwargs: None,
@@ -79,6 +80,24 @@ def test_external_search_preserves_configured_quality_order():
         assert sources._external_search.call_names == ["web", "url", "bilibili"]
 
     asyncio.run(scenario())
+
+
+def test_bilibili_switch_excludes_source_from_all_external_searches():
+    async def scenario():
+        sources = _Sources(enabled_urls=1, enable_bilibili=False)
+        assert sources._source_available("bilibili") is False
+        assert sources._is_source_enabled("bilibili") is False
+        await sources._search_external_sources("topic")
+        assert sources._external_search.call_names == ["url", "web"]
+
+    asyncio.run(scenario())
+
+
+def test_only_highest_priority_skips_disabled_bilibili_source():
+    sources = _Sources(enabled_urls=0, only_top=True, enable_bilibili=False)
+    sources._knowledge_source_priority = ["bilibili", "web"]
+    assert sources._is_source_enabled("bilibili") is False
+    assert sources._is_source_enabled("web") is True
 
 
 def test_automatic_injection_filters_partial_entity_overlap():

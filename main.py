@@ -276,6 +276,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
 
         # v1.2.0.0：联网搜索与知识领域控制
         self._enable_web_search = bool(cfg.get("enable_web_search", True))
+        self._enable_bilibili = bool(cfg.get("enable_bilibili", False))
         self._web_search_only_highest_priority = bool(
             cfg.get("web_search_only_highest_priority", False)
         )
@@ -293,25 +294,24 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         )
 
         # 注册 LLM 工具。先清理热重载可能残留的旧实例。
-        self._tools = []
         try:
-            self._cleanup_llm_tools()
-            tools = create_tools(self)
-            if tools:
-                self._tools = tools
-                self.context.add_llm_tools(*tools)
-                logger.info(
-                    f"已注册 {len(tools)} 个 LLM 工具: {[t.name for t in tools]}"
-                )
+            self._register_llm_tools()
         except Exception as e:
             logger.error(f"注册 LLM 工具失败: {e}")
 
         # 诊断：启动时打印数据库状态
         try:
             total = self.store.count_all()
+            bili_state = (
+                "ready"
+                if self._enable_bilibili and self.bili_source.is_available()
+                else "unavailable"
+                if self._enable_bilibili
+                else "disabled"
+            )
             logger.info(
                 f"凝心溯溪-知 v{PLUGIN_VERSION} 已加载 | max_entries={max_entries} | "
-                f"bili={'on' if self.bili_source.is_available() else 'off'} | "
+                f"bili={bili_state} | "
                 f"db={db_path} | 记忆={total}条 | "
                 f"schema=v{self.store._schema_version} | "
                 f"learn_weight={self._learn_weight} | "
@@ -472,6 +472,17 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             ]
         except Exception as exc:
             logger.debug(f"清理残留 LLM 工具失败: {exc}")
+
+    def _register_llm_tools(self) -> None:
+        """按当前配置重新注册工具，供启动和配置热更新共用。"""
+        self._cleanup_llm_tools()
+        self._tools = create_tools(self)
+        if not self._tools:
+            return
+        self.context.add_llm_tools(*self._tools)
+        logger.info(
+            f"已注册 {len(self._tools)} 个 LLM 工具: {[t.name for t in self._tools]}"
+        )
 
     def _create_background_task(self, awaitable, *, name: str):
         """统一托管插件后台任务，卸载时取消并等待回收。"""

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=20260729-url-sources" />
+  <link rel="stylesheet" href="./style.css?v=20260729-bili-toggle" />
 </head>
 <body>
   <div class="shell">
@@ -211,7 +211,7 @@
               <div class="settings-row">
                 <span class="settings-label-sm">验证记忆时使用的搜索源</span>
                 <select id="settings-verifier-search-source" class="settings-text">
-                  <option value="auto">自动（有API用网页+B站，没API用LLM）</option>
+                  <option value="auto">自动（URL / 网页为主，启用后补充 B 站）</option>
                   <option value="web">仅网页搜索（Tavily/BoCha/Brave）</option>
                   <option value="bilibili">仅 B 站搜索</option>
                   <option value="web+bilibili">网页 + B 站</option>
@@ -228,6 +228,11 @@
               </label>
               <p class="hint">关闭后手动 URL、百科、网页搜索、B 站搜索和主动学习等联网功能均不可用。</p>
               <label class="checkbox-row">
+                <input type="checkbox" id="settings-enable-bilibili" />
+                <span>启用 B 站补充来源</span>
+              </label>
+              <p class="hint">默认关闭。开启后 B 站标题与简介仅作为补充证据；默认顺序仍在手动来源和网页搜索之后。</p>
+              <label class="checkbox-row">
                 <input type="checkbox" id="settings-web-search-only-top" />
                 <span>联网搜索仅使用最高优先级来源</span>
               </label>
@@ -242,7 +247,7 @@
                   <option value="bilibili">仅 B 站搜索（bilibili）</option>
                 </select>
               </div>
-              <p class="hint">开启「仅最高优先级」时会使用列表中第一个当前可用的来源，未添加 URL 时会自动跳到下一项。本地记忆始终优先。</p>
+              <p class="hint">开启「仅最高优先级」时会使用列表中第一个当前可用且已启用的来源；B 站还需单独开启上方开关。本地记忆始终优先。</p>
               <div class="settings-row">
                 <span class="settings-label-sm">知识领域范围</span>
                 <div class="tag-input" id="settings-knowledge-domain-scope-tags">
@@ -727,6 +732,6 @@
   </div>
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script type="module" src="./app.js?v=20260729-url-sources"></script>
+  <script type="module" src="./app.js?v=20260729-bili-toggle"></script>
 </body>
 </html>

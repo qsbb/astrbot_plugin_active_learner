@@ -73,13 +73,19 @@ class RetrievalMixin:
         if source == "web":
             return bool(getattr(self.searcher, "is_available", False))
         if source == "bilibili":
-            return bool(self.bili_source and self.bili_source.is_available())
+            return bool(
+                getattr(self, "_enable_bilibili", False)
+                and self.bili_source
+                and self.bili_source.is_available()
+            )
         return False
 
     def _is_source_enabled(self, source: str) -> bool:
         """判断某个外部知识搜索源是否在当前配置下启用。"""
         source = source.lower()
         if source not in ("url", "web", "bilibili"):
+            return False
+        if source == "bilibili" and not getattr(self, "_enable_bilibili", False):
             return False
         if source not in self._knowledge_source_priority:
             return False

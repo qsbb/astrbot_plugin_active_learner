@@ -243,6 +243,7 @@ class WebApiMixin:
         runtime_snapshot = {
             "learn_weight": self._learn_weight,
             "search_top_k": self._search_top_k,
+            "enable_bilibili": self._enable_bilibili,
             "default_confidence": self._default_confidence,
             "chunk_size": self._chunk_size,
             "chunk_overlap": self._chunk_overlap,
@@ -1379,6 +1380,7 @@ class WebApiMixin:
                 "auto_learn_topic_limit": int(data.get("auto_learn_topic_limit", 100)),
                 # v1.2.0.0：联网搜索与知识领域控制
                 "enable_web_search": bool(data.get("enable_web_search", True)),
+                "enable_bilibili": bool(data.get("enable_bilibili", False)),
                 "web_search_only_highest_priority": bool(
                     data.get("web_search_only_highest_priority", False)
                 ),
@@ -1663,6 +1665,8 @@ class WebApiMixin:
 
         # v1.2.0.0：联网搜索与知识领域控制
         self._enable_web_search = bool(cfg.get("enable_web_search", True))
+        old_enable_bilibili = getattr(self, "_enable_bilibili", False)
+        self._enable_bilibili = bool(cfg.get("enable_bilibili", False))
         self._web_search_only_highest_priority = bool(
             cfg.get("web_search_only_highest_priority", False)
         )
@@ -1678,6 +1682,11 @@ class WebApiMixin:
         self._cross_domain_exclude_admin = bool(
             cfg.get("cross_domain_exclude_admin", True)
         )
+        if self._enable_bilibili != old_enable_bilibili:
+            try:
+                self._register_llm_tools()
+            except Exception as exc:
+                logger.warning(f"按 B 站开关刷新 LLM 工具失败: {exc}")
 
         # 清空 embedder 矩阵缓存（参数变化后需重建）
         if self.embedder is not None:

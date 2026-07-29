@@ -83,6 +83,17 @@ def test_diagnostic_page_renders_config_and_runtime_values():
     assert "cfg.effective_provider_id" in app
 
 
+def test_manager_page_exposes_explicit_bilibili_switch():
+    app = _APP.read_text(encoding="utf-8")
+    html = _INDEX.read_text(encoding="utf-8")
+    assert 'id="settings-enable-bilibili"' in html
+    assert "enable_bilibili: s.enable_bilibili === true" in app
+    assert 'document.getElementById("settings-enable-bilibili").checked' in app
+    web_api = _WEB_API.read_text(encoding="utf-8")
+    assert 'self._enable_bilibili = bool(cfg.get("enable_bilibili", False))' in web_api
+    assert "self._register_llm_tools()" in web_api
+
+
 def test_page_assets_have_version_query_to_avoid_stale_webview_cache():
     import re
 

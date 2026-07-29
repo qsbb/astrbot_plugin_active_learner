@@ -51,7 +51,7 @@
 
 LLM 工具 `search_and_learn`：
 
-1. 并行查询已启用的手动 URL / MediaWiki、Web 搜索服务和 B 站来源
+1. 并行查询已启用的手动 URL / MediaWiki、Web 搜索服务和可选 B 站补充来源
 2. 收集多源搜索结果片段
 3. 让当前 LLM 总结为 200 字以内的简洁知识
 4. 自动提取关键词（中文 2 字以上、英文 3 字以上）
@@ -129,13 +129,15 @@ aiohttp>=3.8.0
 
 （已写入 `requirements.txt`，AstrBot 会自动安装）
 
-可选依赖（启用 B 站搜索）：
+可选依赖（显式启用 B 站补充搜索）：
+
+B 站来源默认关闭。只有 `enable_bilibili=true` 时，它才会参与通用搜索、主动学习与事实核验并注册独立工具；仅安装依赖或 B 站插件不会绕过开关。默认来源顺序为 `url,web,bilibili`，视频标题与简介排在手动资料和网页资料之后，只作为补充证据。
 
 本插件 B 站搜索功能采用三级降级链路，按以下优先级依次尝试：
 
 1. **`astrbot_plugin_bilibili_ai_bot` 插件（推荐，优先使用）**
    - 仓库地址：https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot
-   - 安装该插件并完成 `/bili登录` 后，本插件会自动接管 B 站搜索请求
+   - 安装该插件、完成 `/bili登录` 并开启 `enable_bilibili` 后，本插件会优先通过它执行 B 站搜索
    - 启动时若检测到该插件已加载，会在日志中输出「已连接 astrbot_plugin_bilibili_ai_bot」
 
 2. **`bilibili-api-python` 库（次选）**
@@ -161,7 +163,7 @@ aiohttp>=3.8.0
 | `enable_web_search` | bool | true | 手动 URL、MediaWiki、Web 与 B 站来源的联网总开关 |
 | `knowledge_source_priority` | string | `url,web,bilibili` | 外部来源顺序；`url` 代表管理页维护的手动来源 |
 | `web_search_only_highest_priority` | bool | false | 只使用顺序中第一个当前可用的来源 |
-| `enable_bilibili` | bool | false | 启用 B 站搜索源（需自行安装 `bilibili-api-python`） |
+| `enable_bilibili` | bool | false | 启用 B 站补充来源；关闭时不注册工具，也不参与搜索、学习或核验 |
 | `debate_rounds` | int | 2 | 质疑验证的自辩论轮数（2 = 支持方→质疑方→仲裁） |
 
 ## 使用
@@ -217,7 +219,7 @@ astrbot_plugin_active_learner/
 ├── url_sources.py       # 手动网页 / MediaWiki 来源注册与持久化
 ├── bili_source.py       # B 站搜索源（可选）
 ├── verifier.py          # 多源验证 + LLM 自辩论 + 交叉验证
-├── tools.py             # 4 个 LLM FunctionTool 定义
+├── tools.py             # LLM FunctionTool 定义（B 站工具按配置注册）
 ├── web_api.py           # 管理页 API、配置热应用与 URL 来源管理
 ├── pages/manager/       # 管理页前端
 ├── triggers.py          # 质疑检测正则模式
@@ -262,7 +264,7 @@ SQLite 持久化（memories + memories_fts + memory_versions）
 - AstrBot 新版（`self.config` 自动注入）与旧版（`context.get_config()`）均兼容
 - LLM provider 不可用时所有工具会优雅降级（返回提示文本而非报错）
 - `extra_user_content_parts` 不可用时降级到 `system_prompt` 注入
-- B 站库未安装时自动回退到网页搜索
+- 显式启用 B 站来源后，独立 B 站工具在库未安装时自动回退到网页搜索；关闭开关时不会因检测到依赖而自行启用
 - 安装凝心溯溪-言时会参与结构化提示片段编排；未安装或版本不兼容时继续使用直接注入 fallback
 
 ## 数据存储位置

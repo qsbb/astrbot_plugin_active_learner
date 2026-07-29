@@ -6,7 +6,11 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_active_learner.runtime import get_request_learning_state
-from astrbot_plugin_active_learner.tools import SearchAndLearnTool
+from astrbot_plugin_active_learner.tools import (
+    SearchAndLearnTool,
+    SearchBilibiliTool,
+    create_tools,
+)
 
 
 class _Store:
@@ -61,6 +65,24 @@ def test_tool_schema_exposes_force_refresh():
     schema = SearchAndLearnTool().parameters["properties"]["force_refresh"]
     assert schema["type"] == "boolean"
     assert schema["default"] is False
+
+
+def test_bilibili_tool_registration_follows_runtime_switch():
+    disabled = SimpleNamespace(config={"enable_bilibili": True}, _enable_bilibili=False)
+    enabled = SimpleNamespace(config={"enable_bilibili": False}, _enable_bilibili=True)
+    assert "search_bilibili" not in [tool.name for tool in create_tools(disabled)]
+    assert "search_bilibili" in [tool.name for tool in create_tools(enabled)]
+
+
+def test_stale_bilibili_tool_instance_still_honors_disabled_switch():
+    async def scenario():
+        plugin = SimpleNamespace(_enable_web_search=True, _enable_bilibili=False)
+        tool = SearchBilibiliTool()
+        object.__setattr__(tool, "_plugin", plugin)
+        result = await tool.call(None, keyword="测试")
+        assert "未启用" in result
+
+    asyncio.run(scenario())
 
 
 def test_default_call_still_uses_existing_local_memory():
