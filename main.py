@@ -187,12 +187,12 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self.llm_service = LLMService(self)
         self.importer = Importer(self)
 
-        # 日志缓冲区：捕获本插件最近 200 条日志
+        # 日志缓冲区：捕获本插件最近 1000 条日志
         # 严格隔离：清除可能被 AstrBot 框架挂到本 logger 上的 handler，
         # 防止插件日志泄漏到 AstrBot 主日志界面，也防止 AstrBot 日志反向污染本插件缓冲区。
-        self._log_buffer: collections.deque = collections.deque(maxlen=200)
+        self._log_buffer: collections.deque = collections.deque(maxlen=1000)
         self._log_handler = _BufferHandler(self._log_buffer)
-        self._log_handler.setLevel(logging.INFO)
+        self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
         )
@@ -388,6 +388,20 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
     def diagnostic_clear(self) -> None:
         self._log_handler.clear()
 
+    def _diagnostic_event(
+        self,
+        code: str,
+        summary: str,
+        *,
+        level: str = "INFO",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a redacted, structured event for the series diagnostics page."""
+        try:
+            self._log_handler.record_event(level, code, summary, details or {})
+        except Exception:
+            pass
+
     # ---------- 跨插件知识桥接（公开契约） ----------
 
     def knowledge_contract(self) -> dict:
@@ -433,13 +447,38 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         unavailable 并保持待审，不能因为桥接异常而放行或拒绝。
         """
         text = (query or "").strip()
+        started = time.perf_counter()
+        scope_kind = self._parse_bridge_scope(scope).type
         if not text:
+            self._diagnostic_event(
+                "knowledge.bridge.recall.completed",
+                "知识桥接检索已跳过",
+                details={
+                    "scope_type": scope_kind,
+                    "success": False,
+                    "outcome": "invalid_input",
+                    "hit_count": 0,
+                },
+            )
             return []
         limit = max(1, min(int(top_k or 5), _BRIDGE_RECALL_MAX_TOP_K))
         try:
             hits = await self._search_memory_once(self._parse_bridge_scope(scope), text)
         except Exception as exc:
             logger.warning(f"[知] 知识桥接检索失败: {exc}")
+            self._diagnostic_event(
+                "knowledge.bridge.recall.completed",
+                "知识桥接检索失败",
+                level="WARNING",
+                details={
+                    "scope_type": scope_kind,
+                    "success": False,
+                    "outcome": "failed",
+                    "hit_count": 0,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000),
+                    "error_type": type(exc).__name__,
+                },
+            )
             return []
 
         results: list[dict] = []
@@ -457,6 +496,17 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                     "confidence": float(entry.confidence),
                 }
             )
+        self._diagnostic_event(
+            "knowledge.bridge.recall.completed",
+            "知识桥接检索完成",
+            details={
+                "scope_type": scope_kind,
+                "success": True,
+                "outcome": "completed",
+                "hit_count": len(results),
+                "elapsed_ms": round((time.perf_counter() - started) * 1000),
+            },
+        )
         return results
 
     async def terminate(self):

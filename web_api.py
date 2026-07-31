@@ -1809,7 +1809,14 @@ class _BufferHandler(logging.Handler):
     """将日志写入内存缓冲区，供 Dashboard 查看。"""
 
     PLUGIN_LOGGER_PREFIX = "astrbot_plugin_active_learner"
-    _SERIES_LEVELS = frozenset({"WARNING", "ERROR", "CRITICAL"})
+    _SERIES_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+    _SENSITIVE_KEY = re.compile(
+        r"(?i)(?:token|api[_-]?key|secret|password|authorization|cookie|umo|"
+        r"user[_-]?id|group[_-]?id|platform[_-]?id|account|person|session|"
+        r"requester|recipient|target|identity|filename|file[_-]?path|path|"
+        r"location|latitude|longitude|prompt|response|reply|query|topic|"
+        r"content|message|claim|snippet|url|scope$|scope[_-]?id|new_settings)"
+    )
     _SECRET = re.compile(
         r"(?i)(token|api[_-]?key|secret|password|authorization|cookie|umo|"
         r"user[_-]?id|group[_-]?id|platform[_-]?id)\s*[:=]\s*([^,\s]+)"
@@ -1819,6 +1826,8 @@ class _BufferHandler(logging.Handler):
     )
     _LONG_NUMBER = re.compile(r"(?<![\w.])[0-9]{6,}(?![\w.])")
     _URL_QUERY = re.compile(r"(https?://[^\s?]+)\?[^\s]+", re.IGNORECASE)
+    _URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+    _PATH = re.compile(r"(?:[A-Za-z]:\\|/)[^\s]+")
     _EMAIL = re.compile(
         r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE
     )
@@ -1844,7 +1853,28 @@ class _BufferHandler(logging.Handler):
         text = cls._OPAQUE_VALUE.sub("<已隐藏随机标识>", text)
         text = cls._LONG_NUMBER.sub("<已隐藏标识>", text)
         text = cls._URL_QUERY.sub(r"\1?[已隐藏参数]", text)
+        text = cls._URL.sub("<已隐藏网址>", text)
+        text = cls._PATH.sub("<已隐藏路径>", text)
         return text if len(text) <= limit else text[: limit - 1] + "…"
+
+    @classmethod
+    def _safe_details(cls, details: Any) -> dict[str, Any]:
+        """Keep diagnostic details structured and privacy-safe."""
+        if not isinstance(details, dict):
+            return {}
+        result: dict[str, Any] = {}
+        for key, value in details.items():
+            name = str(key)[:64]
+            if cls._SENSITIVE_KEY.search(name):
+                continue
+            if isinstance(value, bool | int | float) or value is None:
+                result[name] = value
+            elif isinstance(value, (str, bytes)):
+                raw = value.decode(errors="replace") if isinstance(value, bytes) else value
+                result[name] = cls._safe_text(raw, 160)
+            elif isinstance(value, (list, tuple)):
+                result[name] = [cls._safe_text(item, 80) for item in value[:8]]
+        return result
 
     def record_event(
         self,
@@ -1865,7 +1895,7 @@ class _BufferHandler(logging.Handler):
                 "level": str(level).upper(),
                 "code": self._safe_text(code, 80),
                 "summary": self._safe_text(summary),
-                "details": details or {},
+                "details": self._safe_details(details),
                 "text": self._safe_text(text or summary, 500),
             }
             self._buffer.append(event)
@@ -1873,7 +1903,7 @@ class _BufferHandler(logging.Handler):
 
     def snapshot(self, after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
         after = max(0, int(after_seq or 0))
-        size = min(500, max(1, int(limit or 200)))
+        size = min(1000, max(1, int(limit or 200)))
         with self._lock:
             events = [
                 {key: value for key, value in item.items() if key != "text"}
@@ -1910,8 +1940,9 @@ class _BufferHandler(logging.Handler):
             level = record.levelname.lower()
             self.record_event(
                 record.levelname,
-                f"logger.{level}.{module}",
+                f"logger.{level}.{module}.{self._safe_text(record.funcName or 'event', 60)}",
                 f"{module} 记录了一条 {record.levelname} 事件，详细信息仅在知的独立日志页查看",
+                details={"module": module, "function": record.funcName or ""},
                 text=formatted,
             )
         except Exception:

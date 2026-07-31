@@ -127,7 +127,7 @@ def test_series_diagnostic_contract_keeps_legacy_page_and_structured_buffer():
     assert 'item.get("text", "")' in web_api
     assert "record.module" in web_api
     assert "详细信息仅在知的独立日志页查看" in web_api
-    assert '_SERIES_LEVELS = frozenset({"WARNING", "ERROR", "CRITICAL"})' in web_api
+    assert '_SERIES_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})' in web_api
     assert "logger.propagate = False" in main
 
 
