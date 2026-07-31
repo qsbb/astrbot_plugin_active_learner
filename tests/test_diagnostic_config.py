@@ -5,8 +5,15 @@ WebApiMixin，本文件只跟随源码位置调整，断言与被测行为均未
 """
 
 import ast
+import collections
+import logging
+import re
 import textwrap
+import threading
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -103,3 +110,66 @@ def test_page_assets_have_version_query_to_avoid_stale_webview_cache():
     assert style_match and style_match.group(1)
     assert script_match and script_match.group(1)
     assert style_match.group(1) == script_match.group(1)
+
+
+def test_series_diagnostic_contract_keeps_legacy_page_and_structured_buffer():
+    main = (_ROOT / "main.py").read_text(encoding="utf-8")
+    web_api = _WEB_API.read_text(encoding="utf-8")
+    assert "def diagnostic_log_contract" in main
+    assert '"name": "series.diagnostics"' in main
+    assert "def diagnostic_events" in main
+    assert "def diagnostic_clear" in main
+    assert '"astrbot_log_propagation": False' in main
+    assert '"plugin.ready"' in main
+    assert '"plugin.terminated"' in main
+    assert '"seq": self._sequence' in web_api
+    assert '"stream_id": self._stream_id' in web_api
+    assert 'item.get("text", "")' in web_api
+    assert "record.module" in web_api
+    assert "详细信息仅在知的独立日志页查看" in web_api
+    assert '_SERIES_LEVELS = frozenset({"WARNING", "ERROR", "CRITICAL"})' in web_api
+    assert "logger.propagate = False" in main
+
+
+def test_series_diagnostic_snapshot_hides_raw_logger_message():
+    source = _WEB_API.read_text(encoding="utf-8")
+    node = next(
+        item
+        for item in ast.walk(ast.parse(source))
+        if isinstance(item, ast.ClassDef) and item.name == "_BufferHandler"
+    )
+    namespace = {
+        "Any": Any,
+        "UTC": UTC,
+        "collections": collections,
+        "datetime": datetime,
+        "logging": logging,
+        "re": re,
+        "threading": threading,
+        "uuid": uuid,
+    }
+    class_source = "from __future__ import annotations\n" + textwrap.dedent(
+        ast.get_source_segment(source, node)
+    )
+    exec(compile(class_source, "<_BufferHandler>", "exec"), namespace)
+    buffer = collections.deque(maxlen=200)
+    handler = namespace["_BufferHandler"](buffer)
+    handler.emit(
+        logging.LogRecord(
+            "astrbot_plugin_active_learner.test",
+            logging.WARNING,
+            __file__,
+            12,
+            "private chat body %s",
+            ("user-a",),
+            None,
+        )
+    )
+    payload = handler.snapshot()
+    assert "private chat body" in buffer[-1]["text"]
+    assert "private chat body" not in str(payload["events"])
+    assert "user-a" not in str(payload["events"])
+    assert payload["stream_id"] == handler.snapshot()["stream_id"]
+    old_stream_id = payload["stream_id"]
+    handler.clear()
+    assert handler.snapshot()["stream_id"] != old_stream_id

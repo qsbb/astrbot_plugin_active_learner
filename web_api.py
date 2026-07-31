@@ -11,6 +11,10 @@ import asyncio
 import collections
 import json
 import logging
+import re
+import threading
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1794,7 +1798,7 @@ class WebApiMixin:
 
     async def _web_logs(self):
         """返回本插件最近的日志。"""
-        logs = list(self._log_buffer)
+        logs = [item.get("text", "") for item in self._log_buffer]
         return json_response({"logs": logs, "count": len(logs)})
 
 
@@ -1805,16 +1809,110 @@ class _BufferHandler(logging.Handler):
     """将日志写入内存缓冲区，供 Dashboard 查看。"""
 
     PLUGIN_LOGGER_PREFIX = "astrbot_plugin_active_learner"
+    _SERIES_LEVELS = frozenset({"WARNING", "ERROR", "CRITICAL"})
+    _SECRET = re.compile(
+        r"(?i)(token|api[_-]?key|secret|password|authorization|cookie|umo|"
+        r"user[_-]?id|group[_-]?id|platform[_-]?id)\s*[:=]\s*([^,\s]+)"
+    )
+    _PRIVATE_VALUE = re.compile(
+        r"(?i)(user_text|prompt|response|reply|query|topic|content|scope|message|new_settings)\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^,\s]+)"
+    )
+    _LONG_NUMBER = re.compile(r"(?<![\w.])[0-9]{6,}(?![\w.])")
+    _URL_QUERY = re.compile(r"(https?://[^\s?]+)\?[^\s]+", re.IGNORECASE)
+    _EMAIL = re.compile(
+        r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE
+    )
+    _OPAQUE_VALUE = re.compile(
+        r"(?<![\w])(?=[A-Za-z0-9_-]{20,}(?![\w]))"
+        r"(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*[0-9])"
+        r"[A-Za-z0-9_-]+"
+    )
 
     def __init__(self, buffer: collections.deque):
         super().__init__()
         self._buffer = buffer
+        self._stream_id = uuid.uuid4().hex
+        self._sequence = 0
+        self._lock = threading.Lock()
+
+    @classmethod
+    def _safe_text(cls, value: Any, limit: int = 320) -> str:
+        text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+        text = cls._SECRET.sub(r"\1=<已隐藏>", text)
+        text = cls._PRIVATE_VALUE.sub(r"\1=<已隐藏>", text)
+        text = cls._EMAIL.sub("<已隐藏邮箱>", text)
+        text = cls._OPAQUE_VALUE.sub("<已隐藏随机标识>", text)
+        text = cls._LONG_NUMBER.sub("<已隐藏标识>", text)
+        text = cls._URL_QUERY.sub(r"\1?[已隐藏参数]", text)
+        return text if len(text) <= limit else text[: limit - 1] + "…"
+
+    def record_event(
+        self,
+        level: str,
+        code: str,
+        summary: Any,
+        details: dict[str, Any] | None = None,
+        *,
+        text: str = "",
+    ) -> dict[str, Any]:
+        with self._lock:
+            self._sequence += 1
+            event = {
+                "seq": self._sequence,
+                "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+                "plugin_id": "astrbot_plugin_active_learner",
+                "plugin_name": "知",
+                "level": str(level).upper(),
+                "code": self._safe_text(code, 80),
+                "summary": self._safe_text(summary),
+                "details": details or {},
+                "text": self._safe_text(text or summary, 500),
+            }
+            self._buffer.append(event)
+            return event
+
+    def snapshot(self, after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
+        after = max(0, int(after_seq or 0))
+        size = min(500, max(1, int(limit or 200)))
+        with self._lock:
+            events = [
+                {key: value for key, value in item.items() if key != "text"}
+                for item in self._buffer
+                if item.get("seq", 0) > after
+                and (
+                    not str(item.get("code", "")).startswith("logger.")
+                    or item.get("level") in self._SERIES_LEVELS
+                )
+            ][-size:]
+            first = self._buffer[0]["seq"] if self._buffer else self._sequence + 1
+            return {
+                "contract": "series.diagnostics@1.0",
+                "plugin_id": "astrbot_plugin_active_learner",
+                "plugin_name": "知",
+                "stream_id": self._stream_id,
+                "events": events,
+                "next_seq": self._sequence,
+                "dropped_before": max(0, first - 1),
+            }
+
+    def clear(self) -> None:
+        with self._lock:
+            self._buffer.clear()
+            self._stream_id = uuid.uuid4().hex
 
     def emit(self, record: logging.LogRecord) -> None:
         # 严格过滤：只接受本插件 logger 的日志，避免被根 logger / AstrBot 日志污染
         if not record.name or not record.name.startswith(self.PLUGIN_LOGGER_PREFIX):
             return
         try:
-            self._buffer.append(self.format(record))
+            formatted = self.format(record)
+            module = self._safe_text(record.module or "plugin", 40)
+            level = record.levelname.lower()
+            self.record_event(
+                record.levelname,
+                f"logger.{level}.{module}",
+                f"{module} 记录了一条 {record.levelname} 事件，详细信息仅在知的独立日志页查看",
+                text=formatted,
+            )
         except Exception:
             pass

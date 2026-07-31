@@ -2,7 +2,7 @@
 
 > 凝心溯溪系列知识模块：面向知识学习、检索与验证，支持自动上下文注入、自主多源检索、手动 URL / MediaWiki 来源、按用户/群聊隔离的 SQLite 记忆库、交叉验证与版本化。
 
-> **凝心溯溪系列** 当前完整插件清单为知、言、序、情、声、核：各插件职责独立、互不冲突，可按需组合使用，覆盖知识学习、对话调节、身份管理、关系状态、语音与更新管理。
+> **凝心溯溪系列** 当前完整插件清单为知、言、序、情、境、声、核：各插件职责独立、互不冲突，可按需组合使用，覆盖知识学习、对话调节、身份管理、关系状态、环境感知、语音与更新管理。
 
 | 字 | 模块 | 说明 |
 |----|------|------|
@@ -10,6 +10,7 @@
 | [言](https://github.com/qsbb/astrbot_plugin_conversation_flow) | 对话调节 | 沉默判断、智能分段、插话衔接 |
 | [序](https://github.com/qsbb/astrbot_plugin_identity_guardian) | 身份管理 | 关系感知、权限边界、群组行动 |
 | [情](https://github.com/qsbb/astrbot_plugin_relationship) | 关系状态 | 情绪、好感、信任、熟悉度状态记录与只读建议 |
+| [境](https://github.com/qsbb/astrbot_plugin_environment_awareness) | 环境感知 | 时间、天气、空气质量、预警与环境关心候选 |
 | [声](https://github.com/qsbb/astrbot_plugin_voice_hub) | 语音合成 | 双 TTS 后端、多音色管理、AI 导演 |
 | [核](https://github.com/qsbb/astrbot_plugin_update_manager) | 更新管理 | 安全检查、计划、串行更新与回滚 |
 
@@ -20,9 +21,17 @@
 - 命令入口：`/memory` 命令组；主要包括 `stats`、`list`、`search`、`info`、`forget`、`verify`、`export`、`versions`、`refresh`。
 - 页面/API 入口：插件注册多项 Web API；当前 README 不将其表述为固定管理页面，具体以运行时能力为准。
 
+### 系列诊断日志
+
+- 插件把必要的生命周期事件、警告和错误写入内存环形缓冲，并通过 `series.diagnostics@1.0` 只读契约供“核”的日志页汇总查看。
+- 这条诊断通道与 AstrBot 主日志隔离，不会把诊断记录转发到 AstrBot 日志；普通聊天正文也不会作为诊断日志保存。
+- 写入前会隐藏令牌、账号标识等敏感字段，并截断过长内容。缓冲仅存在于当前进程，重启或热重载后自动清空。
+- 自动捕获的告警只保留模块、函数、行号和异常类型，不保存格式化后的日志正文；清空或热重载会更换流标识，供“核”可靠丢弃旧游标。
+- “核”不是运行依赖：没有安装或没有启用“核”时，知仍照常学习、检索和验证，只是缺少统一日志查看入口。
+
 ## 简介
 
-`astrbot_plugin_active_learner` 是一个为 [AstrBot](https://github.com/AstrBotDevel/AstrBot) 设计的知识学习、检索与验证插件。它通过长期记忆能力，让机器人能够：
+`astrbot_plugin_active_learner` 是一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的知识学习、检索与验证插件。它通过长期记忆能力，让机器人能够：
 
 - **检索即注入**：每次 LLM 请求前，自动用 FTS5 全文检索相关记忆并注入上下文
 - **自主检索**：由当前对话模型结合不确定性、时效性、实体完整度和答错代价，判断是否搜索外部来源
@@ -125,6 +134,9 @@ LLM 工具 `verify_knowledge` 或指令 `/memory verify <主题>` 触发：
 
 ```
 aiohttp>=3.8.0
+numpy>=1.24.0
+pypdf>=4.0.0
+python-docx>=1.1.0
 ```
 
 （已写入 `requirements.txt`，AstrBot 会自动安装）

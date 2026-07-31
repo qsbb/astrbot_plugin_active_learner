@@ -15,7 +15,7 @@ import json
 import logging
 import re
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.provider import ProviderRequest
@@ -205,6 +205,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         # 强制不传播：防止 AstrBot 框架重置 propagate 导致插件日志泄漏到根 logger
         logger.propagate = False
         logger.addHandler(self._log_handler)
+        self._log_handler.record_event("INFO", "plugin.init", "知识插件开始初始化")
         if len(_before_handlers) > 1:
             logger.info(
                 f"日志隔离：已移除 {len(_before_handlers) - 1} 个非本插件 handler，"
@@ -346,6 +347,17 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         else:
             logger.info("当前 AstrBot 版本不支持 Plugin Pages，跳过 Dashboard 页面注册")
 
+        self._log_handler.record_event(
+            "INFO",
+            "plugin.ready",
+            "知识插件初始化完成",
+            {
+                "web_api_available": _WEB_AVAILABLE,
+                "tool_count": len(self._tools),
+                "bilibili_enabled": self._enable_bilibili,
+            },
+        )
+
     def plugin_health(self) -> dict[str, object]:
         checks = {
             "storage_ready": getattr(self, "store", None) is not None,
@@ -359,6 +371,22 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             "reasons": reasons,
             "version": PLUGIN_VERSION,
         }
+
+    def diagnostic_log_contract(self) -> dict[str, object]:
+        return {
+            "name": "series.diagnostics",
+            "version": "1.0",
+            "plugin": "astrbot_plugin_active_learner",
+            "capabilities": ("read", "clear"),
+            "storage": "memory_only",
+            "astrbot_log_propagation": False,
+        }
+
+    def diagnostic_events(self, after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
+        return self._log_handler.snapshot(after_seq=after_seq, limit=limit)
+
+    def diagnostic_clear(self) -> None:
+        self._log_handler.clear()
 
     # ---------- 跨插件知识桥接（公开契约） ----------
 
@@ -442,6 +470,10 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         except Exception:
             pass
         logger.info("ActiveLearner 已卸载，后台任务与 LLM 工具已回收，记忆已持久化")
+
+        self._log_handler.record_event(
+            "INFO", "plugin.terminated", "知识插件已卸载"
+        )
 
     def _cleanup_llm_tools(self) -> None:
         """清理本插件工具，避免热重载后残留同名旧实例。"""
