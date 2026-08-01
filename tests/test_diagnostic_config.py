@@ -131,7 +131,7 @@ def test_series_diagnostic_contract_keeps_legacy_page_and_structured_buffer():
     assert "logger.propagate = False" in main
 
 
-def test_series_diagnostic_snapshot_hides_raw_logger_message():
+def test_series_diagnostic_snapshot_exposes_only_redacted_logger_detail():
     source = _WEB_API.read_text(encoding="utf-8")
     node = next(
         item
@@ -167,8 +167,10 @@ def test_series_diagnostic_snapshot_hides_raw_logger_message():
     )
     payload = handler.snapshot()
     assert "private chat body" in buffer[-1]["text"]
-    assert "private chat body" not in str(payload["events"])
-    assert "user-a" not in str(payload["events"])
+    detail = payload["events"][-1]["details"]["log_detail"]
+    assert "private chat body" in detail
+    assert "user-a" not in detail
+    assert "<已隐藏标识>" in detail
     assert payload["stream_id"] == handler.snapshot()["stream_id"]
     old_stream_id = payload["stream_id"]
     handler.clear()

@@ -1819,12 +1819,16 @@ class _BufferHandler(logging.Handler):
     )
     _SECRET = re.compile(
         r"(?i)(token|api[_-]?key|secret|password|authorization|cookie|umo|"
-        r"user[_-]?id|group[_-]?id|platform[_-]?id)\s*[:=]\s*([^,\s]+)"
+        r"user[_-]?id|group[_-]?id|platform[_-]?id)(?:\s*[:=]\s*|\s+)"
+        r"(?:bearer\s+)?([^,\s]+)"
     )
     _PRIVATE_VALUE = re.compile(
         r"(?i)(user_text|prompt|response|reply|query|topic|content|scope|message|new_settings)\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^,\s]+)"
     )
     _LONG_NUMBER = re.compile(r"(?<![\w.])[0-9]{6,}(?![\w.])")
+    _ACTOR_ID = re.compile(
+        r"(?i)\b(?:user|group|account|person|session)[-_:][A-Za-z0-9_-]+\b"
+    )
     _URL_QUERY = re.compile(r"(https?://[^\s?]+)\?[^\s]+", re.IGNORECASE)
     _URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
     _PATH = re.compile(r"(?:[A-Za-z]:\\|/)[^\s]+")
@@ -1851,6 +1855,7 @@ class _BufferHandler(logging.Handler):
         text = cls._PRIVATE_VALUE.sub(r"\1=<已隐藏>", text)
         text = cls._EMAIL.sub("<已隐藏邮箱>", text)
         text = cls._OPAQUE_VALUE.sub("<已隐藏随机标识>", text)
+        text = cls._ACTOR_ID.sub("<已隐藏标识>", text)
         text = cls._LONG_NUMBER.sub("<已隐藏标识>", text)
         text = cls._URL_QUERY.sub(r"\1?[已隐藏参数]", text)
         text = cls._URL.sub("<已隐藏网址>", text)
@@ -1871,7 +1876,7 @@ class _BufferHandler(logging.Handler):
                 result[name] = value
             elif isinstance(value, (str, bytes)):
                 raw = value.decode(errors="replace") if isinstance(value, bytes) else value
-                result[name] = cls._safe_text(raw, 160)
+                result[name] = cls._safe_text(raw, 2000 if name.lower() == "log_detail" else 160)
             elif isinstance(value, (list, tuple)):
                 result[name] = [cls._safe_text(item, 80) for item in value[:8]]
         return result
@@ -1886,6 +1891,9 @@ class _BufferHandler(logging.Handler):
         text: str = "",
     ) -> dict[str, Any]:
         with self._lock:
+            safe_details = self._safe_details(details)
+            if text:
+                safe_details["log_detail"] = self._safe_text(text, 2000)
             self._sequence += 1
             event = {
                 "seq": self._sequence,
@@ -1895,7 +1903,7 @@ class _BufferHandler(logging.Handler):
                 "level": str(level).upper(),
                 "code": self._safe_text(code, 80),
                 "summary": self._safe_text(summary),
-                "details": self._safe_details(details),
+                "details": safe_details,
                 "text": self._safe_text(text or summary, 500),
             }
             self._buffer.append(event)
