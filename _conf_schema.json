@@ -67,9 +67,9 @@
         "default": true
     },
     "external_search_first_result_grace_seconds": {
-        "description": "首个搜索结果后的等待窗口（秒）",
+        "description": "多源搜索的慢源等待时间（秒）",
         "type": "float",
-        "hint": "任一外部搜索源首次返回非空结果后，最多再等待其它来源的秒数，随后取消慢源。",
+        "hint": "多个搜索源并行查询时，最快的来源返回结果后，最多再等其它来源这么多秒；超时的来源会被取消。",
         "default": 0.5
     },
     "web_search_only_highest_priority": {
@@ -130,9 +130,9 @@
         "default": true
     },
     "hybrid_search_weight": {
-        "description": "FTS5 与向量分数权重",
+        "description": "全文检索与语义向量的分数权重",
         "type": "string",
-        "hint": "格式 'fts,vec'，例如 '0.4,0.6' 表示 FTS5 占 40%，向量占 60%",
+        "hint": "格式 'fts,vec'。例如 '0.4,0.6' 表示关键词全文检索占 40%、语义向量检索占 60%，两者相加应为 1。",
         "default": "0.4,0.6"
     },
     "decay_half_life_days": {
@@ -142,7 +142,7 @@
         "default": 30
     },
     "enable_scope_fallback": {
-        "description": "启用全局知识回退检索",
+        "description": "允许私聊/群聊读取全局共享知识",
         "type": "bool",
         "hint": "当前私聊或群聊可额外读取 global:global 知识；不同私聊、不同群聊之间始终隔离",
         "default": true

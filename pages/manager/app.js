@@ -162,18 +162,20 @@ function renderTable(items) {
   state.currentItems = items;
   const tbody = document.getElementById("memory-tbody");
   if (!items.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">记忆库为空</td></tr>';
+    const emptyMsg = state.keyword
+      ? `没有找到与「${escapeHtml(state.keyword)}」相关的记忆，换个关键词试试`
+      : "记忆库为空，可通过顶部「⬆ 导入」或「🎯 主动学习」添加记忆";
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${emptyMsg}</td></tr>`;
     _updateSelectionToolbar();
     return;
   }
-  tbody.innerHTML = "";
-  for (const e of items) {
-    const tr = document.createElement("tr");
+  // 一次性拼接再写入，避免逐行 appendChild 触发多次重排
+  tbody.innerHTML = items.map((e) => {
     const checked = state.selectedIds.has(e.id) ? "checked" : "";
-    if (checked) tr.classList.add("selected");
-    tr.innerHTML = `
+    return `
+    <tr${checked ? ' class="selected"' : ""}>
       <td class="col-check">
-        <input type="checkbox" data-id="${escapeHtml(e.id)}" ${checked} />
+        <input type="checkbox" data-id="${escapeHtml(e.id)}" aria-label="选择「${escapeHtml(e.topic)}」" ${checked} />
       </td>
       <td class="cell-topic" title="${escapeHtml(e.topic)}">${escapeHtml(e.topic)}</td>
       <td class="cell-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 80))}</td>
@@ -187,9 +189,8 @@ function renderTable(items) {
         <button type="button" data-act="verify" data-id="${escapeHtml(e.id)}">验证</button>
         <button type="button" data-act="forget" data-id="${escapeHtml(e.id)}" class="danger">删除</button>
       </td>
-    `;
-    tbody.appendChild(tr);
-  }
+    </tr>`;
+  }).join("");
   _updateSelectionToolbar();
 }
 
@@ -268,18 +269,31 @@ async function _batchDelete(ids) {
   const confirmed = await _confirmModal(`确定删除选中的 ${ids.length} 条记忆？此操作不可恢复。`);
   if (!confirmed) return;
   const btn = document.getElementById("btn-batch-delete");
-  if (btn) btn.disabled = true;
-  let ok = 0, fail = 0;
-  for (const id of ids) {
-    try {
-      await bridge.apiPost(`memory/${id}/forget`, {});
-      ok++;
-    } catch (e) {
-      console.error(`批量删除失败 (id=${id}):`, e);
-      fail++;
-    }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "删除中…";
   }
-  if (btn) btn.disabled = false;
+  let ok = 0, fail = 0;
+  // 并发执行（最多 4 个同时请求），避免条目多时长时间串行等待
+  const CONCURRENCY = 4;
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < ids.length) {
+      const id = ids[nextIndex++];
+      try {
+        await bridge.apiPost(`memory/${id}/forget`, {});
+        ok++;
+      } catch (e) {
+        console.error(`批量删除失败 (id=${id}):`, e);
+        fail++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "批量删除";
+  }
   showToast(`批量删除完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
   state.selectedIds.clear();
   await Promise.all([loadMemories(), loadStats()]);
@@ -568,12 +582,20 @@ async function loadLogs(forceScroll = false) {
     const data = await bridge.apiGet("logs");
     const logs = data.logs || [];
     if (!logs.length) {
-      el.textContent = "（暂无日志）";
+      if (loadLogs._lastSig !== "empty") {
+        loadLogs._lastSig = "empty";
+        el.textContent = "（暂无日志）";
+      }
       return;
     }
-    el.innerHTML = logs
-      .map((line) => `<div class="log-line">${escapeHtml(line)}</div>`)
-      .join("");
+    // 内容未变化时跳过整表重渲染，避免 2 秒轮询反复重建数百个 DOM 节点
+    const sig = `${logs.length}|${logs[logs.length - 1]}`;
+    if (sig !== loadLogs._lastSig) {
+      loadLogs._lastSig = sig;
+      el.innerHTML = logs
+        .map((line) => `<div class="log-line">${escapeHtml(line)}</div>`)
+        .join("");
+    }
     // 自动滚动：开关开启 + (强制滚动 或 用户之前在底部)
     // forceScroll=true 用于展开面板/手动刷新；轮询时 false，避免打断向上查看历史
     if (autoScroll && (forceScroll || wasAtBottom)) {
@@ -759,7 +781,8 @@ function bindEvents() {
       state.scopeId = "";
     }
     state.page = 1;
-    refreshAll();
+    // scope 列表与 Provider 设置不随筛选变化，只刷新统计和记忆列表，避免重复请求
+    Promise.all([loadStats(), loadMemories()]);
   });
 
   document.getElementById("search-form").addEventListener("submit", (e) => {
@@ -870,6 +893,15 @@ function bindEvents() {
       if (el) el.scrollTop = el.scrollHeight;
     }
   });
+  // label 位于 summary 内：阻止默认行为避免误折叠/展开面板，手动切换 checkbox
+  document.querySelector("#log-panel .log-action-label")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const cb = document.getElementById("log-autoscroll");
+    if (cb) {
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event("change"));
+    }
+  });
 
   document.querySelector(".modal-close").addEventListener("click", closeModal);
   document.querySelector(".modal-backdrop").addEventListener("click", closeModal);
@@ -878,9 +910,6 @@ function bindEvents() {
   });
   document.getElementById("detail-forget").addEventListener("click", () => {
     if (state.currentDetailId) forgetMemory(state.currentDetailId);
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModal();
   });
 }
 
@@ -1045,7 +1074,8 @@ async function setUrlSourceEnabled(sourceId, enabled) {
 }
 
 async function deleteUrlSource(sourceId) {
-  if (!window.confirm("确定删除这个 URL 来源？")) return;
+  const confirmed = await _confirmModal("确定删除这个 URL 来源？删除后搜索与验证将不再使用它。");
+  if (!confirmed) return;
   try {
     await bridge.apiPost(`url_sources/${sourceId}/delete`, {});
     await loadUrlSources();
@@ -1157,6 +1187,11 @@ async function saveSettings() {
     enable_cross_domain: document.getElementById("settings-enable-cross-domain").checked,
     cross_domain_exclude_admin: document.getElementById("settings-cross-domain-exclude-admin").checked,
   };
+  const saveBtn = document.getElementById("settings-save");
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "保存中…";
+  }
   try {
     const result = await bridge.apiPost("settings", payload);
     state.settings = {
@@ -1185,12 +1220,19 @@ async function saveSettings() {
     closeSettingsModal();
   } catch (e) {
     showToast(`保存失败: ${e.message}`, true);
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "保存";
+    }
   }
 }
 
 function switchSettingsTab(tabName) {
   document.querySelectorAll(".settings-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.tab === tabName);
+    const active = btn.dataset.tab === tabName;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
   });
   document.querySelectorAll(".settings-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.panel === tabName);
@@ -1208,6 +1250,8 @@ function bindSettingsEvents() {
   document.querySelectorAll(".settings-tab").forEach((btn) => {
     btn.addEventListener("click", () => switchSettingsTab(btn.dataset.tab));
   });
+  // 初始化 aria-selected
+  switchSettingsTab(document.querySelector(".settings-tab.active")?.dataset.tab || "llm");
   bindDomainScopeTags();
   document.getElementById("settings-provider").addEventListener("change", (e) => {
     updateNoProviderHint(e.target.value, state.providers.effective);
@@ -1230,16 +1274,6 @@ function bindSettingsEvents() {
     if (!button) return;
     const item = button.closest("[data-source-id]");
     if (item) deleteUrlSource(item.dataset.sourceId);
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      const diag = document.getElementById("diagnostic-modal");
-      if (diag && !diag.classList.contains("hidden")) {
-        closeDiagnosticModal();
-      } else {
-        closeSettingsModal();
-      }
-    }
   });
 
   // 诊断信息：设置页内按钮 → 打开诊断 modal
@@ -1273,7 +1307,9 @@ function showImportResult(html, isError = false) {
 
 function switchImportTab(tabName) {
   document.querySelectorAll("#import-modal .tab-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.tab === tabName);
+    const active = btn.dataset.tab === tabName;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
   });
   document.querySelectorAll("#import-modal .tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.panel === tabName);
@@ -1481,6 +1517,8 @@ function bindImportEvents() {
   document.querySelectorAll("#import-modal .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchImportTab(btn.dataset.tab));
   });
+  // 初始化 aria-selected
+  switchImportTab(document.querySelector("#import-modal .tab-btn.active")?.dataset.tab || "text");
 
   document
     .querySelectorAll("#import-modal .modal-close, #import-modal .modal-backdrop")
@@ -1513,9 +1551,6 @@ function bindImportEvents() {
     submitImportFile(e.target, "import_txt", "TXT");
   });
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeImportModal();
-  });
 }
 
 // ---------- Config Modal（直接读取 _conf_schema.json 渲染） ----------
@@ -1676,7 +1711,11 @@ async function saveConfig() {
       configState.original[k] = payload[k];
     }
     closeConfigModal();
-    await loadDebug();
+    // 仅当诊断弹窗打开时才重新拉取诊断数据，避免多余请求
+    const diagModal = document.getElementById("diagnostic-modal");
+    if (diagModal && !diagModal.classList.contains("hidden")) {
+      await loadDebug();
+    }
   } catch (e) {
     showToast(`保存失败：${escapeHtml(e.message || String(e))}`, true);
   } finally {
@@ -1687,8 +1726,12 @@ async function saveConfig() {
   }
 }
 
-function resetConfigToDefault() {
-  if (!confirm("确认将所有字段重置为 schema 默认值？此操作只填入表单，需点击「保存」才生效。")) {
+async function resetConfigToDefault() {
+  const confirmed = await _confirmModal(
+    "确认将所有字段重置为 schema 默认值？\n此操作只填入表单，需点击「保存」才生效。",
+    "填入默认值"
+  );
+  if (!confirmed) {
     return;
   }
   for (const f of configState.fields) {
@@ -1711,9 +1754,6 @@ function bindConfigEvents() {
     });
   document.getElementById("config-save").addEventListener("click", saveConfig);
   document.getElementById("config-reset").addEventListener("click", resetConfigToDefault);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeConfigModal();
-  });
 }
 
 async function init() {
@@ -1796,16 +1836,6 @@ function bindConfidenceModalEvents() {
     _applySelectionToUI();
     showToast(`已选择 ${state.selectedIds.size} 条置信度低于 ${threshold}% 的记忆`);
     closeConfidenceModal();
-  });
-
-  // Escape 键关闭
-  document.addEventListener("keydown", function _onConfKey(e) {
-    if (e.key === "Escape") {
-      const modal = document.getElementById("confidence-modal");
-      if (!modal.classList.contains("hidden")) {
-        closeConfidenceModal();
-      }
-    }
   });
 }
 
@@ -1942,14 +1972,6 @@ function bindPriorityLearnEvents() {
       "#priority-learn-modal .modal-close, #priority-learn-modal .modal-backdrop, #priority-learn-close"
     )
     .forEach((el) => el.addEventListener("click", closePriorityLearnModal));
-  document.addEventListener("keydown", function _onPlKey(e) {
-    if (e.key === "Escape") {
-      const modal = document.getElementById("priority-learn-modal");
-      if (modal && !modal.classList.contains("hidden")) {
-        closePriorityLearnModal();
-      }
-    }
-  });
 }
 
 // ---------- Builtin KB Modal（从 AstrBot 内置知识库导入） ----------
@@ -2216,7 +2238,28 @@ function bindBuiltinKbEvents() {
   document.getElementById("builtin-kb-select-all").addEventListener("click", builtinKbSelectAll);
   document.getElementById("builtin-kb-select-none").addEventListener("click", builtinKbSelectNone);
   document.getElementById("builtin-kb-import").addEventListener("click", importBuiltinKb);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeBuiltinKbModal();
-  });
 }
+
+// ---------- 全局 Escape：只关闭最上层可见弹窗 ----------
+
+const _ESCAPE_CLOSERS = [
+  ["priority-learn-modal", closePriorityLearnModal],
+  ["confidence-modal", closeConfidenceModal],
+  ["builtin-kb-modal", closeBuiltinKbModal],
+  ["import-modal", closeImportModal],
+  ["config-modal", closeConfigModal],
+  ["diagnostic-modal", closeDiagnosticModal],
+  ["settings-modal", closeSettingsModal],
+  ["detail-modal", closeModal],
+];
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  for (const [id, closeFn] of _ESCAPE_CLOSERS) {
+    const modal = document.getElementById(id);
+    if (modal && !modal.classList.contains("hidden")) {
+      closeFn();
+      break;
+    }
+  }
+});

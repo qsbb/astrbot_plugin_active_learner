@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=20260729-bili-toggle" />
+  <link rel="stylesheet" href="./style.css?v=20260803-log-a11y" />
 </head>
 <body>
   <div class="shell">
@@ -36,7 +36,7 @@
         </select>
       </label>
       <form id="search-form" class="control search-control">
-        <input type="search" id="search-input" placeholder="按主题或内容搜索…" />
+        <input type="search" id="search-input" placeholder="按主题或内容搜索…" aria-label="按主题或内容搜索" />
         <button type="submit">搜索</button>
         <button type="button" id="search-clear">清空</button>
       </form>
@@ -57,7 +57,7 @@
     </details>
 
     <details id="log-panel" class="debug-panel">
-      <summary>📜 插件日志 <button type="button" id="btn-refresh-logs" style="margin-left:8px;font-size:12px;">刷新</button><label style="margin-left:8px;font-size:12px;cursor:pointer;"><input type="checkbox" id="log-autoscroll" checked /> 自动滚动</label></summary>
+      <summary>📜 插件日志 <span class="log-summary-actions"><button type="button" id="btn-refresh-logs" class="log-action-btn">刷新</button><label class="log-action-label"><input type="checkbox" id="log-autoscroll" checked /> 自动滚动</label></span></summary>
       <div id="log-content" class="debug-content log-content">点击刷新或展开查看</div>
     </details>
 
@@ -77,7 +77,7 @@
       <table class="memory-table">
         <thead>
           <tr>
-            <th class="col-check"><!-- checkbox via JS --></th>
+            <th class="col-check"><span class="sr-only">选择</span></th>
             <th>主题</th>
             <th>内容预览</th>
             <th>作用域</th>
@@ -732,6 +732,6 @@
   </div>
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script type="module" src="./app.js?v=20260729-bili-toggle"></script>
+  <script type="module" src="./app.js?v=20260803-log-a11y"></script>
 </body>
 </html>
