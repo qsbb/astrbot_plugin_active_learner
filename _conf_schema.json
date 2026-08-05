@@ -147,6 +147,27 @@
         "hint": "当前私聊或群聊可额外读取 global:global 知识；不同私聊、不同群聊之间始终隔离",
         "default": true
     },
+    "graph_memory_enabled": {
+        "description": "启用关联图补充检索",
+        "type": "bool",
+        "hint": "默认关闭。开启后会从现有记忆派生‘线索-关系-内容’索引，只在普通召回不足或问题需要比较、因果、时间线等多步关系时补充候选；不会把图索引当作新的事实来源。",
+        "default": false
+    },
+    "graph_reconstruction_mode": {
+        "description": "关联图重建方式",
+        "type": "string",
+        "options": ["off", "fast", "smart"],
+        "hint": "off=不参与检索；fast=只走本地 SQLite 图索引，不增加模型调用；smart=复杂问题最多额外调用一次插件 LLM 对候选排序，2.5 秒超时或失败时自动退回本地顺序。",
+        "default": "fast"
+    },
+    "graph_max_hops": {
+        "description": "关联图最大跳数",
+        "type": "int",
+        "hint": "范围 1-2。1 只返回直接关联，2 允许通过同一线索补充一层相关记忆；作用域隔离和全局知识开关仍然照常生效。",
+        "default": 2,
+        "minimum": 1,
+        "maximum": 2
+    },
     "priority_topics": {
         "description": "关心的领域（优先检索）",
         "type": "string",

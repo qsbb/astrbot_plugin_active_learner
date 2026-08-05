@@ -13,6 +13,12 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
+from .graph_memory import (
+    GraphCandidate,
+    build_graph_associations,
+    normalize_graph_text,
+    query_tag_hints,
+)
 from .models import (
     SCOPE_GLOBAL,
     MemoryEntry,
@@ -118,7 +124,27 @@ CREATE TABLE IF NOT EXISTS llm_token_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_token_ts ON llm_token_usage(ts);
 CREATE INDEX IF NOT EXISTS idx_token_provider ON llm_token_usage(provider_id);
-"""
+
+CREATE TABLE IF NOT EXISTS memory_graph_edges (
+  memory_id TEXT NOT NULL,
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  cue TEXT NOT NULL,
+  cue_norm TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  tag_norm TEXT NOT NULL,
+  weight REAL DEFAULT 0.7,
+  source TEXT DEFAULT 'deterministic',
+  created_at REAL DEFAULT 0,
+  updated_at REAL DEFAULT 0,
+  PRIMARY KEY(memory_id, cue_norm, tag_norm),
+  FOREIGN KEY(memory_id) REFERENCES memories(id)
+);
+CREATE INDEX IF NOT EXISTS idx_graph_scope_cue ON memory_graph_edges(scope_type, scope_id, cue_norm);
+CREATE INDEX IF NOT EXISTS idx_graph_scope_tag ON memory_graph_edges(scope_type, scope_id, tag_norm);
+CREATE TRIGGER IF NOT EXISTS memory_graph_edges_ad AFTER DELETE ON memories BEGIN
+  DELETE FROM memory_graph_edges WHERE memory_id = old.id;
+END;"""
 
 # 查询用列顺序（与 MemoryEntry.from_row 对齐，含 keywords + v1.1.2 新字段 + v1.1.6.5 origin）
 SELECT_COLS = (
@@ -167,6 +193,62 @@ def _migrate_schema(conn) -> int:
             conn.execute("ALTER TABLE memories ADD COLUMN origin TEXT DEFAULT ''")
         conn.execute("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (2, ?)", (_time.time(),))
         current = 2
+    if current < 3:
+        # v3: Cue-Tag-Content 关联索引；只从既有字段确定性回填，不调用 LLM。
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS memory_graph_edges (
+          memory_id TEXT NOT NULL,
+          scope_type TEXT NOT NULL,
+          scope_id TEXT NOT NULL,
+          cue TEXT NOT NULL,
+          cue_norm TEXT NOT NULL,
+          tag TEXT NOT NULL,
+          tag_norm TEXT NOT NULL,
+          weight REAL DEFAULT 0.7,
+          source TEXT DEFAULT 'deterministic',
+          created_at REAL DEFAULT 0,
+          updated_at REAL DEFAULT 0,
+          PRIMARY KEY(memory_id, cue_norm, tag_norm),
+          FOREIGN KEY(memory_id) REFERENCES memories(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_graph_scope_cue
+          ON memory_graph_edges(scope_type, scope_id, cue_norm);
+        CREATE INDEX IF NOT EXISTS idx_graph_scope_tag
+          ON memory_graph_edges(scope_type, scope_id, tag_norm);
+        CREATE TRIGGER IF NOT EXISTS memory_graph_edges_ad AFTER DELETE ON memories BEGIN
+          DELETE FROM memory_graph_edges WHERE memory_id = old.id;
+        END;
+        """)
+        rows = conn.execute(
+            "SELECT id, scope_type, scope_id, topic, content, keywords, "
+            "created_at, updated_at FROM memories"
+        ).fetchall()
+        for row in rows:
+            associations = build_graph_associations(
+                row[3], row[4], (row[5] or "").split()
+            )
+            conn.executemany(
+                """INSERT OR REPLACE INTO memory_graph_edges
+                   (memory_id, scope_type, scope_id, cue, cue_norm, tag, tag_norm,
+                    weight, source, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        row[0], row[1], row[2], association.cue,
+                        normalize_graph_text(association.cue),
+                        association.tag,
+                        normalize_graph_text(association.tag, max_chars=60),
+                        association.weight, association.source,
+                        row[6] or 0, row[7] or row[6] or 0,
+                    )
+                    for association in associations
+                ],
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (3, ?)",
+            (_time.time(),),
+        )
+        current = 3
     return current
 
 
@@ -225,6 +307,7 @@ class MemoryStore:
         sources_detail: Optional[list[str]] = None,
         confidence: float = 0.3,
         origin: str = "",
+        graph_associations: Optional[list[object]] = None,
     ) -> MemoryEntry:
         """添加或更新记忆。同 scope 同 topic 命中则合并。"""
         keywords = keywords or []
@@ -256,6 +339,10 @@ class MemoryStore:
                         new_confidence, now, origin, entry_id,
                     ),
                 )
+                self._sync_graph_edges_locked(
+                    entry_id, scope, topic, content, merged_keywords,
+                    graph_associations, source,
+                )
                 return self.get_entry_by_id(entry_id)  # type: ignore[return-value]
             else:
                 self._conn.execute(
@@ -269,6 +356,10 @@ class MemoryStore:
                         entry_id, scope.type, scope.id, topic, content, keywords_str,
                         source, sources_json, confidence, now, now, origin,
                     ),
+                )
+                self._sync_graph_edges_locked(
+                    entry_id, scope, topic, content, keywords,
+                    graph_associations, source,
                 )
                 self._evict_if_needed_locked(scope)
                 return self.get_entry_by_id(entry_id)  # type: ignore[return-value]
@@ -294,7 +385,8 @@ class MemoryStore:
             where_params = (entry_id, scope.type, scope.id)
         with self._lock:
             row = self._conn.execute(
-                "SELECT content, confidence, source, keywords FROM memories WHERE " + where,
+                "SELECT content, confidence, source, keywords, topic, scope_type, scope_id "
+                "FROM memories WHERE " + where,
                 where_params,
             ).fetchone()
             if not row:
@@ -334,6 +426,15 @@ class MemoryStore:
                        keywords = ?, updated_at = ? WHERE """ + where,
                     (content, confidence, source, keywords_str, now, *where_params),
                 )
+            self._sync_graph_edges_locked(
+                entry_id,
+                Scope(row["scope_type"], row["scope_id"]),
+                row["topic"],
+                content,
+                keywords_str.split(),
+                None,
+                source,
+            )
             return True
 
     def inc_challenge(self, entry_id: str, scope: Optional[Scope] = None) -> None:
@@ -407,6 +508,42 @@ class MemoryStore:
             )
             return cursor.rowcount > 0, target if cursor.rowcount > 0 else None
 
+    def _sync_graph_edges_locked(
+        self,
+        entry_id: str,
+        scope: Scope,
+        topic: str,
+        content: str,
+        keywords: list[str],
+        supplied: Optional[list[object]],
+        source: str,
+    ) -> None:
+        """同步派生图边；图索引失败不影响主记忆写入。"""
+        try:
+            associations = build_graph_associations(topic, content, keywords, supplied)
+            now = now_ts()
+            self._conn.execute(
+                "DELETE FROM memory_graph_edges WHERE memory_id = ?", (entry_id,)
+            )
+            self._conn.executemany(
+                """INSERT OR REPLACE INTO memory_graph_edges
+                   (memory_id, scope_type, scope_id, cue, cue_norm, tag, tag_norm,
+                    weight, source, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        entry_id, scope.type, scope.id, association.cue,
+                        normalize_graph_text(association.cue),
+                        association.tag,
+                        normalize_graph_text(association.tag, max_chars=60),
+                        association.weight, association.source or source,
+                        now, now,
+                    )
+                    for association in associations
+                ],
+            )
+        except Exception:
+            return
     def _save_version_locked(self, entry_id: str, content: str, confidence: float, source: str, reason: str) -> None:
         row = self._conn.execute(
             "SELECT COALESCE(MAX(version_no), 0) + 1 AS next_no FROM memory_versions WHERE memory_id = ?",
@@ -483,6 +620,149 @@ class MemoryStore:
                 return None
             return MemoryEntry.from_row(row)
 
+    def search_graph(
+        self,
+        scope: Scope,
+        query: str,
+        top_k: int = 8,
+        *,
+        include_global: bool = True,
+        seed_memory_ids: Optional[list[str]] = None,
+        max_hops: int = 2,
+        max_cues: int = 4,
+        tags_per_cue: int = 3,
+    ) -> list[SearchHit]:
+        """受预算约束的 Cue-Tag-Content 检索，内容仍来自 memories。"""
+        if not query or top_k <= 0:
+            return []
+        max_hops = max(1, min(2, int(max_hops)))
+        max_cues = max(1, min(4, int(max_cues)))
+        tags_per_cue = max(1, min(3, int(tags_per_cue)))
+        qnorm = normalize_graph_text(query)
+        if len(qnorm) < 2:
+            return []
+        m_cols = ", ".join(f"m.{c.strip()}" for c in SELECT_COLS.split(","))
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT e.memory_id, e.cue, e.cue_norm, e.tag, e.tag_norm,
+                           e.weight, e.source, {m_cols}
+                    FROM memory_graph_edges e
+                    JOIN memories m ON m.id = e.memory_id
+                    WHERE ((e.scope_type = ? AND e.scope_id = ?)
+                           OR (? AND e.scope_type = ? AND e.scope_id = ?))""",
+                (scope.type, scope.id, include_global, SCOPE_GLOBAL, SCOPE_GLOBAL),
+            ).fetchall()
+            if not rows:
+                return []
+            by_cue: dict[str, list] = {}
+            by_memory: dict[str, list] = {}
+            direct: list = []
+            seed_ids = set(seed_memory_ids or [])
+            for row in rows:
+                by_cue.setdefault(row["cue_norm"], []).append(row)
+                by_memory.setdefault(row["memory_id"], []).append(row)
+                cue_match = row["cue_norm"] in qnorm or (
+                    len(qnorm) >= 3 and qnorm in row["cue_norm"]
+                )
+                if cue_match or row["memory_id"] in seed_ids:
+                    direct.append(row)
+            if not direct:
+                return []
+            selected_direct: list = []
+            seen_cues: set[str] = set()
+            for row in sorted(
+                direct,
+                key=lambda item: (float(item["weight"] or 0.0), len(item["cue_norm"])),
+                reverse=True,
+            ):
+                cue_norm = row["cue_norm"]
+                if cue_norm not in seen_cues and len(seen_cues) >= max_cues:
+                    continue
+                if sum(1 for item in selected_direct if item["cue_norm"] == cue_norm) >= tags_per_cue:
+                    continue
+                seen_cues.add(cue_norm)
+                selected_direct.append(row)
+            hints = query_tag_hints(query)
+            candidates: dict[str, GraphCandidate] = {}
+
+            def add_candidate(row, hops: int, base: float, route: tuple[str, ...]):
+                entry = MemoryEntry.from_row(row)
+                allowed = (
+                    (entry.scope_type == scope.type and entry.scope_id == scope.id)
+                    or (
+                        include_global
+                        and entry.scope_type == SCOPE_GLOBAL
+                        and entry.scope_id == SCOPE_GLOBAL
+                    )
+                )
+                if not allowed:
+                    return
+                tag_bonus = 0.08 if row["tag_norm"] in hints else 0.0
+                quality = 0.75 + min(0.25, max(0.0, entry.confidence) * 0.25)
+                scope_penalty = 0.9 if entry.scope_type == SCOPE_GLOBAL else 1.0
+                score = (
+                    base + float(row["weight"] or 0.0) * 0.12 + tag_bonus
+                ) * quality * scope_penalty
+                candidate = GraphCandidate(
+                    memory_id=entry.id,
+                    cue=row["cue"],
+                    tag=row["tag"],
+                    hops=hops,
+                    score=score,
+                    path=route + (f"memory:{entry.id}",),
+                )
+                old = candidates.get(entry.id)
+                if old is None or candidate.score > old.score:
+                    candidates[entry.id] = candidate
+
+            for row in selected_direct:
+                add_candidate(row, 1, 0.34, (f"cue:{row['cue']}", f"tag:{row['tag']}"))
+
+            if max_hops >= 2:
+                bridge_cues = {
+                    edge["cue_norm"]
+                    for row in selected_direct
+                    for edge in by_memory.get(row["memory_id"], [])
+                }
+                direct_memory_ids = {item["memory_id"] for item in selected_direct}
+                for cue_norm in bridge_cues:
+                    for row in by_cue.get(cue_norm, [])[: tags_per_cue * 3]:
+                        if row["memory_id"] in direct_memory_ids:
+                            continue
+                        add_candidate(
+                            row,
+                            2,
+                            0.16,
+                            (
+                                f"reverse:memory:{selected_direct[0]['memory_id']}",
+                                f"cue:{row['cue']}",
+                                f"tag:{row['tag']}",
+                            ),
+                        )
+            ranked = sorted(candidates.values(), key=lambda item: item.score, reverse=True)[:top_k]
+            by_id = {row["memory_id"]: row for row in rows}
+            return [
+                SearchHit(
+                    entry=MemoryEntry.from_row(by_id[item.memory_id]),
+                    score=item.score,
+                    retrieval_mode="graph",
+                    retrieval_path=item.path,
+                )
+                for item in ranked
+                if item.memory_id in by_id
+            ]
+
+    def graph_edge_count(self, scope: Optional[Scope] = None) -> int:
+        """返回图边数量，供诊断使用；不影响知识契约。"""
+        with self._lock:
+            if scope is None:
+                row = self._conn.execute("SELECT COUNT(*) AS c FROM memory_graph_edges").fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM memory_graph_edges WHERE scope_type = ? AND scope_id = ?",
+                    (scope.type, scope.id),
+                ).fetchone()
+            return int(row["c"] if row else 0)
     def search(
         self,
         scope: Scope,
@@ -932,6 +1212,7 @@ class MemoryStore:
         parent_doc_id: str = "",
         now: float = 0.0,
         origin: str = "",
+        graph_associations: Optional[list[object]] = None,
     ) -> MemoryEntry:
         """直接插入 chunk 条目（用调用方提供的 chunk_id，不走 add_or_update 的 topic 哈希）。
 
@@ -952,6 +1233,10 @@ class MemoryStore:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, 0, ?, ?, ?)""",
                 (chunk_id, scope.type, scope.id, topic, content, keywords_str,
                  source, sources_json, confidence, now, now, parent_doc_id, now, origin),
+            )
+            self._sync_graph_edges_locked(
+                chunk_id, scope, topic, content, keywords,
+                graph_associations, source,
             )
             return self.get_entry_by_id(chunk_id)  # type: ignore[return-value]
 

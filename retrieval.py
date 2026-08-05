@@ -20,7 +20,14 @@ from .constants import (
     _MEMORY_INJECT_MAX_COUNT,
     _MEMORY_INJECT_TOTAL_CHARS,
 )
+from .graph_memory import (
+    is_complex_query,
+    normalize_reconstruction_mode,
+    parse_route_selection,
+    should_reconstruct,
+)
 from .models import Scope
+from .plugin_logger import logger
 from .runtime import (
     build_semantic_search_instruction,
     comparison_coverage,
@@ -261,6 +268,42 @@ class RetrievalMixin:
                     by_id[hit.entry.id] = hit
         return sorted(by_id.values(), key=lambda hit: hit.score, reverse=True)
 
+    async def _route_graph_hits(self, query: str, hits: list) -> list:
+        """智能模式下最多一次 LLM 选路；失败返回原图候选。"""
+        if not hits or not getattr(self, "llm_service", None):
+            return hits
+        allowed = [hit.entry.id for hit in hits]
+        evidence = "\n".join(
+            f"ID={hit.entry.id} CUE={hit.retrieval_path[0] if hit.retrieval_path else ''} "
+            f"TAG={hit.retrieval_path[1] if len(hit.retrieval_path) > 1 else ''} "
+            f"CONTENT={hit.entry.content[:240]}"
+            for hit in hits
+        )
+        prompt = (
+            "你是记忆检索路由器，只能从候选 ID 中选择最有助于回答问题。"
+            "不要生成事实，不要改写内容，不要输出候选之外的 ID。\n"
+            f"问题：{query[:500]}\n候选：\n{evidence}\n"
+            "严格输出一行：SELECT: <ID1>, <ID2>\n"
+        )
+        try:
+            reply = await asyncio.wait_for(
+                self.llm_service.generate(
+                    prompt=prompt,
+                    provider_id=getattr(self, "_cfg_llm_provider_id", "") or None,
+                ),
+                timeout=2.5,
+            )
+        except Exception as exc:
+            logger.debug("图记忆智能选路降级: %s", exc)
+            return hits
+        selected = parse_route_selection(reply, allowed, max_count=4)
+        if not selected:
+            return hits
+        order = {memory_id: index for index, memory_id in enumerate(selected)}
+        return sorted(
+            hits,
+            key=lambda hit: order.get(hit.entry.id, len(order) + 1),
+        )
     async def _retrieve_memory(
         self, scope: Scope, query: str
     ) -> tuple[list, str, dict[str, bool]]:
@@ -329,6 +372,51 @@ class RetrievalMixin:
                 mode = "hybrid"
             coverage = comparison_coverage(objects, hits)
 
+        graph_mode = normalize_reconstruction_mode(
+            getattr(self, "_graph_reconstruction_mode", "off")
+        )
+        graph_enabled = bool(getattr(self, "_graph_memory_enabled", False))
+        graph_gate = (
+            graph_enabled
+            and hasattr(self.store, "search_graph")
+            and (
+                should_reconstruct(
+                    query,
+                    mode=graph_mode,
+                    passive_hit_count=len(hits),
+                    required_hit_count=self._context_inject_count,
+                    comparison_coverage=coverage,
+                )
+                or (
+                    is_complex_query(query)
+                    and (
+                        not self._fts_hits_sufficient(hits)
+                        or not all(coverage.values())
+                    )
+                )
+            )
+        )
+        if graph_gate:
+            try:
+                graph_hits = await asyncio.to_thread(
+                    self.store.search_graph,
+                    scope,
+                    query,
+                    8,
+                    include_global=self._enable_scope_fallback,
+                    seed_memory_ids=[hit.entry.id for hit in hits[:4]],
+                    max_hops=getattr(self, "_graph_max_hops", 2),
+                    max_cues=4,
+                    tags_per_cue=3,
+                )
+                if graph_mode == "smart" and is_complex_query(query):
+                    graph_hits = await self._route_graph_hits(query, graph_hits)
+                if graph_hits:
+                    hits = self._merge_search_hits(hits, graph_hits)
+                    mode = f"{mode}+graph"
+                    coverage = comparison_coverage(objects, hits)
+            except Exception as exc:
+                logger.debug("图记忆检索降级: %s", exc)
         if objects:
             selected = []
             selected_ids = set()
@@ -350,7 +438,12 @@ class RetrievalMixin:
         elif hits and topic_terms(query):
             # 非对比问题要求单条候选完整覆盖当前主题实体。宽泛共同词命中不应
             # 进入上下文，否则高置信度的另一实体会先入为主地污染主模型判断。
-            hits = [hit for hit in hits if entry_covers_topic(query, hit)]
+            hits = [
+                hit
+                for hit in hits
+                if getattr(hit, "retrieval_mode", "") == "graph"
+                or entry_covers_topic(query, hit)
+            ]
 
         return hits[: self._context_inject_count], mode, coverage
 

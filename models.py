@@ -168,6 +168,8 @@ class SearchHit:
 
     entry: MemoryEntry
     score: float
+    retrieval_mode: str = ""
+    retrieval_path: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def topic(self) -> str:

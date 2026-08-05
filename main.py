@@ -47,6 +47,7 @@ from .verifier import Verifier
 # v1.1.5.0：架构重构 —— 统一服务层
 from .config_manager import ConfigManager
 from .llm_service import LLMService
+from .graph_memory import normalize_reconstruction_mode
 from .importer import Importer  # noqa: F811
 
 # v1.2.9：main.py 分层重构 —— 无装饰器的方法按职责拆到三个 mixin。
@@ -232,6 +233,15 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self._context_inject_count = max(
             1, min(_MEMORY_INJECT_MAX_COUNT, int(cfg.get("context_inject_count", 3)))
         )
+        # 图记忆只是既有 memories 的派生检索索引，不保存独立事实。默认关闭，
+        # 开启后也仅在普通召回不足或复杂问题需要补全关系时参与。
+        self._graph_memory_enabled = bool(cfg.get("graph_memory_enabled", False))
+        self._graph_reconstruction_mode = normalize_reconstruction_mode(
+            cfg.get("graph_reconstruction_mode", "fast")
+        )
+        self._graph_max_hops = max(
+            1, min(2, int(cfg.get("graph_max_hops", 2)))
+        )
         # priority boost 动态衰减：命中关心领域重置为 max，未命中则逐步衰减到 min
         self._priority_boost_max = float(cfg.get("priority_boost_max", 1.3))
         self._priority_boost_min = float(cfg.get("priority_boost_min", 1.0))
@@ -376,8 +386,10 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         return {
             "name": "series.diagnostics",
             "version": "1.0",
-            "plugin": "astrbot_plugin_active_learner",
-            "capabilities": ("read", "clear"),
+            "series_id": "ningxin_suxi",
+            "plugin_id": "astrbot_plugin_active_learner",
+            "plugin_name": "知",
+            "capabilities": ("read", "clear", "read_events", "clear_events"),
             "storage": "memory_only",
             "astrbot_log_propagation": False,
         }

@@ -125,8 +125,8 @@ def test_init_creates_db_file_and_parent_dirs(tmp_path):
 
 
 def test_init_applies_latest_schema_version(store):
-    # 全新库应一次性迁移到最新版本 2（parent_doc_id/last_accessed_at + origin）
-    assert store._schema_version == 2
+    # 全新库应一次性迁移到最新版本 3（基础字段 + origin + 关联图索引）
+    assert store._schema_version == 3
 
 
 def test_init_enables_wal_mode(store):
@@ -152,12 +152,13 @@ def test_migration_from_legacy_schema_adds_columns_and_backfills(tmp_path):
     conn.close()
 
     st = MemoryStore(db)
-    assert st._schema_version == 2
+    assert st._schema_version == 3
     entry = st.get_entry_by_id("oldid")
     # last_accessed_at 需从 created_at 回填，否则衰减评分会把老记忆算成"刚访问过"
     assert entry.last_accessed_at == 12345.0
     assert entry.origin == "", "origin 新列默认空串"
     assert entry.parent_doc_id is None
+    assert st.graph_edge_count(PRIVATE) > 0, "v3 迁移应回填既有记忆的图边"
     st.close()
 
 
@@ -168,7 +169,7 @@ def test_migration_is_idempotent_on_reopen(tmp_path):
     entry = st1.add_or_update(PRIVATE, "t", "c", confidence=0.5)
     st1.close()
     st2 = MemoryStore(db)
-    assert st2._schema_version == 2
+    assert st2._schema_version == 3
     assert st2.get_entry_by_id(entry.id) is not None, "迁移不应破坏已有数据"
     st2.close()
 
@@ -177,9 +178,9 @@ def test_migrate_schema_called_twice_returns_same_version():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA_SQL)
-    assert _migrate_schema(conn) == 2
-    # 第二次调用走 current==2 的短路分支，不再执行任何 ALTER
-    assert _migrate_schema(conn) == 2
+    assert _migrate_schema(conn) == 3
+    # 第二次调用走 current==3 的短路分支，不再执行任何 ALTER/回填
+    assert _migrate_schema(conn) == 3
     conn.close()
 
 
