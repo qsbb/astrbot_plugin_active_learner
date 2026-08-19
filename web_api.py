@@ -1946,11 +1946,22 @@ class _BufferHandler(logging.Handler):
             formatted = self.format(record)
             module = self._safe_text(record.module or "plugin", 40)
             level = record.levelname.lower()
+            function = self._safe_text(record.funcName or "event", 60)
+            details = {
+                "module": module,
+                "function": function,
+                "line": max(0, int(record.lineno or 0)),
+                "logger_name": self._safe_text(record.name, 80),
+            }
+            if record.exc_info and record.exc_info[0] is not None:
+                details["exception_type"] = self._safe_text(
+                    record.exc_info[0].__name__, 80
+                )
             self.record_event(
                 record.levelname,
-                f"logger.{level}.{module}.{self._safe_text(record.funcName or 'event', 60)}",
-                f"{module} 记录了一条 {record.levelname} 事件，详细信息仅在知的独立日志页查看",
-                details={"module": module, "function": record.funcName or ""},
+                f"logger.{level}.{module}.{function}",
+                f"{module}.{function} 记录了一条 {record.levelname} 事件（详情已脱敏）",
+                details=details,
                 text=formatted,
             )
         except Exception:
