@@ -1233,9 +1233,31 @@ function switchSettingsTab(tabName) {
     const active = btn.dataset.tab === tabName;
     btn.classList.toggle("active", active);
     btn.setAttribute("aria-selected", active ? "true" : "false");
+    btn.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll(".settings-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.panel === tabName);
+    const active = panel.dataset.panel === tabName;
+    panel.classList.toggle("active", active);
+    panel.setAttribute("aria-hidden", String(!active));
+    panel.hidden = !active;
+  });
+}
+
+function bindTabKeyboardNavigation(selector, activate) {
+  const tabs = Array.from(document.querySelectorAll(selector));
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("keydown", (event) => {
+      let nextIndex = null;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % tabs.length;
+      if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === "Home") nextIndex = 0;
+      if (event.key === "End") nextIndex = tabs.length - 1;
+      if (nextIndex === null) return;
+      event.preventDefault();
+      const nextTab = tabs[nextIndex];
+      activate(nextTab.dataset.tab);
+      nextTab.focus();
+    });
   });
 }
 
@@ -1250,6 +1272,7 @@ function bindSettingsEvents() {
   document.querySelectorAll(".settings-tab").forEach((btn) => {
     btn.addEventListener("click", () => switchSettingsTab(btn.dataset.tab));
   });
+  bindTabKeyboardNavigation(".settings-tab", switchSettingsTab);
   // 初始化 aria-selected
   switchSettingsTab(document.querySelector(".settings-tab.active")?.dataset.tab || "llm");
   bindDomainScopeTags();
@@ -1310,9 +1333,13 @@ function switchImportTab(tabName) {
     const active = btn.dataset.tab === tabName;
     btn.classList.toggle("active", active);
     btn.setAttribute("aria-selected", active ? "true" : "false");
+    btn.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("#import-modal .tab-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.panel === tabName);
+    const active = panel.dataset.panel === tabName;
+    panel.classList.toggle("active", active);
+    panel.setAttribute("aria-hidden", String(!active));
+    panel.hidden = !active;
   });
 }
 
@@ -1517,6 +1544,7 @@ function bindImportEvents() {
   document.querySelectorAll("#import-modal .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchImportTab(btn.dataset.tab));
   });
+  bindTabKeyboardNavigation("#import-modal .tab-btn", switchImportTab);
   // 初始化 aria-selected
   switchImportTab(document.querySelector("#import-modal .tab-btn.active")?.dataset.tab || "text");
 
@@ -1756,8 +1784,7 @@ function bindConfigEvents() {
   document.getElementById("config-reset").addEventListener("click", resetConfigToDefault);
 }
 
-async function init() {
-  await bridge.ready();
+function bindPageEvents() {
   bindEvents();
   bindImportEvents();
   bindSettingsEvents();
@@ -1765,6 +1792,28 @@ async function init() {
   bindBuiltinKbEvents();
   bindConfidenceModalEvents();
   bindPriorityLearnEvents();
+}
+
+async function waitForBridgeReady(timeoutMs = 5000) {
+  let timer;
+  try {
+    await Promise.race([
+      Promise.resolve(bridge.ready()),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(
+          () => reject(new Error("页面通信初始化超时，可使用页面按钮重试")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function init() {
+  bindPageEvents();
+  await waitForBridgeReady();
   await refreshAll();
 }
 
@@ -1926,7 +1975,10 @@ async function pollPriorityLearnStatus() {
     const total = st.total || 0;
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
     const fill = document.getElementById("priority-learn-progress-fill");
-    if (fill) fill.style.width = `${pct}%`;
+    if (fill) {
+      fill.style.transform = `scaleX(${pct / 100})`;
+      fill.parentElement?.setAttribute("aria-valuenow", String(pct));
+    }
     const txt = document.getElementById("priority-learn-progress-text");
     if (txt) txt.textContent = `${done} / ${total}（${pct}%）`;
     const cur = document.getElementById("priority-learn-current");

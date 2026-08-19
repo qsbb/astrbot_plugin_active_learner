@@ -136,15 +136,15 @@
       </header>
       <div class="modal-body">
         <div class="settings-tabs" role="tablist">
-          <button type="button" class="settings-tab active" data-tab="llm" role="tab">LLM</button>
-          <button type="button" class="settings-tab" data-tab="learn" role="tab">学习</button>
-          <button type="button" class="settings-tab" data-tab="search" role="tab">搜索 / 领域</button>
-          <button type="button" class="settings-tab" data-tab="sources" role="tab">URL 来源</button>
-          <button type="button" class="settings-tab" data-tab="other" role="tab">其它</button>
+          <button id="settings-tab-llm" type="button" class="settings-tab active" data-tab="llm" role="tab" aria-controls="settings-panel-llm" aria-selected="true" tabindex="0">LLM</button>
+          <button id="settings-tab-learn" type="button" class="settings-tab" data-tab="learn" role="tab" aria-controls="settings-panel-learn" aria-selected="false" tabindex="-1">学习</button>
+          <button id="settings-tab-search" type="button" class="settings-tab" data-tab="search" role="tab" aria-controls="settings-panel-search" aria-selected="false" tabindex="-1">搜索 / 领域</button>
+          <button id="settings-tab-sources" type="button" class="settings-tab" data-tab="sources" role="tab" aria-controls="settings-panel-sources" aria-selected="false" tabindex="-1">URL 来源</button>
+          <button id="settings-tab-other" type="button" class="settings-tab" data-tab="other" role="tab" aria-controls="settings-panel-other" aria-selected="false" tabindex="-1">其它</button>
         </div>
 
         <div class="settings-panels">
-          <div class="settings-panel active" data-panel="llm">
+          <div id="settings-panel-llm" class="settings-panel active" data-panel="llm" role="tabpanel" aria-labelledby="settings-tab-llm" aria-hidden="false">
             <div class="settings-section">
               <div class="settings-label">LLM Provider</div>
               <div class="settings-row">
@@ -172,7 +172,7 @@
             </div>
           </div>
 
-          <div class="settings-panel" data-panel="learn">
+          <div id="settings-panel-learn" class="settings-panel" data-panel="learn" role="tabpanel" aria-labelledby="settings-tab-learn" aria-hidden="true" hidden>
             <div class="settings-section">
               <div class="settings-label">自主检索与学习</div>
               <label class="checkbox-row">
@@ -205,7 +205,7 @@
             </div>
           </div>
 
-          <div class="settings-panel" data-panel="search">
+          <div id="settings-panel-search" class="settings-panel" data-panel="search" role="tabpanel" aria-labelledby="settings-tab-search" aria-hidden="true" hidden>
             <div class="settings-section">
               <div class="settings-label">验证搜索源</div>
               <div class="settings-row">
@@ -268,7 +268,7 @@
             </div>
           </div>
 
-          <div class="settings-panel" data-panel="sources">
+          <div id="settings-panel-sources" class="settings-panel" data-panel="sources" role="tabpanel" aria-labelledby="settings-tab-sources" aria-hidden="true" hidden>
             <div class="settings-section">
               <div class="settings-label">手动 URL / 百科来源</div>
               <form id="url-source-form" class="url-source-form">
@@ -294,7 +294,7 @@
             </div>
           </div>
 
-          <div class="settings-panel" data-panel="other">
+          <div id="settings-panel-other" class="settings-panel" data-panel="other" role="tabpanel" aria-labelledby="settings-tab-other" aria-hidden="true" hidden>
             <div class="settings-section">
               <div class="settings-label">文档分块</div>
               <div class="settings-row">
@@ -362,16 +362,16 @@
       </header>
       <div class="modal-body">
         <div class="tabs" role="tablist">
-          <button type="button" class="tab-btn active" data-tab="text" role="tab">文本</button>
-          <button type="button" class="tab-btn" data-tab="md" role="tab">Markdown</button>
-          <button type="button" class="tab-btn" data-tab="zip" role="tab">批量 ZIP</button>
-          <button type="button" class="tab-btn" data-tab="pdf" role="tab">PDF</button>
-          <button type="button" class="tab-btn" data-tab="docx" role="tab">Word</button>
-          <button type="button" class="tab-btn" data-tab="txt" role="tab">TXT</button>
+          <button id="import-tab-text" type="button" class="tab-btn active" data-tab="text" role="tab" aria-controls="import-text-form" aria-selected="true" tabindex="0">文本</button>
+          <button id="import-tab-md" type="button" class="tab-btn" data-tab="md" role="tab" aria-controls="import-md-form" aria-selected="false" tabindex="-1">Markdown</button>
+          <button id="import-tab-zip" type="button" class="tab-btn" data-tab="zip" role="tab" aria-controls="import-zip-form" aria-selected="false" tabindex="-1">批量 ZIP</button>
+          <button id="import-tab-pdf" type="button" class="tab-btn" data-tab="pdf" role="tab" aria-controls="import-pdf-form" aria-selected="false" tabindex="-1">PDF</button>
+          <button id="import-tab-docx" type="button" class="tab-btn" data-tab="docx" role="tab" aria-controls="import-docx-form" aria-selected="false" tabindex="-1">Word</button>
+          <button id="import-tab-txt" type="button" class="tab-btn" data-tab="txt" role="tab" aria-controls="import-txt-form" aria-selected="false" tabindex="-1">TXT</button>
         </div>
 
         <div class="tab-panels">
-          <form id="import-text-form" class="tab-panel active" data-panel="text">
+          <form id="import-text-form" class="tab-panel active" data-panel="text" role="tabpanel" aria-labelledby="import-tab-text" aria-hidden="false">
             <label class="control">
               <span>主题 *</span>
               <input type="text" name="topic" required placeholder="如：量子纠缠" />
@@ -401,7 +401,7 @@
             <button type="submit" class="primary">导入</button>
           </form>
 
-          <form id="import-md-form" class="tab-panel" data-panel="md">
+          <form id="import-md-form" class="tab-panel" data-panel="md" role="tabpanel" aria-labelledby="import-tab-md" aria-hidden="true" hidden>
             <label class="control">
               <span>Markdown 文件 *</span>
               <input type="file" name="file" accept=".md,.markdown,text/markdown" required />
@@ -441,7 +441,7 @@
             <button type="submit" class="primary">导入</button>
           </form>
 
-          <form id="import-zip-form" class="tab-panel" data-panel="zip">
+          <form id="import-zip-form" class="tab-panel" data-panel="zip" role="tabpanel" aria-labelledby="import-tab-zip" aria-hidden="true" hidden>
             <label class="control">
               <span>ZIP 压缩包 *</span>
               <input type="file" name="file" accept=".zip,application/zip" required />
@@ -468,7 +468,7 @@
             <button type="submit" class="primary">批量导入</button>
           </form>
 
-          <form id="import-pdf-form" class="tab-panel" data-panel="pdf">
+          <form id="import-pdf-form" class="tab-panel" data-panel="pdf" role="tabpanel" aria-labelledby="import-tab-pdf" aria-hidden="true" hidden>
             <label class="control">
               <span>PDF 文件 *</span>
               <input type="file" name="file" accept=".pdf,application/pdf" required />
@@ -505,7 +505,7 @@
             <button type="submit" class="primary">导入 PDF</button>
           </form>
 
-          <form id="import-docx-form" class="tab-panel" data-panel="docx">
+          <form id="import-docx-form" class="tab-panel" data-panel="docx" role="tabpanel" aria-labelledby="import-tab-docx" aria-hidden="true" hidden>
             <label class="control">
               <span>Word 文件 *</span>
               <input type="file" name="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required />
@@ -542,7 +542,7 @@
             <button type="submit" class="primary">导入 Word</button>
           </form>
 
-          <form id="import-txt-form" class="tab-panel" data-panel="txt">
+          <form id="import-txt-form" class="tab-panel" data-panel="txt" role="tabpanel" aria-labelledby="import-tab-txt" aria-hidden="true" hidden>
             <label class="control">
               <span>TXT 文件 *</span>
               <input type="file" name="file" accept=".txt,text/plain" required />
@@ -709,8 +709,8 @@
       </header>
       <div class="modal-body">
         <div class="priority-learn-progress-wrap">
-          <div class="priority-learn-progress-bar">
-            <div id="priority-learn-progress-fill" class="priority-learn-progress-fill" style="width:0%"></div>
+          <div class="priority-learn-progress-bar" role="progressbar" aria-label="主动学习进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="priority-learn-progress-fill" class="priority-learn-progress-fill"></div>
           </div>
           <span id="priority-learn-progress-text" class="priority-learn-progress-text">0 / 0</span>
         </div>
