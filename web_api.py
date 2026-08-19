@@ -1831,7 +1831,6 @@ class _BufferHandler(logging.Handler):
     )
     _URL_QUERY = re.compile(r"(https?://[^\s?]+)\?[^\s]+", re.IGNORECASE)
     _URL = re.compile(r"https?://[^\s]+", re.IGNORECASE)
-    _PATH = re.compile(r"(?:[A-Za-z]:\\|/)[^\s]+")
     _EMAIL = re.compile(
         r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE
     )
@@ -1859,7 +1858,6 @@ class _BufferHandler(logging.Handler):
         text = cls._LONG_NUMBER.sub("<已隐藏标识>", text)
         text = cls._URL_QUERY.sub(r"\1?[已隐藏参数]", text)
         text = cls._URL.sub("<已隐藏网址>", text)
-        text = cls._PATH.sub("<已隐藏路径>", text)
         return text if len(text) <= limit else text[: limit - 1] + "…"
 
     @classmethod
