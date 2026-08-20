@@ -286,7 +286,9 @@ def test_parse_batch_response_full():
     # CONFIDENCE 百分制被换算为 0-1 浮点
     assert out[0]["confidence"] == 0.85
     assert out[1]["confidence"] == 0.70
-    assert set(out[0]) == {"phrase", "summary", "keywords", "confidence"}
+    assert set(out[0]) == {"phrase", "summary", "keywords", "confidence", "scope_hint"}
+    # 响应未提供 SCOPE 字段时保守缺省 local
+    assert out[0]["scope_hint"] == "local"
 
 
 def test_parse_batch_response_partial_match():
@@ -320,6 +322,7 @@ def test_parse_batch_response_ignores_extra_fields():
             "summary": "解释文本。",
             "keywords": ["关键词一", "关键词二"],
             "confidence": 0.6,
+            "scope_hint": "local",
         }
     ]
 
@@ -452,3 +455,44 @@ def test_extract_then_build_then_parse_roundtrip():
     out = parse_batch_response(resp, candidates)
     assert [r["phrase"] for r in out] == ["绝绝子", "nga"]
     assert [r["confidence"] for r in out] == [0.8, 0.9]
+
+
+# ---------- v1.2.0：SCOPE 字段（通用梗/内部说法提示） ----------
+
+
+def test_build_batch_prompt_includes_scope_field():
+    # prompt 必须说明 SCOPE 输出字段与取值含义，否则 LLM 无法产出可解析结果
+    prompt = build_batch_prompt([{"phrase": "绝绝子"}])
+    assert "SCOPE:" in prompt
+    assert "general" in prompt
+    assert "local" in prompt
+
+
+def test_parse_batch_response_scope_general():
+    resp = "=== yyds ===\nSUMMARY: 永远的神。\nSCOPE: general\nCONFIDENCE: 80\n"
+    out = parse_batch_response(resp, [{"phrase": "yyds"}])
+    assert out[0]["scope_hint"] == "general"
+
+
+def test_parse_batch_response_scope_case_insensitive():
+    resp = "=== yyds ===\nSUMMARY: 永远的神。\nSCOPE: GENERAL\n"
+    out = parse_batch_response(resp, [{"phrase": "yyds"}])
+    assert out[0]["scope_hint"] == "general"
+
+
+@pytest.mark.parametrize(
+    "scope_line",
+    [
+        None,  # 缺省（无 SCOPE 行）
+        "SCOPE: ",  # 空值
+        "SCOPE: unknown",  # 非法取值
+        "SCOPE: 通用",  # 非英文取值
+    ],
+)
+def test_parse_batch_response_scope_defaults_to_local(scope_line):
+    # 缺省或无法识别的 SCOPE 一律保守归为 local（群内部说法），不影响晋升误判
+    resp = "=== yyds ===\nSUMMARY: 永远的神。\n"
+    if scope_line is not None:
+        resp += scope_line + "\n"
+    out = parse_batch_response(resp, [{"phrase": "yyds"}])
+    assert out[0]["scope_hint"] == "local"

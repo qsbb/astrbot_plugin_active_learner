@@ -86,12 +86,15 @@ def build_batch_prompt(candidates: list[dict]) -> str:
     lines.append("要求：")
     lines.append("1. 每个词输出 SUMMARY ≤150 字（定义/典型用法/使用场景）")
     lines.append("2. 每个词输出 KEYWORDS 3-5 个，便于检索")
-    lines.append("3. 不确定的标 CONFIDENCE 30-50；非常确定标 70-90")
-    lines.append("4. 严格按以下格式输出（每个候选词一组，分隔符 ===）：")
+    # v1.2.0：让 LLM 判断通用梗还是群/圈层内部说法，供跨群晋升使用；保守缺省 local
+    lines.append("3. 每个词输出 SCOPE: general（全网通用梗）或 local（本群/小圈子内部说法），不确定标 local")
+    lines.append("4. 不确定的标 CONFIDENCE 30-50；非常确定标 70-90")
+    lines.append("5. 严格按以下格式输出（每个候选词一组，分隔符 ===）：")
     lines.append("")
     lines.append("=== <候选词原样回写> ===")
     lines.append("SUMMARY: <解释>")
     lines.append("KEYWORDS: <关键词1>, <关键词2>, ...")
+    lines.append("SCOPE: <general|local>")
     lines.append("CONFIDENCE: <0-100>")
     lines.append("=== <下一个候选词> ===")
     lines.append("SUMMARY: ...")
@@ -104,6 +107,7 @@ _SECTION_HEADER = re.compile(r"^===\s*(.+?)\s*===", re.MULTILINE)
 _SUMMARY_RE = re.compile(r"SUMMARY:\s*(.+?)(?=\n[A-Z]+:|\n===|\Z)", re.DOTALL)
 _KEYWORDS_RE = re.compile(r"KEYWORDS:\s*(.+?)(?=\n[A-Z]+:|\n===|\Z)", re.DOTALL)
 _CONFIDENCE_RE = re.compile(r"CONFIDENCE:\s*(\d+)")
+_SCOPE_RE = re.compile(r"SCOPE:\s*([A-Za-z]+)")
 
 
 def parse_batch_response(response: str, candidates: list[dict]) -> list[dict]:
@@ -178,11 +182,18 @@ def parse_batch_response(response: str, candidates: list[dict]) -> list[dict]:
             except (ValueError, TypeError):
                 pass
 
+        # v1.2.0：通用梗/内部说法提示，缺省或无法识别时保守为 local
+        scope_hint = "local"
+        scope_m = _SCOPE_RE.search(body)
+        if scope_m and scope_m.group(1).lower() in ("general", "local"):
+            scope_hint = scope_m.group(1).lower()
+
         results.append({
             "phrase": phrase,
             "summary": summary,
             "keywords": keywords,
             "confidence": confidence,
+            "scope_hint": scope_hint,
         })
 
     return results

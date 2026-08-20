@@ -29,6 +29,8 @@ from .models import (
     now_ts,
 )
 
+from .slang_promotion import normalize_phrase
+
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS memories (
@@ -109,10 +111,18 @@ CREATE TABLE IF NOT EXISTS slang_candidates (
   last_seen REAL,
   learned INTEGER DEFAULT 0,
   learned_at REAL,
+  speakers TEXT DEFAULT '',
+  last_counted_at REAL DEFAULT 0,
   UNIQUE(scope_type, scope_id, phrase)
 );
 CREATE INDEX IF NOT EXISTS idx_slang_pending
   ON slang_candidates(scope_type, scope_id, learned, occurrences DESC);
+
+CREATE TABLE IF NOT EXISTS slang_blocklist (
+  phrase_norm TEXT PRIMARY KEY,
+  phrase TEXT,
+  created_at REAL
+);
 
 CREATE TABLE IF NOT EXISTS llm_token_usage (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -249,6 +259,33 @@ def _migrate_schema(conn) -> int:
             (_time.time(),),
         )
         current = 3
+    if current < 4:
+        # v4 (v1.2.0): slang_candidates 加 speakers（JSON 数组，去重说话人）
+        # 与 last_counted_at（防刷屏计数时间窗）。存量行 last_counted_at 保持 0，
+        # 视为从未计入，下一次提及正常计数。
+        if not _column_exists(conn, "slang_candidates", "speakers"):
+            conn.execute("ALTER TABLE slang_candidates ADD COLUMN speakers TEXT DEFAULT ''")
+        if not _column_exists(conn, "slang_candidates", "last_counted_at"):
+            conn.execute("ALTER TABLE slang_candidates ADD COLUMN last_counted_at REAL DEFAULT 0")
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (4, ?)",
+            (_time.time(),),
+        )
+        current = 4
+    if current < 5:
+        # v5 (v1.2.0): 黑话拉黑名单表（管理端审核拉黑），存量库补建即可
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS slang_blocklist (
+          phrase_norm TEXT PRIMARY KEY,
+          phrase TEXT,
+          created_at REAL
+        );
+        """)
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (5, ?)",
+            (_time.time(),),
+        )
+        current = 5
     return current
 
 
@@ -1555,43 +1592,105 @@ class MemoryStore:
 
     # ---------- 群黑话候选 v1.1.4.0 ----------
 
-    def add_slang_candidate(self, scope: Scope, phrase: str, context: str) -> None:
-        """新增或累加候选词出现次数。UNIQUE 冲突时累加 occurrences 并刷新 last_seen/context。"""
+    def add_slang_candidate(
+        self,
+        scope: Scope,
+        phrase: str,
+        context: str,
+        speaker: str = "",
+        min_interval_seconds: int = 0,
+    ) -> None:
+        """新增或累加候选词。v1.2.0：记录去重说话人列表，并按时间窗防刷屏计数。
+
+        防刷规则：距上次计入 occurrences 不足 min_interval_seconds 时，同一说话人
+        （或空说话人）的重复提及只刷新 last_seen/context/speakers，不累加 occurrences；
+        时间窗内出现新说话人视为真信号，正常累加。
+        """
         now = now_ts()
+        speaker = (speaker or "").strip()
         with self._lock:
+            row = self._conn.execute(
+                """SELECT occurrences, speakers, last_counted_at
+                   FROM slang_candidates
+                   WHERE scope_type = ? AND scope_id = ? AND phrase = ?""",
+                (scope.type, scope.id, phrase),
+            ).fetchone()
+            if row is None:
+                speakers = [speaker] if speaker else []
+                self._conn.execute(
+                    """INSERT INTO slang_candidates
+                       (scope_type, scope_id, phrase, context, occurrences,
+                        first_seen, last_seen, learned, learned_at,
+                        speakers, last_counted_at)
+                       VALUES (?, ?, ?, ?, 1, ?, ?, 0, NULL, ?, ?)""",
+                    (
+                        scope.type, scope.id, phrase, context,
+                        now, now,
+                        json.dumps(speakers, ensure_ascii=False), now,
+                    ),
+                )
+                return
+            try:
+                speakers = json.loads(row["speakers"] or "[]")
+                if not isinstance(speakers, list):
+                    speakers = []
+            except Exception:
+                speakers = []
+            last_counted_at = float(row["last_counted_at"] or 0)
+            count_it = True
+            if min_interval_seconds > 0 and last_counted_at > 0:
+                if now - last_counted_at < min_interval_seconds:
+                    # 时间窗内：同一人（或无法识别说话人）刷屏不计数
+                    if not speaker or speaker in speakers:
+                        count_it = False
+            if speaker and speaker not in speakers:
+                speakers.append(speaker)
+            occurrences = row["occurrences"] + (1 if count_it else 0)
+            counted_at = now if count_it else last_counted_at
             self._conn.execute(
-                """INSERT INTO slang_candidates
-                   (scope_type, scope_id, phrase, context, occurrences,
-                    first_seen, last_seen, learned, learned_at)
-                   VALUES (?, ?, ?, ?, 1, ?, ?, 0, NULL)
-                   ON CONFLICT(scope_type, scope_id, phrase) DO UPDATE SET
-                     occurrences = occurrences + 1,
-                     last_seen = excluded.last_seen,
-                     context = excluded.context""",
-                (scope.type, scope.id, phrase, context, now, now),
+                """UPDATE slang_candidates
+                   SET occurrences = ?, last_seen = ?, context = ?,
+                       speakers = ?, last_counted_at = ?
+                   WHERE scope_type = ? AND scope_id = ? AND phrase = ?""",
+                (
+                    occurrences, now, context,
+                    json.dumps(speakers, ensure_ascii=False), counted_at,
+                    scope.type, scope.id, phrase,
+                ),
             )
 
     def list_pending_slang(self, scope: Scope, limit: int = 5) -> list[dict]:
         """返回 top-K pending 候选（learned=0），按 occurrences DESC。"""
         with self._lock:
             rows = self._conn.execute(
-                """SELECT phrase, context, occurrences, first_seen, last_seen
+                """SELECT phrase, context, occurrences, first_seen, last_seen, speakers
                    FROM slang_candidates
                    WHERE scope_type = ? AND scope_id = ? AND learned = 0
                    ORDER BY occurrences DESC, last_seen DESC
                    LIMIT ?""",
                 (scope.type, scope.id, limit),
             ).fetchall()
-            return [
-                {
-                    "phrase": r["phrase"],
-                    "context": r["context"] or "",
-                    "occurrences": r["occurrences"],
-                    "first_seen": r["first_seen"],
-                    "last_seen": r["last_seen"],
-                }
-                for r in rows
-            ]
+            result = []
+            for r in rows:
+                try:
+                    speakers = json.loads(r["speakers"] or "[]")
+                    if not isinstance(speakers, list):
+                        speakers = []
+                except Exception:
+                    speakers = []
+                result.append(
+                    {
+                        "phrase": r["phrase"],
+                        "context": r["context"] or "",
+                        "occurrences": r["occurrences"],
+                        "first_seen": r["first_seen"],
+                        "last_seen": r["last_seen"],
+                        # v1.2.0：去重说话人列表与人数，供 min_speakers 门槛过滤
+                        "speakers": speakers,
+                        "speaker_count": len(speakers),
+                    }
+                )
+            return result
 
     def mark_slang_learned(self, scope: Scope, phrase: str) -> None:
         """UPDATE learned=1, learned_at=now WHERE scope=? AND phrase=?"""
@@ -1604,6 +1703,125 @@ class MemoryStore:
                 (now, scope.type, scope.id, phrase),
             )
 
+    def delete_slang_candidate(self, scope: Scope, phrase: str) -> bool:
+        """v1.2.0：管理端拒绝候选——直接从候选队列删除该行。返回是否删到行。"""
+        with self._lock:
+            cur = self._conn.execute(
+                """DELETE FROM slang_candidates
+                   WHERE scope_type = ? AND scope_id = ? AND phrase = ?""",
+                (scope.type, scope.id, phrase),
+            )
+            return cur.rowcount > 0
+
+    def list_slang_candidates(
+        self, scope: Optional[Scope] = None, limit: int = 500
+    ) -> list[dict]:
+        """v1.2.0：管理端候选队列，pending(learned=0) 在前，按 occurrences DESC。
+
+        scope 为 None 时跨全部 scope（Dashboard 管理视角，仿 list_all_memories）。
+        """
+        with self._lock:
+            if scope is None:
+                rows = self._conn.execute(
+                    """SELECT scope_type, scope_id, phrase, context, occurrences,
+                              first_seen, last_seen, learned, learned_at, speakers
+                       FROM slang_candidates
+                       ORDER BY learned ASC, occurrences DESC, last_seen DESC
+                       LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """SELECT scope_type, scope_id, phrase, context, occurrences,
+                              first_seen, last_seen, learned, learned_at, speakers
+                       FROM slang_candidates
+                       WHERE scope_type = ? AND scope_id = ?
+                       ORDER BY learned ASC, occurrences DESC, last_seen DESC
+                       LIMIT ?""",
+                    (scope.type, scope.id, limit),
+                ).fetchall()
+            result = []
+            for r in rows:
+                try:
+                    speakers = json.loads(r["speakers"] or "[]")
+                    if not isinstance(speakers, list):
+                        speakers = []
+                except Exception:
+                    speakers = []
+                result.append(
+                    {
+                        "scope_type": r["scope_type"],
+                        "scope_id": r["scope_id"],
+                        "phrase": r["phrase"],
+                        "context": r["context"] or "",
+                        "occurrences": r["occurrences"],
+                        "first_seen": r["first_seen"],
+                        "last_seen": r["last_seen"],
+                        "learned": int(r["learned"] or 0),
+                        "learned_at": r["learned_at"],
+                        # 去重说话人列表与人数，供管理端判断是否被单人刷屏
+                        "speakers": speakers,
+                        "speaker_count": len(speakers),
+                    }
+                )
+            return result
+
+    # ---------- v1.2.0：黑话拉黑名单（schema v5） ----------
+
+    def add_slang_block(self, phrase: str) -> None:
+        """拉黑词条：phrase_norm（小写+去空白）为主键，重复拉黑覆盖原记录。"""
+        phrase = (phrase or "").strip()
+        phrase_norm = normalize_phrase(phrase)
+        if not phrase_norm:
+            return
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO slang_blocklist
+                   (phrase_norm, phrase, created_at) VALUES (?, ?, ?)""",
+                (phrase_norm, phrase, now_ts()),
+            )
+
+    def remove_slang_block(self, phrase: str) -> bool:
+        """解除拉黑（归一化匹配，大小写/空白不敏感）。返回是否删到行。"""
+        phrase_norm = normalize_phrase(phrase)
+        if not phrase_norm:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM slang_blocklist WHERE phrase_norm = ?",
+                (phrase_norm,),
+            )
+            return cur.rowcount > 0
+
+    def list_slang_blocks(self) -> list[dict]:
+        """拉黑列表，按拉黑时间倒序（同时间按 phrase_norm 倒序，保证确定性）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT phrase_norm, phrase, created_at
+                   FROM slang_blocklist
+                   ORDER BY created_at DESC, phrase_norm DESC"""
+            ).fetchall()
+            return [
+                {
+                    "phrase_norm": r["phrase_norm"],
+                    "phrase": r["phrase"] or "",
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ]
+
+    def is_slang_blocked(self, phrase: str) -> bool:
+        """按归一化词条查拉黑（"YYDS"/"yyds " 视为同词）。"""
+        phrase_norm = normalize_phrase(phrase)
+        if not phrase_norm:
+            return False
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM slang_blocklist WHERE phrase_norm = ?",
+                (phrase_norm,),
+            ).fetchone()
+            return row is not None
+
     def get_last_batch_time(self, scope: Scope) -> float:
         """SELECT MAX(learned_at) FROM slang_candidates WHERE scope=? AND learned=1。无记录返回 0.0。"""
         with self._lock:
@@ -1614,3 +1832,172 @@ class MemoryStore:
             ).fetchone()
             val = row["m"] if row else None
             return val if val is not None else 0.0
+
+    def list_slang_entries(
+        self, scope: Optional[Scope], include_global: bool = True, limit: int = 200
+    ) -> list[dict]:
+        """返回本 scope（可选含 global）已学习的黑话词条（origin='slang'）。
+
+        供 slang_recall 的确定性子串召回使用；keywords 列按空格拆成列表。
+        scope 过滤与检索路径一致：私聊/群聊硬隔离，只额外放行规范的 global:global。
+        v1.2.0：scope 为 None 时跨全部 scope 返回（Dashboard 管理端视角）。
+        """
+        with self._lock:
+            if scope is None:
+                rows = self._conn.execute(
+                    """SELECT topic, keywords, content, confidence, scope_type,
+                              scope_id, verified, sources_detail
+                       FROM memories
+                       WHERE origin = 'slang'
+                       ORDER BY confidence DESC, updated_at DESC
+                       LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """SELECT topic, keywords, content, confidence, scope_type,
+                              scope_id, verified, sources_detail
+                       FROM memories
+                       WHERE origin = 'slang'
+                         AND ((scope_type = ? AND scope_id = ?)
+                              OR (? AND scope_type = 'global' AND scope_id = 'global'))
+                       ORDER BY confidence DESC, updated_at DESC
+                       LIMIT ?""",
+                    (scope.type, scope.id, include_global, limit),
+                ).fetchall()
+            return [
+                {
+                    "topic": r["topic"],
+                    "keywords": (r["keywords"] or "").split(),
+                    "content": r["content"] or "",
+                    "confidence": r["confidence"],
+                    "scope_type": r["scope_type"],
+                    # v1.2.0：管理端展示与 lookup_slang 工具需要的补充字段
+                    "scope_id": r["scope_id"],
+                    "verified": int(r["verified"] or 0),
+                    "scope_hint": _parse_slang_scope_hint(r["sources_detail"]),
+                }
+                for r in rows
+            ]
+
+    def get_slang_entries_by_topic(self, topic: str) -> list[dict]:
+        """跨所有 scope 查询同 topic 的黑话词条（origin='slang'），供晋升判定使用。
+
+        topic 比较大小写不敏感并忽略首尾空白（与 make_memory_id 的归一化口径一致）。
+        返回 dict 含 scope_type/scope_id/topic/content/confidence/keywords/sources_detail；
+        sources_detail 里的 slang_scope_hint 解析为扁平的 scope_hint 键，
+        解析失败或缺失时兜底 'local'（保守：拿不出通用梗证据就不参与晋升）。
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT scope_type, scope_id, topic, content, confidence,
+                          keywords, sources_detail
+                   FROM memories
+                   WHERE origin = 'slang'
+                     AND LOWER(TRIM(topic)) = LOWER(TRIM(?))""",
+                (topic,),
+            ).fetchall()
+            return [
+                {
+                    "scope_type": r["scope_type"],
+                    "scope_id": r["scope_id"],
+                    "topic": r["topic"],
+                    "content": r["content"] or "",
+                    "confidence": r["confidence"],
+                    "keywords": (r["keywords"] or "").split(),
+                    "sources_detail": r["sources_detail"] or "[]",
+                    "scope_hint": _parse_slang_scope_hint(r["sources_detail"]),
+                }
+                for r in rows
+            ]
+
+    def promote_slang_to_global(self, scope: Scope, phrase: str) -> bool:
+        """v1.2.0：管理员手动晋升——把指定 scope 里的黑话词条复制/更新到 global。
+
+        释义与置信度保持不变，source 改为"管理员晋升"，sources_detail 追加一条
+        promoted_by_admin 留痕。同 topic 的 global 条目已存在时走 add_or_update
+        的更新路径（关键词合并、置信度取高），不会制造重复行。
+        找不到词条，或 scope 本身就是 global 时返回 False。
+        """
+        if scope.type == SCOPE_GLOBAL:
+            return False
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT content, confidence, keywords, sources_detail
+                   FROM memories
+                   WHERE scope_type = ? AND scope_id = ? AND origin = 'slang'
+                     AND LOWER(TRIM(topic)) = LOWER(TRIM(?))""",
+                (scope.type, scope.id, phrase),
+            ).fetchone()
+            if not row:
+                return False
+            try:
+                sources = json.loads(row["sources_detail"] or "[]")
+                if not isinstance(sources, list):
+                    sources = []
+            except Exception:
+                sources = []
+            content = row["content"] or ""
+            confidence = float(row["confidence"] or 0.0)
+            keywords = (row["keywords"] or "").split()
+        # v1.2.0：已有 global 条目时先合并其历史 sources_detail 再写，
+        # 避免 add_or_update 的整体替换把之前的晋升留痕冲掉
+        with self._lock:
+            old_global = self._conn.execute(
+                """SELECT sources_detail FROM memories
+                   WHERE scope_type = ? AND scope_id = ?
+                     AND LOWER(TRIM(topic)) = LOWER(TRIM(?))""",
+                (SCOPE_GLOBAL, SCOPE_GLOBAL, phrase),
+            ).fetchone()
+        if old_global:
+            try:
+                old_sources = json.loads(old_global["sources_detail"] or "[]")
+                if not isinstance(old_sources, list):
+                    old_sources = []
+            except Exception:
+                old_sources = []
+            merged: list = []
+            for s in old_sources + sources:
+                if s not in merged:
+                    merged.append(s)
+            sources = merged
+        admin_mark = json.dumps(
+            {"promoted_by_admin": True, "from_scope": f"{scope.type}:{scope.id}"},
+            ensure_ascii=False,
+        )
+        if admin_mark not in sources:
+            sources.append(admin_mark)
+        entry = self.add_or_update(
+            Scope(SCOPE_GLOBAL, SCOPE_GLOBAL),
+            phrase,
+            content,
+            keywords=keywords,
+            source="管理员晋升",
+            sources_detail=sources,
+            confidence=confidence,
+            origin="slang",
+        )
+        return entry is not None
+
+
+def _parse_slang_scope_hint(sources_detail: Optional[str]) -> str:
+    """从 sources_detail（JSON 数组字符串，元素为 JSON 字符串）解析 slang_scope_hint。
+
+    缺失、坏 JSON、结构不符一律兜底 'local'，与晋升判定的保守口径一致。
+    """
+    try:
+        items = json.loads(sources_detail or "[]")
+    except Exception:
+        return "local"
+    if not isinstance(items, list):
+        return "local"
+    for item in items:
+        try:
+            data = json.loads(item) if isinstance(item, str) else item
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            hint = data.get("slang_scope_hint")
+            if hint in ("general", "local"):
+                return hint
+    return "local"

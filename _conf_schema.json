@@ -207,7 +207,7 @@
     "enable_slang_capture": {
         "description": "启用群黑话被动捕获",
         "type": "bool",
-        "hint": "自动扫描群消息提取候选黑话词（不调 LLM），攒够 batch_size 后定时 1 次 LLM 批量学习。需要 AstrBot 支持 on_message 钩子。",
+        "hint": "自动扫描群消息提取候选黑话词（不调 LLM），攒够 batch_size 后定时 1 次 LLM 批量学习。通过 on_llm_request 钩子捕获，无需 on_message 支持。",
         "default": false
     },
     "admin_ids": {
@@ -239,5 +239,47 @@
         "type": "bool",
         "hint": "true 仅捕获 group scope；false 同时捕获 private scope 黑话。",
         "default": true
+    },
+    "slang_capture_min_speakers": {
+        "description": "候选词最低说话人数",
+        "type": "int",
+        "hint": "候选词至少被几个不同群友提及才进入批量学习。防同一个人刷屏投毒。",
+        "default": 2
+    },
+    "slang_capture_count_interval_seconds": {
+        "description": "同一候选计数最小间隔（秒）",
+        "type": "int",
+        "hint": "同一候选词距上次计入出现次数不足该间隔时，同一说话人的重复提及不计数（不同说话人仍正常计数）。防刷屏。",
+        "default": 300
+    },
+    "enable_slang_recall": {
+        "description": "启用黑话命中注入",
+        "type": "bool",
+        "hint": "消息中提到已学过的黑话词时，直接把释义注入上下文（确定性子串匹配，不消耗 LLM）。",
+        "default": true
+    },
+    "slang_recall_max_per_msg": {
+        "description": "每条消息最多注入的黑话释义条数",
+        "type": "int",
+        "hint": "一条消息命中多个已学黑话时，最多注入前几条的释义，避免占用过多上下文。",
+        "default": 3
+    },
+    "slang_promotion_enabled": {
+        "description": "启用黑话跨群晋升",
+        "type": "bool",
+        "hint": "同一黑话被足够多的不同群学到、且至少一群判定为通用梗时，自动晋升到 global 作用域供所有群参考。这是 global 唯一自动写入通道。",
+        "default": true
+    },
+    "slang_promotion_min_groups": {
+        "description": "晋升所需的最低群数",
+        "type": "int",
+        "hint": "同一黑话至少被几个不同的群学到才允许晋升 global。越大越保守。",
+        "default": 2
+    },
+    "slang_promotion_external_verify": {
+        "description": "晋升前外部验证（实验）",
+        "type": "bool",
+        "hint": "开启后，即使所有群都未判定为通用梗，只要联网搜索能搜到该词（证明是公开梗）也允许晋升。搜索异常或无结果时不晋升。需要搜索器可用。",
+        "default": false
     }
 }

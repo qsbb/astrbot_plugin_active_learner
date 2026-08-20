@@ -1792,6 +1792,7 @@ function bindPageEvents() {
   bindBuiltinKbEvents();
   bindConfidenceModalEvents();
   bindPriorityLearnEvents();
+  bindSlangEvents();
 }
 
 async function waitForBridgeReady(timeoutMs = 5000) {
@@ -2294,7 +2295,176 @@ function bindBuiltinKbEvents() {
 
 // ---------- 全局 Escape：只关闭最上层可见弹窗 ----------
 
+// ---------- 群黑话管理（候选审核 / 晋升全局 / 拉黑名单） ----------
+
+function openSlangModal() {
+  document.getElementById("slang-modal").classList.remove("hidden");
+  loadSlangData().catch((e) => showToast(`加载黑话数据失败: ${e.message}`, true));
+}
+
+function closeSlangModal() {
+  document.getElementById("slang-modal").classList.add("hidden");
+}
+
+function switchSlangTab(tabName) {
+  document.querySelectorAll("#slang-modal .tab-btn").forEach((btn) => {
+    const active = btn.dataset.tab === tabName;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+    btn.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("#slang-modal .tab-panel").forEach((panel) => {
+    const active = panel.dataset.panel === tabName;
+    panel.classList.toggle("active", active);
+    panel.setAttribute("aria-hidden", String(!active));
+    panel.hidden = !active;
+  });
+}
+
+async function loadSlangData() {
+  const [candidates, entries, blocklist] = await Promise.all([
+    bridge.apiGet("slang/candidates", scopeParams()),
+    bridge.apiGet("slang/entries", scopeParams()),
+    bridge.apiGet("slang/blocklist"),
+  ]);
+  renderSlangCandidates(candidates.items || []);
+  renderSlangEntries(entries.items || []);
+  renderSlangBlocklist(blocklist.items || []);
+}
+
+function renderSlangCandidates(items) {
+  const tbody = document.getElementById("slang-candidates-tbody");
+  if (!items.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无候选词，等群友多问几句就有了</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map((c) => {
+    const status = c.learned
+      ? '<span class="badge ok">已学习</span>'
+      : '<span class="badge warn">待学习</span>';
+    return `
+    <tr>
+      <td class="cell-topic" title="${escapeHtml(c.phrase)}">${escapeHtml(c.phrase)}</td>
+      <td class="cell-preview" title="${escapeHtml(c.context)}">${escapeHtml(truncate(c.context, 50))}</td>
+      <td>${c.occurrences ?? 0}</td>
+      <td>${c.speaker_count ?? 0}</td>
+      <td class="cell-scope">${escapeHtml(c.scope_type)}:${escapeHtml(c.scope_id)}</td>
+      <td>${status}</td>
+      <td class="col-actions">
+        <button type="button" data-act="promote" data-phrase="${escapeHtml(c.phrase)}" data-scope-type="${escapeHtml(c.scope_type)}" data-scope-id="${escapeHtml(c.scope_id)}">晋升全局</button>
+        <button type="button" data-act="reject" data-phrase="${escapeHtml(c.phrase)}" data-scope-type="${escapeHtml(c.scope_type)}" data-scope-id="${escapeHtml(c.scope_id)}">拒绝</button>
+        <button type="button" data-act="block" data-phrase="${escapeHtml(c.phrase)}" data-scope-type="${escapeHtml(c.scope_type)}" data-scope-id="${escapeHtml(c.scope_id)}" class="danger">拉黑</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+function renderSlangEntries(items) {
+  const tbody = document.getElementById("slang-entries-tbody");
+  if (!items.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">暂无已学词条</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map((e) => {
+    const typeLabel = e.scope_type === "global"
+      ? "通用梗"
+      : (e.scope_hint === "general" ? "通用" : "圈内");
+    return `
+    <tr>
+      <td class="cell-topic" title="${escapeHtml(e.topic)}">${escapeHtml(e.topic)}</td>
+      <td class="cell-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 60))}</td>
+      <td>${formatConfidence(e.confidence)}</td>
+      <td>${typeLabel}</td>
+      <td class="cell-scope">${escapeHtml(e.scope_type)}:${escapeHtml(e.scope_id)}</td>
+      <td class="col-actions">
+        <button type="button" data-act="block" data-phrase="${escapeHtml(e.topic)}" class="danger">拉黑</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+function renderSlangBlocklist(items) {
+  const tbody = document.getElementById("slang-blocklist-tbody");
+  if (!items.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="3">拉黑列表为空</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map((b) => `
+    <tr>
+      <td class="cell-topic" title="${escapeHtml(b.phrase)}">${escapeHtml(b.phrase)}</td>
+      <td>${formatTime(b.created_at)}</td>
+      <td class="col-actions">
+        <button type="button" data-act="unblock" data-phrase="${escapeHtml(b.phrase)}">解除拉黑</button>
+      </td>
+    </tr>`).join("");
+}
+
+async function slangAction(act, btn) {
+  const phrase = btn.dataset.phrase || "";
+  if (!phrase) return;
+  const payload = { phrase };
+  if (btn.dataset.scopeType && btn.dataset.scopeId) {
+    payload.scope_type = btn.dataset.scopeType;
+    payload.scope_id = btn.dataset.scopeId;
+  }
+  let endpoint = "";
+  if (act === "promote") {
+    endpoint = "slang/promote";
+  } else if (act === "reject") {
+    endpoint = "slang/reject";
+  } else if (act === "block") {
+    const confirmed = await _confirmModal(
+      `拉黑「${phrase}」后，该词不会再进入任何群的候选队列。`,
+      "确认拉黑",
+    );
+    if (!confirmed) return;
+    endpoint = "slang/block";
+    // 从候选行发起的拉黑同时移除该 scope 的候选
+    if (payload.scope_type) payload.reject = true;
+  } else if (act === "unblock") {
+    endpoint = "slang/unblock";
+  } else {
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const result = await bridge.apiPost(endpoint, payload);
+    showToast(result.msg || "操作完成", result.ok === false);
+    await loadSlangData();
+  } catch (e) {
+    showToast(`操作失败: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function bindSlangEvents() {
+  document.getElementById("btn-slang").addEventListener("click", openSlangModal);
+  document
+    .querySelectorAll("#slang-modal .modal-close, #slang-modal .modal-backdrop, #slang-close")
+    .forEach((el) => {
+      el.addEventListener("click", closeSlangModal);
+    });
+  document.getElementById("slang-refresh").addEventListener("click", () => {
+    loadSlangData().catch((e) => showToast(`加载黑话数据失败: ${e.message}`, true));
+  });
+  document.querySelectorAll("#slang-modal .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => switchSlangTab(btn.dataset.tab));
+  });
+  bindTabKeyboardNavigation("#slang-modal .tab-btn", switchSlangTab);
+  // 初始化 aria-selected
+  switchSlangTab(document.querySelector("#slang-modal .tab-btn.active")?.dataset.tab || "candidates");
+  // 三张表共用事件委托
+  document.querySelectorAll("#slang-modal tbody").forEach((tbody) => {
+    tbody.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if (btn) slangAction(btn.dataset.act, btn);
+    });
+  });
+}
+
 const _ESCAPE_CLOSERS = [
+  ["slang-modal", closeSlangModal],
   ["priority-learn-modal", closePriorityLearnModal],
   ["confidence-modal", closeConfidenceModal],
   ["builtin-kb-modal", closeBuiltinKbModal],

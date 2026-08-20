@@ -22,6 +22,7 @@
         <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
         <button id="btn-config" type="button" title="编辑配置文件">📋 配置</button>
         <button id="btn-priority-learn" type="button" title="主动搜索已设置的关心领域并持续学习">🎯 主动学习</button>
+        <button id="btn-slang" type="button" title="群黑话候选审核、晋升全局与拉黑名单">🏷 黑话</button>
         <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
       </div>
     </div>
@@ -650,6 +651,82 @@
       <footer class="modal-footer">
         <button type="button" id="builtin-kb-cancel">取消</button>
         <button type="button" id="builtin-kb-import" class="primary" disabled>导入选中文件</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="slang-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card modal-card-wide">
+      <header class="modal-header">
+        <h2>🏷 群黑话管理</h2>
+        <button type="button" class="modal-close" aria-label="关闭">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="hint">跟随顶部「作用域」筛选；选「全部作用域」时展示所有群/私聊的候选与词条。拉黑后的词不再进入候选队列。</p>
+        <div class="tabs" role="tablist">
+          <button id="slang-tab-candidates" type="button" class="tab-btn active" data-tab="candidates" role="tab" aria-controls="slang-panel-candidates" aria-selected="true" tabindex="0">候选队列</button>
+          <button id="slang-tab-entries" type="button" class="tab-btn" data-tab="entries" role="tab" aria-controls="slang-panel-entries" aria-selected="false" tabindex="-1">已学词条</button>
+          <button id="slang-tab-blocklist" type="button" class="tab-btn" data-tab="blocklist" role="tab" aria-controls="slang-panel-blocklist" aria-selected="false" tabindex="-1">拉黑列表</button>
+        </div>
+
+        <div class="tab-panels">
+          <div id="slang-panel-candidates" class="tab-panel active" data-panel="candidates" role="tabpanel" aria-labelledby="slang-tab-candidates" aria-hidden="false">
+            <table class="memory-table">
+              <thead>
+                <tr>
+                  <th>词</th>
+                  <th>上下文</th>
+                  <th>次数</th>
+                  <th>人数</th>
+                  <th>作用域</th>
+                  <th>状态</th>
+                  <th class="col-actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="slang-candidates-tbody">
+                <tr class="empty-row"><td colspan="7">加载中…</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div id="slang-panel-entries" class="tab-panel" data-panel="entries" role="tabpanel" aria-labelledby="slang-tab-entries" aria-hidden="true" hidden>
+            <table class="memory-table">
+              <thead>
+                <tr>
+                  <th>词</th>
+                  <th>释义</th>
+                  <th>置信度</th>
+                  <th>类型</th>
+                  <th>作用域</th>
+                  <th class="col-actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="slang-entries-tbody">
+                <tr class="empty-row"><td colspan="6">加载中…</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div id="slang-panel-blocklist" class="tab-panel" data-panel="blocklist" role="tabpanel" aria-labelledby="slang-tab-blocklist" aria-hidden="true" hidden>
+            <table class="memory-table">
+              <thead>
+                <tr>
+                  <th>词</th>
+                  <th>拉黑时间</th>
+                  <th class="col-actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="slang-blocklist-tbody">
+                <tr class="empty-row"><td colspan="3">加载中…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="slang-refresh">↻ 刷新</button>
+        <button type="button" id="slang-close" class="primary">关闭</button>
       </footer>
     </div>
   </div>

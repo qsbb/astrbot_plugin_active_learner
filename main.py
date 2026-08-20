@@ -38,6 +38,8 @@ from .runtime import (
 )
 from .searcher import WebSearcher
 from .slang_capture import extract_candidates
+from .slang_promotion import normalize_phrase
+from .slang_recall import build_slang_injection, find_known_slang
 from .storage import MemoryStore
 from .triggers import CHALLENGE_PATTERNS
 from .tools import create_tools
@@ -63,6 +65,8 @@ from .constants import (
     _EXTERNAL_SEARCH_FIRST_RESULT_GRACE_SECONDS,
     _MEMORY_INJECT_MAX_COUNT,
     _RETRIEVAL_CONCURRENCY,
+    _SLANG_BLOCKLIST_CACHE_TTL_SECONDS,
+    _SLANG_RECALL_CACHE_TTL_SECONDS,
     _TOOL_NAMES,
 )
 from .learning import LearningMixin
@@ -281,6 +285,30 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self._slang_scope_only_group = bool(
             cfg.get("slang_capture_scope_only_group", True)
         )
+        # v1.2.0：捕获加固——多说话人门槛 + 防刷屏计数时间窗
+        self._slang_min_speakers = max(
+            1, int(cfg.get("slang_capture_min_speakers", 2))
+        )
+        self._slang_count_interval = max(
+            0, int(cfg.get("slang_capture_count_interval_seconds", 300))
+        )
+        # v1.2.0：黑话命中召回注入（确定性子串匹配 + per-scope TTL 缓存）
+        self._enable_slang_recall = bool(cfg.get("enable_slang_recall", True))
+        self._slang_recall_max_per_msg = max(
+            1, min(10, int(cfg.get("slang_recall_max_per_msg", 3)))
+        )
+        # v1.2.0：作用域晋升——跨群共现自动晋升 global（唯一自动写 global 的通道）
+        self._slang_promotion_enabled = bool(cfg.get("slang_promotion_enabled", True))
+        self._slang_promotion_min_groups = max(
+            2, int(cfg.get("slang_promotion_min_groups", 2))
+        )
+        # v1.2.0：可选外部验证晋升通道（默认关，开启后用联网搜索佐证公开梗）
+        self._slang_promotion_external_verify = bool(
+            cfg.get("slang_promotion_external_verify", False)
+        )
+        self._slang_recall_cache: dict[str, tuple[float, list[dict]]] = {}
+        # v1.2.0：拉黑名单实例级缓存（60s TTL），避免每条消息重复查库
+        self._slang_blocklist_cache: tuple[float, frozenset] = (0.0, frozenset())
         self._slang_last_check: dict[
             str, float
         ] = {}  # 进程内节流：scope_key → 上次检查时间
@@ -874,6 +902,24 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             "KNOWLEDGE_CONTEXT_READY",
         )
 
+        # v1.2.0：群黑话命中召回。确定性子串匹配（不走检索排序），命中释义
+        # 并入 parts，与记忆注入共用同一次 extra_user_content_parts 注入。
+        slang_hits: list[dict] = []
+        if self._enable_slang_recall:
+            try:
+                slang_entries = await asyncio.to_thread(
+                    self._get_slang_recall_entries, scope
+                )
+                slang_hits = find_known_slang(msg, slang_entries)
+                if slang_hits:
+                    slang_text = build_slang_injection(
+                        slang_hits, self._slang_recall_max_per_msg
+                    )
+                    if slang_text:
+                        parts.append(slang_text)
+            except Exception as e:
+                logger.debug(f"slang 召回注入失败: {e}")
+
         # 4. 注入
         if not parts:
             return
@@ -911,6 +957,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         tags = []
         if hits:
             tags.append(f"{len(hits)}条记忆")
+        if slang_hits:
+            tags.append(f"{len(slang_hits)}条黑话")
         if is_challenge and hits:
             tags.append("质疑提示")
         if domain_restricted:
@@ -953,13 +1001,63 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
                 else:
                     candidates = extract_candidates(msg)
                     if candidates:
+                        # v1.2.0：传入说话人用于去重计数与防刷屏时间窗
+                        try:
+                            speaker = event.get_sender_id() or ""
+                        except Exception:
+                            speaker = ""
+                        # v1.2.0：一次查询取整个拉黑名单（带缓存），被拉黑的词跳过
+                        blocked = await asyncio.to_thread(
+                            self._get_blocked_slang_norms
+                        )
                         for phrase, ctx in candidates:
+                            if normalize_phrase(phrase) in blocked:
+                                continue  # 拉黑词不再进候选队列
                             await asyncio.to_thread(
-                                self.store.add_slang_candidate, scope, phrase, ctx
+                                self.store.add_slang_candidate,
+                                scope,
+                                phrase,
+                                ctx,
+                                speaker,
+                                self._slang_count_interval,
                             )
                         self._maybe_trigger_batch_learn(scope)
             except Exception as e:
                 logger.debug(f"slang 捕获失败: {e}")
+
+    # ---------- v1.2.0：群黑话召回词条缓存 ----------
+
+    def _get_slang_recall_entries(self, scope: Scope) -> list[dict]:
+        """查本 scope（含 global）已学习的黑话词条，带 per-scope TTL 缓存。"""
+        scope_key = f"{scope.type}:{scope.id}"
+        now = time.time()
+        cached = self._slang_recall_cache.get(scope_key)
+        if cached and now - cached[0] < _SLANG_RECALL_CACHE_TTL_SECONDS:
+            return cached[1]
+        entries = self.store.list_slang_entries(scope)
+        self._slang_recall_cache[scope_key] = (now, entries)
+        return entries
+
+    def _invalidate_slang_recall_cache(self, scope: Optional[Scope] = None) -> None:
+        """slang 批量学习入库后调用，让召回缓存立即失效。scope 为 None 时全清。"""
+        if scope is None:
+            self._slang_recall_cache.clear()
+        else:
+            self._slang_recall_cache.pop(f"{scope.type}:{scope.id}", None)
+
+    def _get_blocked_slang_norms(self) -> frozenset:
+        """查拉黑名单的 phrase_norm 集合，实例级 60s TTL 缓存。"""
+        now = time.time()
+        ts, cached = self._slang_blocklist_cache
+        if now - ts < _SLANG_BLOCKLIST_CACHE_TTL_SECONDS:
+            return cached
+        norms = frozenset(b["phrase_norm"] for b in self.store.list_slang_blocks())
+        self._slang_blocklist_cache = (now, norms)
+        return norms
+
+    def _invalidate_slang_blocklist_cache(self) -> None:
+        """拉黑/解除拉黑后调用，让捕获路径立即看到最新名单。"""
+        self._slang_blocklist_cache = (0.0, frozenset())
 
     # v1.1.4.9：on_llm_response hook（+ 后置异步学习分析，不依赖 LLM 主动调工具）
     if _ON_LLM_RESPONSE_AVAILABLE:

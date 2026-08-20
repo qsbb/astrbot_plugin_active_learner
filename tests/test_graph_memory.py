@@ -105,7 +105,7 @@ def test_graph_storage_stays_scope_isolated(tmp_path):
             include_global=False,
         )
 
-        assert store._schema_version == 3
+        assert store._schema_version == 5
         assert store.graph_edge_count(PRIVATE) > 0
         assert [hit.entry.id for hit in hits] == [first.id]
         assert all(hit.retrieval_mode == "graph" for hit in hits)

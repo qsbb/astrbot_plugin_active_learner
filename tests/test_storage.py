@@ -125,8 +125,8 @@ def test_init_creates_db_file_and_parent_dirs(tmp_path):
 
 
 def test_init_applies_latest_schema_version(store):
-    # 全新库应一次性迁移到最新版本 3（基础字段 + origin + 关联图索引）
-    assert store._schema_version == 3
+    # 全新库应一次性迁移到最新版本 5（基础字段 + origin + 关联图索引 + 黑话说话人列 + 拉黑名单表）
+    assert store._schema_version == 5
 
 
 def test_init_enables_wal_mode(store):
@@ -152,7 +152,7 @@ def test_migration_from_legacy_schema_adds_columns_and_backfills(tmp_path):
     conn.close()
 
     st = MemoryStore(db)
-    assert st._schema_version == 3
+    assert st._schema_version == 5
     entry = st.get_entry_by_id("oldid")
     # last_accessed_at 需从 created_at 回填，否则衰减评分会把老记忆算成"刚访问过"
     assert entry.last_accessed_at == 12345.0
@@ -169,7 +169,7 @@ def test_migration_is_idempotent_on_reopen(tmp_path):
     entry = st1.add_or_update(PRIVATE, "t", "c", confidence=0.5)
     st1.close()
     st2 = MemoryStore(db)
-    assert st2._schema_version == 3
+    assert st2._schema_version == 5
     assert st2.get_entry_by_id(entry.id) is not None, "迁移不应破坏已有数据"
     st2.close()
 
@@ -178,9 +178,9 @@ def test_migrate_schema_called_twice_returns_same_version():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA_SQL)
-    assert _migrate_schema(conn) == 3
-    # 第二次调用走 current==3 的短路分支，不再执行任何 ALTER/回填
-    assert _migrate_schema(conn) == 3
+    assert _migrate_schema(conn) == 5
+    # 第二次调用走 current==5 的短路分支，不再执行任何 ALTER/回填
+    assert _migrate_schema(conn) == 5
     conn.close()
 
 
@@ -1701,3 +1701,283 @@ def test_get_last_batch_time_is_scope_isolated(store):
     store.add_slang_candidate(PRIVATE, "yyds", "c")
     store.mark_slang_learned(PRIVATE, "yyds")
     assert store.get_last_batch_time(GROUP) == 0.0
+
+
+# ---------- R. 群黑话候选加固（v1.2.0：说话人去重 + 防刷时间窗 + v4 迁移） ----------
+
+
+def test_add_slang_candidate_tracks_speakers(store):
+    store.add_slang_candidate(PRIVATE, "yyds", "c1", speaker="u1")
+    store.add_slang_candidate(PRIVATE, "yyds", "c2", speaker="u2")
+    store.add_slang_candidate(PRIVATE, "yyds", "c3", speaker="u1")
+    pending = store.list_pending_slang(PRIVATE)
+    assert pending[0]["occurrences"] == 3
+    # 说话人列表去重且保持首次出现顺序
+    assert pending[0]["speakers"] == ["u1", "u2"]
+    assert pending[0]["speaker_count"] == 2
+
+
+def test_add_slang_candidate_empty_speaker_gives_empty_list(store):
+    store.add_slang_candidate(PRIVATE, "yyds", "c")
+    pending = store.list_pending_slang(PRIVATE)
+    assert pending[0]["speakers"] == []
+    assert pending[0]["speaker_count"] == 0
+
+
+def test_add_slang_candidate_time_window_blocks_same_speaker(store):
+    # 时间窗内同一说话人重复提及：只刷 last_seen/context，不累加 occurrences
+    store.add_slang_candidate(PRIVATE, "yyds", "c1", speaker="u1", min_interval_seconds=300)
+    store.add_slang_candidate(PRIVATE, "yyds", "c2", speaker="u1", min_interval_seconds=300)
+    pending = store.list_pending_slang(PRIVATE)
+    assert pending[0]["occurrences"] == 1
+    assert pending[0]["context"] == "c2", "不计数时仍刷新上下文"
+
+
+def test_add_slang_candidate_time_window_allows_new_speaker(store):
+    # 时间窗内换一个人提及视为真信号，正常累加
+    store.add_slang_candidate(PRIVATE, "yyds", "c1", speaker="u1", min_interval_seconds=300)
+    store.add_slang_candidate(PRIVATE, "yyds", "c2", speaker="u2", min_interval_seconds=300)
+    pending = store.list_pending_slang(PRIVATE)
+    assert pending[0]["occurrences"] == 2
+    assert pending[0]["speaker_count"] == 2
+
+
+def test_add_slang_candidate_zero_interval_always_counts(store):
+    # min_interval_seconds=0（默认）关闭时间窗，保持旧行为
+    store.add_slang_candidate(PRIVATE, "yyds", "c1", speaker="u1", min_interval_seconds=0)
+    store.add_slang_candidate(PRIVATE, "yyds", "c2", speaker="u1", min_interval_seconds=0)
+    assert store.list_pending_slang(PRIVATE)[0]["occurrences"] == 2
+
+
+def test_v4_migration_adds_slang_speaker_columns(tmp_path):
+    """v3 老库（slang_candidates 无 speakers/last_counted_at 列）应被 v4 迁移补列。"""
+    db = tmp_path / "v3.db"
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA_SQL)
+    # 模拟 v3 库：删掉 v4 新列（重建旧版表结构），并把版本钉在 3
+    conn.executescript(
+        """
+        CREATE TABLE slang_candidates_v3 (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          scope_type TEXT NOT NULL,
+          scope_id TEXT NOT NULL,
+          phrase TEXT NOT NULL,
+          context TEXT,
+          occurrences INTEGER DEFAULT 1,
+          first_seen REAL,
+          last_seen REAL,
+          learned INTEGER DEFAULT 0,
+          learned_at REAL,
+          UNIQUE(scope_type, scope_id, phrase)
+        );
+        INSERT INTO slang_candidates_v3
+          (scope_type, scope_id, phrase, context, occurrences, first_seen, last_seen, learned)
+          VALUES ('private', 'u1', 'yyds', 'ctx', 3, 100.0, 200.0, 0);
+        DROP TABLE slang_candidates;
+        ALTER TABLE slang_candidates_v3 RENAME TO slang_candidates;
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (3, 1.0)"
+    )
+    conn.commit()
+    assert _column_exists(conn, "slang_candidates", "speakers") is False
+    conn.close()
+
+    st = MemoryStore(db)
+    assert st._schema_version == 5
+    assert _column_exists(st._conn, "slang_candidates", "speakers") is True
+    assert _column_exists(st._conn, "slang_candidates", "last_counted_at") is True
+    # 存量行未丢失；last_counted_at 保持 0（视为从未计入），下一次提及正常计数
+    pending = st.list_pending_slang(PRIVATE)
+    assert pending[0]["phrase"] == "yyds"
+    assert pending[0]["occurrences"] == 3
+    assert pending[0]["speakers"] == []
+    st.add_slang_candidate(PRIVATE, "yyds", "c2", speaker="u9", min_interval_seconds=300)
+    assert st.list_pending_slang(PRIVATE)[0]["occurrences"] == 4
+    st.close()
+
+
+# ---------- S. 黑话词条召回查询（v1.2.0：list_slang_entries） ----------
+
+
+def _add_slang_entry(store, scope, topic, content="释义", keywords=None, confidence=0.8):
+    return store.add_or_update(
+        scope,
+        topic,
+        content,
+        keywords=keywords or [topic],
+        source="群黑话自动学习",
+        confidence=confidence,
+        origin="slang",
+    )
+
+
+def test_list_slang_entries_scope_filter(store):
+    _add_slang_entry(store, GROUP, "绝绝子", keywords=["绝绝子", "夸赞"])
+    _add_slang_entry(store, GLOBAL, "yyds", keywords=["yyds"])
+    _add_slang_entry(store, Scope(SCOPE_GROUP, "other"), "破防", keywords=["破防"])
+    entries = store.list_slang_entries(GROUP)
+    by_topic = {e["topic"]: e for e in entries}
+    # 群 scope 能看自己 + global，看不到别的群
+    assert set(by_topic) == {"绝绝子", "yyds"}
+    assert by_topic["绝绝子"]["keywords"] == ["绝绝子", "夸赞"]
+    assert by_topic["绝绝子"]["scope_type"] == SCOPE_GROUP
+    assert by_topic["yyds"]["scope_type"] == SCOPE_GLOBAL
+
+
+def test_list_slang_entries_include_global_false(store):
+    _add_slang_entry(store, GROUP, "绝绝子")
+    _add_slang_entry(store, GLOBAL, "yyds")
+    entries = store.list_slang_entries(GROUP, include_global=False)
+    assert [e["topic"] for e in entries] == ["绝绝子"]
+
+
+def test_list_slang_entries_ignores_non_slang_origin(store):
+    _add_slang_entry(store, GROUP, "绝绝子")
+    store.add_or_update(GROUP, "普通记忆", "内容", keywords=["普通"], origin="manual")
+    entries = store.list_slang_entries(GROUP)
+    assert [e["topic"] for e in entries] == ["绝绝子"]
+
+
+def test_list_slang_entries_empty_db(store):
+    assert store.list_slang_entries(GROUP) == []
+
+
+# ---------- T. 黑话拉黑名单 + 管理端候选队列（v1.2.0：Phase 4，schema v5） ----------
+
+
+def test_slang_block_add_and_is_blocked(store):
+    store.add_slang_block("yyds")
+    assert store.is_slang_blocked("yyds") is True
+    # 归一化匹配：大小写与空白不敏感（"YYDS"/"yyds "/"y yds" 视为同词）
+    assert store.is_slang_blocked("YYDS") is True
+    assert store.is_slang_blocked(" yyds ") is True
+    assert store.is_slang_blocked("y yds") is True
+    assert store.is_slang_blocked("awsl") is False
+
+
+def test_slang_block_empty_phrase_noop(store):
+    store.add_slang_block("")
+    store.add_slang_block("   ")
+    assert store.list_slang_blocks() == []
+    assert store.is_slang_blocked("") is False
+
+
+def test_slang_block_reblock_replaces(store):
+    # phrase_norm 为主键，重复拉黑覆盖原记录，展示词更新为最新写法
+    store.add_slang_block("yyds")
+    store.add_slang_block("YYDS")
+    blocks = store.list_slang_blocks()
+    assert len(blocks) == 1
+    assert blocks[0]["phrase"] == "YYDS"
+    assert blocks[0]["phrase_norm"] == "yyds"
+    assert blocks[0]["created_at"] > 0
+
+
+def test_slang_block_remove(store):
+    store.add_slang_block("yyds")
+    assert store.remove_slang_block("YYDS") is True
+    assert store.is_slang_blocked("yyds") is False
+    # 不存在/空串都返回 False
+    assert store.remove_slang_block("yyds") is False
+    assert store.remove_slang_block("") is False
+
+
+def test_slang_block_list_orders_by_created_at_desc(store):
+    store.add_slang_block("first")
+    store.add_slang_block("second")
+    blocks = store.list_slang_blocks()
+    assert [b["phrase"] for b in blocks] == ["second", "first"]
+
+
+def test_delete_slang_candidate(store):
+    store.add_slang_candidate(PRIVATE, "yyds", "c")
+    assert store.delete_slang_candidate(PRIVATE, "yyds") is True
+    assert store.list_pending_slang(PRIVATE) == []
+    # 再删一次返回 False；别的 scope 的同名词不受影响
+    store.add_slang_candidate(GROUP, "yyds", "c")
+    assert store.delete_slang_candidate(PRIVATE, "yyds") is False
+    assert len(store.list_pending_slang(GROUP)) == 1
+
+
+def test_list_slang_candidates_pending_first_then_learned(store):
+    store.add_slang_candidate(PRIVATE, "low", "c")
+    for _ in range(3):
+        store.add_slang_candidate(PRIVATE, "high", "c")
+    store.add_slang_candidate(PRIVATE, "done", "c")
+    store.mark_slang_learned(PRIVATE, "done")
+    items = store.list_slang_candidates(PRIVATE)
+    # pending 在前按次数降序，已学习的排在最后
+    assert [x["phrase"] for x in items] == ["high", "low", "done"]
+    assert items[0]["learned"] == 0
+    assert items[-1]["learned"] == 1
+    assert items[0]["speaker_count"] == 0
+
+
+def test_list_slang_candidates_scope_none_returns_all(store):
+    store.add_slang_candidate(PRIVATE, "yyds", "c")
+    store.add_slang_candidate(GROUP, "awsl", "c")
+    items = store.list_slang_candidates(None)
+    by_phrase = {x["phrase"]: x for x in items}
+    assert set(by_phrase) == {"yyds", "awsl"}
+    assert by_phrase["yyds"]["scope_id"] == "u1"
+    assert by_phrase["awsl"]["scope_id"] == "g9"
+
+
+def test_v5_migration_adds_blocklist_table(tmp_path):
+    """v4 老库（无 slang_blocklist 表）应被 v5 迁移补建。"""
+    db = tmp_path / "v4.db"
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA_SQL)
+    # 模拟 v4 库：删掉 v5 新表，并把版本钉在 4
+    conn.executescript("DROP TABLE slang_blocklist;")
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (4, 1.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    st = MemoryStore(db)
+    assert st._schema_version == 5
+    st.add_slang_block("yyds")
+    assert st.is_slang_blocked("yyds") is True
+    st.close()
+
+
+# ---------- U. list_slang_entries 扩展字段（v1.2.0：Phase 4 管理端展示） ----------
+
+
+def test_list_slang_entries_extended_fields(store):
+    import json as _json
+
+    store.add_or_update(
+        GROUP,
+        "绝绝子",
+        "释义",
+        keywords=["绝绝子"],
+        source="群黑话自动学习",
+        sources_detail=[_json.dumps({"slang_scope_hint": "general"}, ensure_ascii=False)],
+        confidence=0.8,
+        origin="slang",
+    )
+    e = store.list_slang_entries(GROUP)[0]
+    # 新字段：scope_id / verified / scope_hint
+    assert e["scope_id"] == "g9"
+    assert e["verified"] == 0
+    assert e["scope_hint"] == "general"
+    # 原有键保持不变
+    assert e["topic"] == "绝绝子"
+    assert e["scope_type"] == SCOPE_GROUP
+    assert e["content"] == "释义"
+
+
+def test_list_slang_entries_scope_none_returns_all(store):
+    _add_slang_entry(store, GROUP, "绝绝子")
+    _add_slang_entry(store, PRIVATE, "私聊词")
+    _add_slang_entry(store, GLOBAL, "yyds")
+    entries = store.list_slang_entries(None)
+    # 管理端视角：跨全部 scope，不再硬隔离
+    assert {e["topic"] for e in entries} == {"绝绝子", "私聊词", "yyds"}

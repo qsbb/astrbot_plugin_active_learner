@@ -200,6 +200,49 @@ class WebApiMixin:
             ["GET"],
             "获取插件日志",
         )
+        # v1.2.0：群黑话管理（候选审核 / 晋升全局 / 拉黑名单）
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/slang/candidates",
+            self._web_slang_candidates,
+            ["GET"],
+            "黑话候选队列",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/slang/entries",
+            self._web_slang_entries,
+            ["GET"],
+            "已学习黑话词条",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/slang/promote",
+            self._web_slang_promote,
+            ["POST"],
+            "晋升黑话为全局通用梗",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/slang/reject",
+            self._web_slang_reject,
+            ["POST"],
+            "拒绝黑话候选",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/slang/block",
+            self._web_slang_block,
+            ["POST"],
+            "拉黑黑话词",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/slang/unblock",
+            self._web_slang_unblock,
+            ["POST"],
+            "解除黑话拉黑",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/slang/blocklist",
+            self._web_slang_blocklist,
+            ["GET"],
+            "黑话拉黑列表",
+        )
 
     async def _web_debug(self):
         """返回数据库、运行状态和当前实际配置。
@@ -1800,6 +1843,140 @@ class WebApiMixin:
         """返回本插件最近的日志。"""
         logs = [item.get("text", "") for item in self._log_buffer]
         return json_response({"logs": logs, "count": len(logs)})
+
+    # ---------- v1.2.0：群黑话管理（候选审核 / 晋升 / 拉黑） ----------
+
+    async def _web_slang_candidates(self):
+        """候选队列。scope 参数缺省时返回全部 scope（管理端视角）。"""
+        try:
+            scope = self._scope_from_query()
+            items = await asyncio.to_thread(
+                self.store.list_slang_candidates, scope
+            )
+            return json_response({"items": items})
+        except Exception as e:
+            logger.error(f"读取黑话候选队列失败: {e}", exc_info=True)
+            return error_response(f"读取黑话候选队列失败: {e}", status_code=500)
+
+    async def _web_slang_entries(self):
+        """已学习词条。scope 参数缺省时返回全部 scope 的词条（管理端视角）。"""
+        try:
+            scope = self._scope_from_query()
+            items = await asyncio.to_thread(
+                self.store.list_slang_entries, scope, True, 500
+            )
+            return json_response({"items": items})
+        except Exception as e:
+            logger.error(f"读取黑话词条失败: {e}", exc_info=True)
+            return error_response(f"读取黑话词条失败: {e}", status_code=500)
+
+    @staticmethod
+    def _slang_scope_from_payload(payload: dict):
+        """从 POST body 构造 Scope；字段缺失或不合法时返回 None。"""
+        st = (str(payload.get("scope_type") or "")).strip()
+        sid = (str(payload.get("scope_id") or "")).strip()
+        if not st or not sid:
+            return None
+        if st not in ("private", "group", "global"):
+            return None
+        return Scope(type=st, id=sid)
+
+    async def _web_slang_promote(self):
+        """手动晋升：把指定 scope 的已学黑话词条复制/更新到 global。"""
+        try:
+            payload = await request.json(default={}) or {}
+            phrase = (str(payload.get("phrase") or "")).strip()
+            scope = self._slang_scope_from_payload(payload)
+            if not phrase or scope is None:
+                return error_response(
+                    "phrase、scope_type、scope_id 均不能为空", status_code=400
+                )
+            ok = await asyncio.to_thread(
+                self.store.promote_slang_to_global, scope, phrase
+            )
+            if not ok:
+                return json_response(
+                    {"ok": False, "msg": f"未找到「{phrase}」的已学词条（或该 scope 本身是 global）"}
+                )
+            # global 词条变化影响所有群的召回注入，全清缓存
+            self._invalidate_slang_recall_cache()
+            logger.info(f"黑话手动晋升 global: phrase={phrase!r}")
+            return json_response({"ok": True, "msg": f"已将「{phrase}」晋升为全局通用梗"})
+        except Exception as e:
+            logger.error(f"黑话晋升失败: {e}", exc_info=True)
+            return error_response(f"黑话晋升失败: {e}", status_code=500)
+
+    async def _web_slang_reject(self):
+        """拒绝候选：从候选队列删除（不拉黑，之后还可能再被捕获）。"""
+        try:
+            payload = await request.json(default={}) or {}
+            phrase = (str(payload.get("phrase") or "")).strip()
+            scope = self._slang_scope_from_payload(payload)
+            if not phrase or scope is None:
+                return error_response(
+                    "phrase、scope_type、scope_id 均不能为空", status_code=400
+                )
+            ok = await asyncio.to_thread(
+                self.store.delete_slang_candidate, scope, phrase
+            )
+            if not ok:
+                return json_response({"ok": False, "msg": "候选队列中没有该词"})
+            logger.info(f"黑话候选已拒绝: phrase={phrase!r}")
+            return json_response({"ok": True, "msg": f"已拒绝「{phrase}」"})
+        except Exception as e:
+            logger.error(f"黑话候选拒绝失败: {e}", exc_info=True)
+            return error_response(f"黑话候选拒绝失败: {e}", status_code=500)
+
+    async def _web_slang_block(self):
+        """拉黑词条：之后捕获路径直接跳过该词。可同时 reject 指定 scope 的候选。"""
+        try:
+            payload = await request.json(default={}) or {}
+            phrase = (str(payload.get("phrase") or "")).strip()
+            if not phrase:
+                return error_response("phrase 不能为空", status_code=400)
+            await asyncio.to_thread(self.store.add_slang_block, phrase)
+            self._invalidate_slang_blocklist_cache()
+            rejected = False
+            if payload.get("reject"):
+                scope = self._slang_scope_from_payload(payload)
+                if scope is not None:
+                    rejected = await asyncio.to_thread(
+                        self.store.delete_slang_candidate, scope, phrase
+                    )
+            logger.info(f"黑话已拉黑: phrase={phrase!r} rejected={rejected}")
+            msg = f"已拉黑「{phrase}」"
+            if payload.get("reject"):
+                msg += "，并已从候选队列移除" if rejected else "（候选队列中没有该词）"
+            return json_response({"ok": True, "msg": msg, "rejected": rejected})
+        except Exception as e:
+            logger.error(f"黑话拉黑失败: {e}", exc_info=True)
+            return error_response(f"黑话拉黑失败: {e}", status_code=500)
+
+    async def _web_slang_unblock(self):
+        """解除拉黑。"""
+        try:
+            payload = await request.json(default={}) or {}
+            phrase = (str(payload.get("phrase") or "")).strip()
+            if not phrase:
+                return error_response("phrase 不能为空", status_code=400)
+            ok = await asyncio.to_thread(self.store.remove_slang_block, phrase)
+            self._invalidate_slang_blocklist_cache()
+            if not ok:
+                return json_response({"ok": False, "msg": "拉黑列表中没有该词"})
+            logger.info(f"黑话已解除拉黑: phrase={phrase!r}")
+            return json_response({"ok": True, "msg": f"已解除拉黑「{phrase}」"})
+        except Exception as e:
+            logger.error(f"解除拉黑失败: {e}", exc_info=True)
+            return error_response(f"解除拉黑失败: {e}", status_code=500)
+
+    async def _web_slang_blocklist(self):
+        """拉黑列表。"""
+        try:
+            items = await asyncio.to_thread(self.store.list_slang_blocks)
+            return json_response({"items": items})
+        except Exception as e:
+            logger.error(f"读取黑话拉黑列表失败: {e}", exc_info=True)
+            return error_response(f"读取黑话拉黑列表失败: {e}", status_code=500)
 
 
 # v1.1.5.0：_parse_md 已移至 importer.py

@@ -12,7 +12,7 @@ PLUGIN_NAME = "astrbot_plugin_active_learner"
 
 # 插件版本。@register 装饰器与 metadata.yaml 必须保持一致，
 # 这里作为唯一事实来源，避免版本号散落在多处后漏改。
-PLUGIN_VERSION = "1.5.1"
+PLUGIN_VERSION = "1.5.2"
 
 _TOOL_NAMES = (
     "search_and_learn",
@@ -20,6 +20,7 @@ _TOOL_NAMES = (
     "verify_knowledge",
     "search_bilibili",
     "save_memory",
+    "lookup_slang",
 )
 
 # 普通请求检索/注入预算：先全库 FTS，命中不足才限时调用 Embedding。
@@ -34,6 +35,18 @@ _EXTERNAL_SEARCH_FIRST_RESULT_GRACE_SECONDS = 0.5
 _MEMORY_INJECT_MAX_COUNT = 3
 _MEMORY_INJECT_TOTAL_CHARS = 1800
 _MEMORY_INJECT_ITEM_CHARS = 700
+
+# v1.2.0：群黑话召回词条的 per-scope 缓存 TTL（秒），避免每条消息都查库。
+_SLANG_RECALL_CACHE_TTL_SECONDS = 60
+
+# v1.2.0：拉黑名单的实例级缓存 TTL（秒），避免每条消息都查 blocklist 表。
+_SLANG_BLOCKLIST_CACHE_TTL_SECONDS = 60
+
+# v1.2.0：黑话跨群晋升——置信度加成与封顶、关键词并集上限。
+# 封顶 0.9 确保晋升词条不会在混合检索里反压本群词条太多。
+_SLANG_PROMOTION_CONFIDENCE_CAP = 0.9
+_SLANG_PROMOTION_CONFIDENCE_BONUS = 0.1
+_SLANG_PROMOTION_MAX_KEYWORDS = 8
 
 # ---------------------------------------------------------------------------
 # 跨插件知识桥接契约（消费方：序 astrbot_plugin_identity_guardian）

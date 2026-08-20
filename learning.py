@@ -8,13 +8,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 
 from astrbot.api.event import AstrMessageEvent
 
-from .models import Scope, now_ts
+from .models import SCOPE_GLOBAL, Scope, now_ts
 from .plugin_logger import logger
 from .slang_capture import build_batch_prompt, parse_batch_response
+from .slang_promotion import check_cross_group_promotion
 
 
 class LearningMixin:
@@ -220,8 +222,12 @@ class LearningMixin:
             if len(pending) < self._slang_batch_size:
                 return
             # 过滤 occurrences < min_occurrences
+            # v1.2.0：再要求至少 min_speakers 个不同群友提及，防单人刷屏投毒
             qualified = [
-                c for c in pending if c["occurrences"] >= self._slang_min_occurrences
+                c
+                for c in pending
+                if c["occurrences"] >= self._slang_min_occurrences
+                and c.get("speaker_count", 0) >= self._slang_min_speakers
             ]
             if len(qualified) < self._slang_batch_size:
                 return
@@ -253,6 +259,7 @@ class LearningMixin:
             parsed = parse_batch_response(response_text, candidates)
             parsed_phrases = {p["phrase"] for p in parsed}
             success = 0
+            succeeded_phrases: list[str] = []
             for item in parsed:
                 try:
                     await asyncio.to_thread(
@@ -262,10 +269,19 @@ class LearningMixin:
                         item["summary"],
                         keywords=item["keywords"],
                         source="群黑话自动学习",
+                        # v1.2.0：LLM 判定的通用梗/内部说法提示存入 sources_detail，
+                        # 键名 slang_scope_hint，供跨群晋升（slang_promotion）读取
+                        sources_detail=[
+                            json.dumps(
+                                {"slang_scope_hint": item.get("scope_hint", "local")},
+                                ensure_ascii=False,
+                            )
+                        ],
                         confidence=item["confidence"],
                         origin="slang",
                     )
                     success += 1
+                    succeeded_phrases.append(item["phrase"])
                 except Exception as e:
                     logger.warning(f"slang 入库失败「{item['phrase']}」: {e}")
                 await asyncio.to_thread(
@@ -279,8 +295,86 @@ class LearningMixin:
                     )
             if self.embedder is not None:
                 self.embedder.invalidate_matrix_cache()
+            # v1.2.0：新词条入库后让黑话召回缓存失效，下一条消息即可命中新词
+            try:
+                self._invalidate_slang_recall_cache(scope)
+            except Exception:
+                pass
+            # v1.2.0：跨群共现晋升检查——global scope 唯一自动写入通道
+            if self._slang_promotion_enabled:
+                for phrase in succeeded_phrases:
+                    await self._maybe_promote_slang(phrase)
             logger.info(
                 f"✅ slang 批量学习: {success}/{len(candidates)} 成功 (scope: {scope})"
             )
         except Exception as e:
             logger.warning(f"❌ slang 批量学习异常: {e}")
+
+    # ---------- v1.2.0：黑话作用域晋升（跨群共现 / 外部验证） ----------
+
+    async def _maybe_promote_slang(self, phrase: str) -> None:
+        """词条入库后检查是否满足跨群共现晋升条件，命中则写入 global scope。
+
+        整个检查失败只 log 不影响主流程；晋升成功后全清召回缓存，
+        因为 global 词条变化影响所有群的注入。
+        """
+        try:
+            entries = await asyncio.to_thread(
+                self.store.get_slang_entries_by_topic, phrase
+            )
+            plan = check_cross_group_promotion(
+                entries, self._slang_promotion_min_groups
+            )
+            source = "跨群共现晋升"
+            if plan is None and self._slang_promotion_external_verify:
+                # 外部验证通道（默认关）：LLM 未判通用梗时，用联网搜索佐证公开梗
+                if await self._external_verify_phrase(phrase):
+                    plan = check_cross_group_promotion(
+                        entries,
+                        self._slang_promotion_min_groups,
+                        require_general_hint=False,
+                    )
+                    source = "外部验证晋升"
+            if not plan:
+                return
+            await asyncio.to_thread(
+                self.store.add_or_update,
+                Scope(SCOPE_GLOBAL, SCOPE_GLOBAL),
+                plan["topic"],
+                plan["content"],
+                keywords=plan["keywords"],
+                source=source,
+                sources_detail=[
+                    json.dumps(
+                        {"promoted_from_groups": plan["from_groups"]},
+                        ensure_ascii=False,
+                    )
+                ],
+                confidence=plan["confidence"],
+                origin="slang",
+            )
+            logger.info(
+                f"✅ 黑话晋升 global:「{plan['topic']}」({source}, "
+                f"from_groups={plan['from_groups']}, confidence={plan['confidence']:.2f})"
+            )
+            try:
+                self._invalidate_slang_recall_cache()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.debug(f"slang 晋升检查失败「{phrase}」: {e}")
+
+    async def _external_verify_phrase(self, phrase: str) -> bool:
+        """外部验证：用搜索器搜一次该词，有任意结果即视为公开梗证据。
+
+        保守口径：搜索器不可用、搜索异常、无结果一律返回 False，只 debug log。
+        """
+        try:
+            searcher = getattr(self, "searcher", None)
+            if searcher is None or not searcher.is_available:
+                return False
+            results = await searcher.search(phrase, max_results=3)
+            return bool(results)
+        except Exception as e:
+            logger.debug(f"slang 外部验证失败「{phrase}」: {e}")
+            return False
