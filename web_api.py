@@ -28,6 +28,7 @@ from .constants import (
 from .embedder import Embedder
 from .models import Scope, now_ts
 from .plugin_logger import logger
+from .model_router import resolve_provider_id as resolve_routed_provider_id
 
 try:
     from astrbot.api.web import error_response, file_response, json_response, request
@@ -1252,7 +1253,13 @@ class WebApiMixin:
                 f"provider 解析 [2/4 Schema] 命中但校验失败: {self._cfg_llm_provider_id!r}"
             )
 
-        # 3. 事件 scope 默认（async），尝试调用 get_current_chat_provider_id
+        # 3. 核统一模型路由（契约不可用时透明回退）
+        core_provider = await resolve_routed_provider_id(self.context, "conversation")
+        if core_provider:
+            logger.info("provider 解析 [3/5 核统一路由] 命中")
+            return core_provider
+
+        # 4. 事件 scope 默认（async），尝试调用 get_current_chat_provider_id
         method = getattr(self.context, "get_current_chat_provider_id", None)
         if callable(method):
             try:
@@ -1269,7 +1276,7 @@ class WebApiMixin:
             except Exception as e:
                 logger.debug(f"provider 解析 [3/4 当前对话默认] 调用异常: {e}")
 
-        # 4. 同步兜底
+        # 5. 同步兜底
         fallback = self._resolve_default_provider_id()
         configured = self.config_manager.get("llm_provider_id", "")
         logger.info(
@@ -1607,6 +1614,16 @@ class WebApiMixin:
         # plugin.config；必须先刷新公开快照，否则管理页保存后诊断和实际功能
         # 都会继续使用启动时旧参数。
         cfg = self._sync_config_snapshot(settings)
+        # 若“核”已接管字段，插件原生配置页的更新不能覆盖当前受管值。
+        series_control = getattr(self, "_series_control", None)
+        if series_control is not None:
+            for field in ("embedding_enabled", "context_inject_count", "search_top_k"):
+                try:
+                    cfg[field] = series_control.effective_value(field)
+                    self.config[field] = cfg[field]
+                except (AttributeError, KeyError, TypeError):
+                    # 旧版热重载对象可能没有统一控制适配器；继续使用原生配置。
+                    pass
 
         # 容量与置信度阈值
         try:
@@ -1626,6 +1643,7 @@ class WebApiMixin:
 
         # 混合检索
         new_embedding_enabled = bool(cfg.get("embedding_enabled", True))
+        self._embedding_enabled = new_embedding_enabled
         if new_embedding_enabled and self.embedder is None:
             try:
                 self.embedder = Embedder(self)

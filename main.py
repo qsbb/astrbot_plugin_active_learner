@@ -48,6 +48,7 @@ from .verifier import Verifier
 
 # v1.1.5.0：架构重构 —— 统一服务层
 from .config_manager import ConfigManager
+from .series_control import SeriesControlAdapter
 from .llm_service import LLMService
 from .graph_memory import normalize_reconstruction_mode
 from .importer import Importer  # noqa: F811
@@ -187,6 +188,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self.config_manager = ConfigManager(
             data_dir, cfg, native_config=self._native_config
         )
+        self._series_control = SeriesControlAdapter(self)
         cfg = self.config_manager.all()
         self.config = cfg
         self.llm_service = LLMService(self)
@@ -260,6 +262,9 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self._learn_weight = max(0.0, min(1.0, float(cfg.get("learn_weight", 0.7))))
         # v1.1.4.7：搜索返回条数
         self._search_top_k = max(1, min(20, int(cfg.get("search_top_k", 5))))
+        # 统一控制覆盖在所有依赖字段和 Embedder 创建后再应用，确保重启时
+        # 已保存的覆盖值与热应用路径保持一致。
+        self._series_control.sync_runtime()
         # v1.1.4.7：默认置信度
         self._default_confidence = max(
             0.1, min(1.0, float(cfg.get("default_confidence", 0.6)))
@@ -1310,4 +1315,48 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         yield event.plain_result(
             f"🔄 已刷新「{entry.topic}」的访问时间，衰减分数已恢复。\n"
             f"当前置信度: {entry.confidence:.0%}"
+        )
+
+    # series.control@1.0: the kernel talks to this stable facade and never
+    # reaches into the plugin's private ConfigManager/config files.
+    def _apply_series_control_runtime(self, effective: dict[str, Any]) -> None:
+        """Apply only the fields owned by ``series.control@1.0``."""
+        new_embedding_enabled = bool(effective["embedding_enabled"])
+        self._embedding_enabled = new_embedding_enabled
+        if new_embedding_enabled and self.embedder is None:
+            self.embedder = Embedder(self)
+        elif not new_embedding_enabled:
+            self.embedder = None
+        self._context_inject_count = max(
+            1, min(_MEMORY_INJECT_MAX_COUNT, int(effective["context_inject_count"]))
+        )
+        self._search_top_k = max(1, min(20, int(effective["search_top_k"])))
+        if self.embedder is not None:
+            self.embedder.invalidate_matrix_cache()
+
+    def series_control_contract(self):
+        return self._series_control.series_control_contract()
+
+    def series_control_schema(self):
+        return self._series_control.series_control_schema()
+
+    def series_control_snapshot(self):
+        return self._series_control.series_control_snapshot()
+
+    def series_control_set_mode(self, mode):
+        return self._series_control.series_control_set_mode(mode)
+
+    def validate_series_control_patch(self, patch, *, expected_revision: int):
+        return self._series_control.validate_series_control_patch(
+            patch, expected_revision=expected_revision
+        )
+
+    def apply_series_control_patch(self, patch, *, expected_revision: int):
+        return self._series_control.apply_series_control_patch(
+            patch, expected_revision=expected_revision
+        )
+
+    def reset_series_control_override(self, fields=None, *, expected_revision=None):
+        return self._series_control.reset_series_control_override(
+            fields, expected_revision=expected_revision
         )

@@ -134,6 +134,16 @@ class ConfigManager:
                 return self._astrbot_cfg[key]
         return default
 
+    def native_get(self, key: str, default: Any = None) -> Any:
+        """Read the plugin-page value without the Dashboard overlay."""
+        with self._lock:
+            return self._plugin_config.get(key, default)
+
+    def native_has(self, key: str) -> bool:
+        """Whether the plugin-page config explicitly contains ``key``."""
+        with self._lock:
+            return key in self._plugin_config
+
     def set(self, key: str, value: Any) -> None:
         """设置单值并持久化。"""
         self.update(**{key: value})
