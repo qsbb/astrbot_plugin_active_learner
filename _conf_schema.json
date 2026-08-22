@@ -102,12 +102,6 @@
         "hint": "开启后，管理员不受跨领域限制，仍可触发联网搜索；关闭则管理员也会被限制。",
         "default": true
     },
-    "debate_rounds": {
-        "description": "质疑验证的自辩论轮数",
-        "type": "int",
-        "hint": "验证某条记忆时，LLM 自辩论的轮数。2 表示：支持方→质疑方→仲裁。",
-        "default": 2
-    },
     "llm_provider_id": {
         "description": "插件专用 LLM Provider（留空用当前对话模型）",
         "type": "string",
