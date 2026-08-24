@@ -14,3 +14,8 @@ memory.db
 memory_export_*.json
 .trae/
 COMMIT_MSG_TMP
+
+# 本地备份/临时文件（勿提交）
+*.bak
+*.bak_*
+*.orig
