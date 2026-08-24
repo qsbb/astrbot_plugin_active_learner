@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import time as _time_module
 from typing import Optional
 
 from .constants import (
@@ -40,6 +41,47 @@ from .runtime import (
 
 class RetrievalMixin:
     """检索侧行为。由 ActiveLearnerPlugin 混入，依赖宿主的 store/embedder 等属性。"""
+
+    # ---- Phase 2: retrieval & embedding caches ----
+    # TTL-based caches to avoid redundant embedding API calls and
+    # repeated searches for the same query+scope within a short window.
+    _retrieval_cache: dict = {}
+    _retrieval_cache_max = 128
+    _retrieval_cache_ttl = 10.0  # seconds
+    _embedding_cache: dict = {}
+    _embedding_cache_max = 256
+    _embedding_cache_ttl = 60.0  # seconds
+
+    @staticmethod
+    def _cache_prune(cache: dict, max_size: int) -> None:
+        if len(cache) <= max_size:
+            return
+        now = _time_module.monotonic()
+        expired = [k for k, v in cache.items() if v[1] < now]
+        for k in expired:
+            cache.pop(k, None)
+        if len(cache) > max_size:
+            oldest = sorted(cache.items(), key=lambda x: x[1][1])[:len(cache) - max_size]
+            for k, _ in oldest:
+                cache.pop(k, None)
+
+    @staticmethod
+    def _timing_event(phase: str, duration_ms: float, *, cache_hit: bool | None = None, result_count: int | None = None, status: str = "ok") -> None:
+        """Emit a phase timing event through series_diagnostics, if available."""
+        try:
+            from .series_diagnostics import diagnostic_event
+            details: dict = {"duration_ms": round(duration_ms, 1), "status": status}
+            if cache_hit is not None:
+                details["cache_hit"] = cache_hit
+            if result_count is not None:
+                details["result_count"] = result_count
+            diagnostic_event(
+                f"active_learner.{phase}",
+                f"phase {phase} completed in {duration_ms:.1f}ms",
+                details=details,
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _parse_hybrid_weights(s: str) -> tuple[float, float]:
@@ -308,16 +350,42 @@ class RetrievalMixin:
         self, scope: Scope, query: str
     ) -> tuple[list, str, dict[str, bool]]:
         """并发启动整句 FTS/Embedding，必要时合并并逐个补查缺失对象。"""
+        t_total = _time_module.perf_counter()
+
+        # Phase 2: retrieval cache check (uses hash of query for privacy)
+        cache_key = f"{scope.scope_type}:{scope.scope_id}:{hash(query)}"
+        now = _time_module.monotonic()
+        cached = self._retrieval_cache.get(cache_key)
+        if cached is not None and (now - cached[1]) < self._retrieval_cache_ttl:
+            hits, mode, coverage = cached[0]
+            self._timing_event("cache_lookup", (_time_module.perf_counter() - t_total) * 1000, cache_hit=True, result_count=len(hits))
+            self._timing_event("total", (_time_module.perf_counter() - t_total) * 1000, cache_hit=True, result_count=len(hits))
+            return cached[0]
+        self._timing_event("cache_lookup", (_time_module.perf_counter() - t_total) * 1000, cache_hit=False)
         objects = extract_comparison_objects(query)
 
         async def embed_and_search(item: str) -> list:
             if self.embedder is None:
                 return []
-            async with self._retrieval_semaphore:
-                vector = await asyncio.wait_for(
-                    self.embedder.embed_query(item),
-                    timeout=_EMBEDDING_TIMEOUT_SECONDS,
-                )
+            # Phase 2: embedding cache (text → vector, safe to share across users)
+            embed_cache_key = f"embed:{hash(item)}"
+            now_e = _time_module.monotonic()
+            cached_vec = self._embedding_cache.get(embed_cache_key)
+            if cached_vec is not None and (now_e - cached_vec[1]) < self._embedding_cache_ttl:
+                vector = cached_vec[0]
+                self._timing_event("embedding", 0.0, cache_hit=True)
+            else:
+                t_embed = _time_module.perf_counter()
+                async with self._retrieval_semaphore:
+                    vector = await asyncio.wait_for(
+                        self.embedder.embed_query(item),
+                        timeout=_EMBEDDING_TIMEOUT_SECONDS,
+                    )
+                embed_ms = (_time_module.perf_counter() - t_embed) * 1000
+                self._timing_event("embedding", embed_ms, cache_hit=False)
+                if vector is not None:
+                    self._embedding_cache[embed_cache_key] = (vector, now_e)
+                    self._cache_prune(self._embedding_cache, self._embedding_cache_max)
             if vector is None:
                 return []
             return await self._search_memory_once(scope, item, vector)
@@ -328,7 +396,9 @@ class RetrievalMixin:
             if self.embedder is not None
             else None
         )
+        t_fts = _time_module.perf_counter()
         hits = await fts_task
+        self._timing_event("fts_search", (_time_module.perf_counter() - t_fts) * 1000, result_count=len(hits))
         coverage = comparison_coverage(objects, hits)
         fts_is_final = self._fts_hits_sufficient(hits) and all(coverage.values())
         mode = "fts"
@@ -397,6 +467,7 @@ class RetrievalMixin:
             )
         )
         if graph_gate:
+            t_graph = _time_module.perf_counter()
             try:
                 graph_hits = await asyncio.to_thread(
                     self.store.search_graph,
@@ -415,9 +486,12 @@ class RetrievalMixin:
                     hits = self._merge_search_hits(hits, graph_hits)
                     mode = f"{mode}+graph"
                     coverage = comparison_coverage(objects, hits)
+                self._timing_event("graph_search", (_time_module.perf_counter() - t_graph) * 1000, result_count=len(graph_hits) if graph_hits else 0)
             except Exception as exc:
+                self._timing_event("graph_search", (_time_module.perf_counter() - t_graph) * 1000, status="error")
                 logger.debug("图记忆检索降级: %s", exc)
         if objects:
+            t_filter = _time_module.perf_counter()
             selected = []
             selected_ids = set()
             # 每个已覆盖对象至少保留一条对应命中，之后再按总分补齐。
@@ -435,7 +509,9 @@ class RetrievalMixin:
                     selected.append(hit)
                     selected_ids.add(hit.entry.id)
             hits = selected
+            self._timing_event("result_filter", (_time_module.perf_counter() - t_filter) * 1000, result_count=len(hits))
         elif hits and topic_terms(query):
+            t_filter = _time_module.perf_counter()
             # 非对比问题要求单条候选完整覆盖当前主题实体。宽泛共同词命中不应
             # 进入上下文，否则高置信度的另一实体会先入为主地污染主模型判断。
             hits = [
@@ -444,8 +520,14 @@ class RetrievalMixin:
                 if getattr(hit, "retrieval_mode", "") == "graph"
                 or entry_covers_topic(query, hit)
             ]
+            self._timing_event("result_filter", (_time_module.perf_counter() - t_filter) * 1000, result_count=len(hits))
 
-        return hits[: self._context_inject_count], mode, coverage
+        result = (hits[: self._context_inject_count], mode, coverage)
+        # Phase 2: store in retrieval cache
+        self._retrieval_cache[cache_key] = (result, now)
+        self._cache_prune(self._retrieval_cache, self._retrieval_cache_max)
+        self._timing_event("total", (_time_module.perf_counter() - t_total) * 1000, cache_hit=False, result_count=len(hits[: self._context_inject_count]))
+        return result
 
     @staticmethod
     def _build_memory_injection(hits) -> tuple[list[str], list]:
