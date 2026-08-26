@@ -41,7 +41,7 @@ from .slang_capture import extract_candidates
 from .slang_promotion import normalize_phrase
 from .slang_recall import build_slang_injection, find_known_slang
 from .storage import MemoryStore
-from .triggers import CHALLENGE_PATTERNS
+from .triggers import CHALLENGE_PATTERNS, MEMORY_RECALL_COMPILED
 from .tools import create_tools
 from .url_sources import UrlSourceRegistry
 from .verifier import Verifier
@@ -221,6 +221,11 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
 
         # v1.1.2.0：向量混合检索配置
         self._embedding_enabled = bool(cfg.get("embedding_enabled", True))
+        # v1.5.4：按需召回门控 —— 无回忆指代/时间/人物/事件指代时跳过全库 FTS/向量，
+        # 只付固定微小的正则判定成本。默认开启，可关闭回退为每轮检索。
+        self._memory_recall_gate_enabled = bool(
+            cfg.get("memory_recall_gate_enabled", True)
+        )
         self._hybrid_weights = self._parse_hybrid_weights(
             cfg.get("hybrid_search_weight", "0.4,0.6")
         )
@@ -673,6 +678,18 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
     # priority=700：凝心溯溪系列 on_llm_request 区间为 200-800，数值越大越先执行。
     # 顺序为 序 800（身份安全边界）> 知 700（知识事实）> 情 600（表达约束）>
     # 言 500（沉默判断）。知识注入必须晚于身份边界，否则安全层可能被事实注入抢先。
+    def _memory_recall_demanded(self, msg: str) -> bool:
+        """确定性判定本轮是否需要长期记忆召回（无 LLM、无 I/O）。
+
+        日常寒暄（"晚上好"、"你现在怎么样"）不触发；出现回忆指代/时间/人物/
+        事件指代或明确回忆命令时才触发。判定保守：宁可不召回，也不让普通
+        聊天付全库 FTS/向量检索成本。
+        """
+        text = (msg or "").strip()
+        if not text:
+            return False
+        return any(pattern.search(text) for pattern in MEMORY_RECALL_COMPILED)
+
     @filter.on_llm_request(priority=700)
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
         """LLM 请求前的统一钩子：检索记忆 + 质疑检测 + 主动学习提示。"""
@@ -706,35 +723,46 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         retrieval_started = time.perf_counter()
         retrieval_mode = "fts"
         comparison_status: dict[str, bool] = {}
-        try:
-            hits, retrieval_mode, comparison_status = await self._retrieve_memory(
-                scope, msg
-            )
-            if comparison_status and logger.isEnabledFor(logging.DEBUG):
-                logger.debug("对比对象覆盖: %s", comparison_status)
-
-            await asyncio.to_thread(self.store.track_search_hits, hits)
-            # 动态调整 priority boost：命中关心领域 → 重置；未命中 → 衰减
-            if self._priority_topics:
-                if self._hits_match_priority(hits):
-                    if self._priority_boost < self._priority_boost_max:
-                        logger.debug(
-                            f"priority boost 命中重置: {self._priority_boost:.2f} -> {self._priority_boost_max:.2f}"
-                        )
-                    self._priority_boost = self._priority_boost_max
-                else:
-                    new_boost = max(
-                        self._priority_boost_min,
-                        self._priority_boost * self._priority_boost_decay,
-                    )
-                    if new_boost != self._priority_boost:
-                        logger.debug(
-                            f"priority boost 衰减: {self._priority_boost:.2f} -> {new_boost:.2f}"
-                        )
-                    self._priority_boost = new_boost
-        except Exception as e:
-            logger.warning(f"记忆检索失败: {e}")
+        if self._memory_recall_gate_enabled and not self._memory_recall_demanded(msg):
+            # 按需触发：本轮无回忆/时间/人物/事件指代，跳过全库检索，
+            # 不 FTS、不向量、不 track_search_hits、不调整 priority boost。
             hits = []
+            retrieval_mode = "gated"
+            add_reason(
+                request_context,
+                OWNER_ACTIVE_LEARNER,
+                "MEMORY_RECALL_NOT_DEMANDED",
+            )
+        else:
+            try:
+                hits, retrieval_mode, comparison_status = await self._retrieve_memory(
+                    scope, msg
+                )
+                if comparison_status and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("对比对象覆盖: %s", comparison_status)
+
+                await asyncio.to_thread(self.store.track_search_hits, hits)
+                # 动态调整 priority boost：命中关心领域 → 重置；未命中 → 衰减
+                if self._priority_topics:
+                    if self._hits_match_priority(hits):
+                        if self._priority_boost < self._priority_boost_max:
+                            logger.debug(
+                                f"priority boost 命中重置: {self._priority_boost:.2f} -> {self._priority_boost_max:.2f}"
+                            )
+                        self._priority_boost = self._priority_boost_max
+                    else:
+                        new_boost = max(
+                            self._priority_boost_min,
+                            self._priority_boost * self._priority_boost_decay,
+                        )
+                        if new_boost != self._priority_boost:
+                            logger.debug(
+                                f"priority boost 衰减: {self._priority_boost:.2f} -> {new_boost:.2f}"
+                            )
+                        self._priority_boost = new_boost
+            except Exception as e:
+                logger.warning(f"记忆检索失败: {e}")
+                hits = []
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(

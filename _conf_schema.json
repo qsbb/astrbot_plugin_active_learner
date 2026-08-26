@@ -123,6 +123,12 @@
         "hint": "无可用 Embedding Provider 时自动降级为纯 FTS5。需要先在 AstrBot 中配置 Embedding Provider。",
         "default": true
     },
+    "memory_recall_gate_enabled": {
+        "description": "按需召回门控",
+        "type": "bool",
+        "hint": "默认开启。开启后只有命中回忆指代/时间/人物/事件指代（如“还记得”“上次说过”“那个人”）才做全库 FTS/向量检索；日常寒暄直接跳过检索，只付固定微小的正则判定成本。关闭则恢复每轮检索。",
+        "default": true
+    },
     "hybrid_search_weight": {
         "description": "全文检索与语义向量的分数权重",
         "type": "string",
