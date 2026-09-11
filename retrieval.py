@@ -538,18 +538,29 @@ class RetrievalMixin:
         for hit in hits[:_MEMORY_INJECT_MAX_COUNT]:
             entry = hit.entry
             v_tag = "✅已验证" if entry.verified else f"⚠️置信度{entry.confidence:.0%}"
-            prefix = f"【内部知识 #{entry.id} | {entry.topic} | {v_tag}】"
+            # 规范 3.7「注入即标注」：知识条目携带写入时间，模型据此判断时效，
+            # 不再凭直觉假设记忆是最近发生或很久以前。
+            ts = entry.created_at or entry.updated_at or 0.0
+            time_field = (
+                _time_module.strftime("时间：%Y-%m-%d %H:%M", _time_module.localtime(ts))
+                if ts > 0
+                else "时间：未知"
+            )
+            prefix = f"【内部知识 #{entry.id} | {entry.topic} | {v_tag} | {time_field}】"
+            # 时间/身份字段属结构元数据，不占用内容字符预算（规范 3.7）；
+            # 预算口径与改动前完全一致。
+            budget_prefix = f"【内部知识 #{entry.id} | {entry.topic} | {v_tag}】"
             item_limit = min(_MEMORY_INJECT_ITEM_CHARS, remaining)
-            if item_limit <= len(prefix):
+            if item_limit <= len(budget_prefix):
                 break
             content = entry.content or ""
-            if len(prefix) + len(content) > item_limit:
-                keep = max(0, item_limit - len(prefix) - 1)
+            if len(budget_prefix) + len(content) > item_limit:
+                keep = max(0, item_limit - len(budget_prefix) - 1)
                 content = content[:keep] + "…"
             item = prefix + content
             parts.append(item)
             injected_hits.append(hit)
-            remaining -= len(item)
+            remaining -= len(budget_prefix) + len(content)
             if remaining <= 0:
                 break
         return parts, injected_hits
