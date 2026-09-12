@@ -41,7 +41,13 @@ const state = {
 };
 
 function showToast(msg, isErr = false) {
+  // Shared Glass feedback when available; keep the legacy node as a hard fallback.
+  if (window.SeriesUI && typeof window.SeriesUI.toast === "function") {
+    window.SeriesUI.toast(msg, isErr ? "error" : "info", 3000);
+    return;
+  }
   const t = document.getElementById("toast");
+  if (!t) return;
   t.textContent = msg;
   t.classList.toggle("error", isErr);
   t.classList.remove("hidden");
@@ -240,6 +246,15 @@ function selectAllLowConfidence() {
 }
 
 function _confirmModal(msg, okText = "确认删除") {
+  if (window.SeriesUI && typeof window.SeriesUI.confirm === "function") {
+    return window.SeriesUI.confirm({
+      title: "请确认操作",
+      message: msg,
+      confirmText: okText,
+      cancelText: "取消",
+      danger: /删除|拉黑|撤销/.test(okText),
+    });
+  }
   return new Promise((resolve) => {
     const modal = document.getElementById("confirm-modal");
     const msgEl = document.getElementById("confirm-msg");
