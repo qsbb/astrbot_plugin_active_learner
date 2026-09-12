@@ -463,7 +463,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             "display_name": "知",
             "role": "knowledge",
             "standalone": {
-                "available": true,
+                "available": True,
                 "entry": "/pages/manager",
                 "pages": ["manager"],
             },
