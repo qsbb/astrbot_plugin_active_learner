@@ -41,25 +41,30 @@ class Importer:
             return {"ok": False, "error": "topic, content, scope_type required", "status_code": 400}
 
         scope = Scope(type=scope_type, id=scope_id)
+        # 来源标记可由调用方覆盖（统一面板导入等），默认保持旧文案不变。
+        base_source = (str(payload.get("source_label") or "").strip() or "手动导入")
+        origin = (str(payload.get("origin") or "").strip() or "manual")
         try:
             final_content = content
             final_keywords = keywords
             final_confidence = self._plugin._default_confidence
-            source_tag = "手动导入"
+            source_tag = base_source
             if refine:
                 provider_id = await self._plugin._resolve_plugin_provider_id()
                 result = await self._plugin.refiner.refine_import(topic, content, provider_id)
                 final_content = result.summary
                 final_keywords = result.keywords or keywords
                 final_confidence = result.confidence
-                source_tag = "手动导入+精炼" if result.refined else "手动导入+未精炼"
+                source_tag = (
+                    f"{base_source}+精炼" if result.refined else f"{base_source}+未精炼"
+                )
                 if not result.refined:
                     logger.warning(f"导入「{topic}」精炼降级为原内容")
             entry = self._plugin.store.add_or_update(
                 scope=scope, topic=topic, content=final_content,
                 keywords=final_keywords, source=source_tag,
                 sources_detail=None, confidence=final_confidence,
-                origin="manual",
+                origin=origin,
             )
         except Exception as e:
             return {"ok": False, "error": f"导入失败: {e}", "status_code": 500}

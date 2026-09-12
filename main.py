@@ -49,6 +49,7 @@ from .verifier import Verifier
 # v1.1.5.0：架构重构 —— 统一服务层
 from .config_manager import ConfigManager
 from .series_control import SeriesControlAdapter
+from .series_webui import SeriesWebUIPanels
 from .llm_service import LLMService
 from .graph_memory import normalize_reconstruction_mode
 from .importer import Importer  # noqa: F811
@@ -189,6 +190,8 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             data_dir, cfg, native_config=self._native_config
         )
         self._series_control = SeriesControlAdapter(self)
+        # 未发版：series.webui@2.0 统一面板适配层（核接管管理面时使用）
+        self._series_webui = SeriesWebUIPanels(self)
         cfg = self.config_manager.all()
         self.config = cfg
         self.llm_service = LLMService(self)
@@ -420,72 +423,35 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
             "version": PLUGIN_VERSION,
         }
 
+    def _series_webui_panels(self) -> SeriesWebUIPanels:
+        """惰性获取 series.webui 适配层（兼容不经过 __init__ 的测试/热重载路径）。"""
+        adapter = getattr(self, "_series_webui", None)
+        if adapter is None:
+            adapter = SeriesWebUIPanels(self)
+            self._series_webui = adapter
+        return adapter
+
     def webui_panels_contract(self) -> dict[str, object]:
-        """series.webui@1.0：核统一接管时提供只读知识概览与记忆列表。"""
-        return {
-            "name": "series.webui@1.0",
-            "version": "1.0",
-            "plugin_id": PLUGIN_NAME,
-            "series_id": "ningxin_suxi",
-            "standalone": {"available": True, "entry": "/pages/manager", "pages": ["manager"]},
-            "panels": [
-                {"id": "overview", "title": "知识概览", "description": "记忆统计与 scope 概况"},
-                {"id": "memories", "title": "记忆列表", "description": "最近 50 条记忆（只读）"},
-            ],
-        }
+        """series.webui@2.0：核统一接管时提供只读面板与受控导入/导出动作。
+
+        control / diagnostics 能力仍由 series.module@1.0 与
+        series.diagnostics@1.0 声明；本契约只追加 artifacts / file_upload。
+        """
+        return self._series_webui_panels().contract()
 
     def webui_panel_data(self, panel: str) -> dict[str, object]:
-        if panel == "overview":
-            stats = self.store.global_stats()
-            scopes = self.store.list_scopes()
-            rows = [
-                {"item": "记忆总数", "value": stats.get("total", 0)},
-                {"item": "已验证", "value": stats.get("verified", 0)},
-                {"item": "挑战中", "value": stats.get("challenged", 0)},
-                {"item": "平均置信度", "value": f"{float(stats.get('avg_confidence') or 0.0):.2f}"},
-                {"item": "总访问次数", "value": stats.get("access_total", 0)},
-                {"item": "Scope 数量", "value": len(scopes)},
-            ]
-            return {
-                "success": True,
-                "title": "知识概览",
-                "columns": [{"key": "item", "label": "项目"}, {"key": "value", "label": "数值"}],
-                "rows": rows,
-                "actions": [],
-            }
-        if panel == "memories":
-            entries, total, total_pages = self.store.list_all_memories(page=1, per_page=50)
-            rows = []
-            for entry in entries:
-                data = entry.to_dict()
-                content = str(data.get("content") or "").replace("\n", " ")[:120]
-                rows.append(
-                    {
-                        "id": data.get("id", ""),
-                        "topic": data.get("topic", ""),
-                        "content": content,
-                        "verified": "是" if data.get("verified") else "否",
-                        "confidence": f"{float(data.get('confidence') or 0.0):.0%}",
-                    }
-                )
-            return {
-                "success": True,
-                "title": "记忆列表",
-                "description": f"共 {total} 条，展示最近 {len(rows)} 条（第 1/{total_pages} 页）",
-                "columns": [
-                    {"key": "id", "label": "ID"},
-                    {"key": "topic", "label": "主题"},
-                    {"key": "content", "label": "内容"},
-                    {"key": "verified", "label": "已验证"},
-                    {"key": "confidence", "label": "置信度"},
-                ],
-                "rows": rows,
-                "actions": [],
-            }
-        return {"success": False, "error": "UNKNOWN_PANEL"}
+        return self._series_webui_panels().panel_data(panel)
 
-    def webui_panel_action(self, panel: str, action: str, payload: dict) -> dict[str, object]:
-        return {"success": False, "error": "UNKNOWN_ACTION"}
+    async def webui_panel_action(
+        self,
+        panel: str,
+        action: str,
+        payload: dict,
+        context: dict | None = None,
+    ) -> dict[str, object]:
+        return await self._series_webui_panels().panel_action(
+            panel, action, payload, context=context
+        )
 
     def series_module_contract(self) -> dict[str, object]:
         """series.module@1.0：声明模块身份、独立入口与统一接管能力。"""
