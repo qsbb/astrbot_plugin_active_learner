@@ -1224,7 +1224,9 @@ class WebApiMixin:
         # 都拿不到 → 放行
         return True
 
-    async def _resolve_plugin_provider_id(self, umo: str = "") -> str:
+    async def _resolve_plugin_provider_id(
+        self, umo: str = "", kind: str = "conversation"
+    ) -> str:
         """4 层 fallback 解析插件使用的 LLM Provider ID。
 
         1. ConfigManager 中的 llm_provider_id（Dashboard 设置，最高优先级）
@@ -1254,7 +1256,7 @@ class WebApiMixin:
             )
 
         # 3. 核统一模型路由（契约不可用时透明回退）
-        core_provider = await resolve_routed_provider_id(self.context, "conversation")
+        core_provider = await resolve_routed_provider_id(self.context, kind)
         if core_provider:
             logger.info("provider 解析 [3/5 核统一路由] 命中")
             return core_provider

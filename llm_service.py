@@ -92,6 +92,7 @@ class LLMService:
         provider_id: Optional[str] = None,
         event=None,
         umo: str = "",
+        kind: str = "fast",
     ) -> str:
         """调用 LLM 生成文本。失败返回空字符串。
 
@@ -102,7 +103,9 @@ class LLMService:
             umo: unified_msg_origin（备用 provider 解析）
         """
         if not provider_id:
-            provider_id = await self.resolve_provider_id(event=event, umo=umo)
+            provider_id = await self.resolve_provider_id(
+                event=event, umo=umo, kind=kind
+            )
         if not provider_id:
             logger.warning("LLMService: 无法解析 provider，跳过 LLM 调用")
             return ""
@@ -170,7 +173,9 @@ class LLMService:
                 "estimated_calls": self._estimated_calls,
             }
 
-    async def resolve_provider_id(self, event=None, umo: str = "") -> str:
+    async def resolve_provider_id(
+        self, event=None, umo: str = "", kind: str = "fast"
+    ) -> str:
         """解析 LLM Provider ID，委托插件现有的 4 层 fallback。"""
         resolved_umo = umo
         if event is not None and not umo:
@@ -179,6 +184,13 @@ class LLMService:
             except Exception:
                 pass
         try:
-            return await self._plugin._resolve_plugin_provider_id(umo=resolved_umo)
+            try:
+                return await self._plugin._resolve_plugin_provider_id(
+                    umo=resolved_umo, kind=kind
+                )
+            except TypeError:
+                return await self._plugin._resolve_plugin_provider_id(
+                    umo=resolved_umo
+                )
         except Exception:
             return ""

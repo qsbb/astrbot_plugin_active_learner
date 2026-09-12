@@ -1,6 +1,6 @@
 ## [Unreleased]
 
-- 开发中（未发版）：`series.module@1.0` 模块清单；`series.webui` 只读知识概览与记忆列表面板。
+- 开发中（未发版）：`series.module@1.0` 模块清单；`series.webui` 只读知识概览与记忆列表面板；学习/验证/摘要等辅助 LLM 调用接入核统一 `fast` 模型角色。
 
 ## 1.5.4 - 2026-08-26
 
