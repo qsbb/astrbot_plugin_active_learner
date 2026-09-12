@@ -1,14 +1,6 @@
-# 更新日志
-
-本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
-
-> 当前系列归属：知、言、序、情、境、声、核、临；本文件下方版本条目均为真实历史记录，不因系列命名调整而改写。
-
 ## [Unreleased]
 
-### 变更
-
-- 移除从未接线的 `debate_rounds` 配置项，验证自辩论固定为支持方→质疑方→仲裁；旧配置中保留该键不影响运行。
+- 开发中（未发版）：`series.module@1.0` 模块清单；`series.webui` 只读知识概览与记忆列表面板。
 
 ## 1.5.4 - 2026-08-26
 
