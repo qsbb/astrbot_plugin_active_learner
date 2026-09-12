@@ -332,6 +332,7 @@ class RetrievalMixin:
                 self.llm_service.generate(
                     prompt=prompt,
                     provider_id=getattr(self, "_cfg_llm_provider_id", "") or None,
+                    kind="fast",
                 ),
                 timeout=2.5,
             )

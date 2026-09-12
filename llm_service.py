@@ -92,7 +92,7 @@ class LLMService:
         provider_id: Optional[str] = None,
         event=None,
         umo: str = "",
-        kind: str = "fast",
+        kind: str = "reasoning",
     ) -> str:
         """调用 LLM 生成文本。失败返回空字符串。
 
@@ -174,7 +174,7 @@ class LLMService:
             }
 
     async def resolve_provider_id(
-        self, event=None, umo: str = "", kind: str = "fast"
+        self, event=None, umo: str = "", kind: str = "reasoning"
     ) -> str:
         """解析 LLM Provider ID，委托插件现有的 4 层 fallback。"""
         resolved_umo = umo
