@@ -432,10 +432,10 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         return adapter
 
     def webui_panels_contract(self) -> dict[str, object]:
-        """series.webui@2.0：核统一接管时提供只读面板与受控导入/导出动作。
+        """series.webui@2.0：核统一接管知识管理、记忆动作与导入/导出。
 
         control / diagnostics 能力仍由 series.module@1.0 与
-        series.diagnostics@1.0 声明；本契约只追加 artifacts / file_upload。
+        series.diagnostics@1.0 声明；本契约只追加管理面板能力。
         """
         return self._series_webui_panels().contract()
 

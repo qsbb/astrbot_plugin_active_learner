@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### 新增
+
+- `series.webui@2.0` 记忆管理动作：按主题查找、详情/版本、验证、撤销验证、刷新访问时间、重新验证与删除；全部复用现有 `MemoryStore` / `Verifier`，并保持 standalone Page 不变。
 
 ## 1.6.0 - 2026-09-12
 

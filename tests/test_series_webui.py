@@ -5,6 +5,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,8 +22,33 @@ from astrbot_plugin_active_learner.storage import MemoryStore  # noqa: E402
 REPO_DIR = Path(__file__).resolve().parents[1]
 
 
+class _FakeVerifier:
+    """只验证适配层确实复用 verifier.run，不访问网络或 LLM。"""
+
+    def __init__(self, plugin: "_FakePlugin") -> None:
+        self.plugin = plugin
+        self.calls: list[tuple[str, str]] = []
+
+    async def run(self, entry, provider_id: str):
+        self.calls.append((entry.id, provider_id))
+        self.plugin.store.update_content(
+            entry.id,
+            content=f"{entry.content}（已复核）",
+            confidence=0.97,
+            source="verifier-test",
+            verified=True,
+            reason="test_verified",
+            scope=Scope(entry.scope_type, entry.scope_id),
+        )
+        return SimpleNamespace(
+            verdict="correct",
+            confidence=0.97,
+            sources_count=2,
+        )
+
+
 class _FakePlugin:
-    """最小可用插件面：真实 MemoryStore + 真实 Importer，不依赖 AstrBot。"""
+    """最小可用插件面：真实 MemoryStore + 真实 Importer + verifier 桩。"""
 
     def __init__(self, tmp_path: Path) -> None:
         self.store = MemoryStore(tmp_path / "memory.db")
@@ -32,10 +58,11 @@ class _FakePlugin:
         self._chunk_overlap = 50
         self.embedder = None
         self.importer = Importer(self)
+        self.verifier = _FakeVerifier(self)
         self.config: dict = {}
 
     def _resolve_plugin_provider_id(self) -> str:
-        return ""
+        return "provider-test"
 
 
 @pytest.fixture()
@@ -60,6 +87,12 @@ def _record(filename: str, data: bytes, mime: str = "application/octet-stream") 
 
 def _action(adapter: SeriesWebUIPanels, action: str, payload: dict) -> dict:
     return asyncio.run(adapter.panel_action("transfer", action, payload))
+
+
+def _memory_action(
+    adapter: SeriesWebUIPanels, action: str, payload: dict
+) -> dict:
+    return asyncio.run(adapter.panel_action("memories", action, payload))
 
 
 # ---------- 契约声明 ----------
@@ -111,10 +144,10 @@ def test_transfer_actions_carry_stable_metadata(adapter):
         assert all(value and label for value, label in scope_field["options"])
 
 
-# ---------- 只读面板不回归 ----------
+# ---------- 面板与动作契约 ----------
 
 
-def test_overview_and_memories_panels_stay_read_only(adapter):
+def test_overview_stays_read_only_and_memories_exposes_management_actions(adapter):
     adapter.plugin.store.add_or_update(
         Scope("global", "global"), "地球半径", "约 6371 公里", confidence=0.9
     )
@@ -127,8 +160,69 @@ def test_overview_and_memories_panels_stay_read_only(adapter):
 
     memories = adapter.panel_data("memories")
     assert memories["success"] is True
-    assert memories["actions"] == []
     assert memories["rows"][0]["topic"] == "地球半径"
+    assert [item["id"] for item in memories["actions"]] == [
+        "find_memory",
+        "view_memory",
+        "verify_memory",
+        "unverify_memory",
+        "refresh_memory",
+        "reverify_memory",
+        "delete_memory",
+    ]
+
+
+def test_memory_actions_carry_stable_metadata(adapter):
+    actions = {item["id"]: item for item in adapter.memory_actions()}
+
+    assert set(actions) == {
+        "find_memory",
+        "view_memory",
+        "verify_memory",
+        "unverify_memory",
+        "refresh_memory",
+        "reverify_memory",
+        "delete_memory",
+    }
+    for item in actions.values():
+        assert item["min_role"] in {"viewer", "admin"}
+        assert item["effect"] in {"idempotent", "non_idempotent"}
+        assert isinstance(item["revision_required"], bool)
+        assert isinstance(item["idempotency_required"], bool)
+        assert "confirm" in item
+        assert item["payload_fields"]
+    for action_id in (
+        "verify_memory",
+        "unverify_memory",
+        "refresh_memory",
+        "reverify_memory",
+        "delete_memory",
+    ):
+        assert actions[action_id]["min_role"] == "admin"
+        assert actions[action_id]["effect"] == "non_idempotent"
+        assert actions[action_id]["idempotency_required"] is True
+        assert actions[action_id]["confirm"]
+    assert actions["verify_memory"]["timeout_seconds"] == 60
+    assert actions["reverify_memory"]["timeout_seconds"] == 60
+
+
+def test_memory_panel_rows_are_plain_data_without_source_paths(adapter):
+    adapter.plugin.store.add_or_update(
+        Scope("private", "u-1"),
+        "生日",
+        "3 月 1 日",
+        source="/home/lingxi/secret-source.db",
+        confidence=0.8,
+    )
+
+    data = adapter.panel_data("memories")
+
+    assert data["success"] is True
+    for row in data["rows"]:
+        for value in row.values():
+            assert isinstance(value, (str, int, float, bool, type(None)))
+    assert "/home/" not in json.dumps(data, ensure_ascii=False)
+    assert "secret-source" not in json.dumps(data, ensure_ascii=False)
 
 
 def test_transfer_panel_rows_and_actions_are_plain_data(adapter):
@@ -154,6 +248,139 @@ def test_unknown_panel_and_action_fail_closed(adapter):
     assert asyncio.run(adapter.panel_action("nope", "export_scope", {}))["error"] == (
         "UNKNOWN_PANEL"
     )
+
+
+# ---------- 记忆管理动作 ----------
+
+
+def test_find_memory_reports_exact_not_found_and_ambiguous(adapter):
+    adapter.plugin.store.add_or_update(
+        Scope("global", "global"), "地球半径", "约 6371 公里", confidence=0.9
+    )
+
+    found = _memory_action(adapter, "find_memory", {"topic": "地球半径"})
+    assert found["success"] is True
+    assert found["memory"]["topic"] == "地球半径"
+    assert found["memory"]["id"] in found["message"]
+
+    missing = _memory_action(adapter, "find_memory", {"topic": "不存在"})
+    assert missing["error"] == "MEMORY_NOT_FOUND"
+
+    adapter.plugin.store.add_or_update(
+        Scope("private", "u-1"), "地球半径", "另一份私有记录", confidence=0.6
+    )
+    ambiguous = _memory_action(adapter, "find_memory", {"topic": "地球半径"})
+    assert ambiguous["success"] is False
+    assert ambiguous["error"] == "AMBIGUOUS_TOPIC"
+
+
+def test_view_memory_returns_allowlisted_detail_and_versions(adapter):
+    entry = adapter.plugin.store.add_or_update(
+        Scope("private", "u-1"),
+        "生日",
+        "3 月 1 日",
+        source="/home/lingxi/private/source.json",
+        confidence=0.6,
+    )
+    adapter.plugin.store.update_content(
+        entry.id,
+        content="3 月 2 日（已更正）",
+        confidence=0.8,
+        source="/home/lingxi/private/source.json",
+        verified=True,
+        reason="manual_correction",
+        scope=Scope("private", "u-1"),
+    )
+
+    result = _memory_action(adapter, "view_memory", {"memory_id": entry.id})
+
+    assert result["success"] is True
+    assert result["memory"]["topic"] == "生日"
+    assert result["memory"]["content"] == "3 月 2 日（已更正）"
+    assert result["memory"]["verified"] is True
+    assert result["versions"][0]["reason"] == "manual_correction"
+    artifact = result["artifacts"][0]
+    document = json.loads(artifact["data"].decode("utf-8"))
+    assert document["memory"]["topic"] == "生日"
+    assert document["versions"][0]["reason"] == "manual_correction"
+    serialized = json.dumps(
+        {"memory": result["memory"], "versions": result["versions"]},
+        ensure_ascii=False,
+    )
+    assert "/home/" not in serialized
+    assert "sources_detail" not in serialized
+    assert "source" not in result["memory"]
+
+
+def test_verify_and_reverify_reuse_verifier_service(adapter):
+    entry = adapter.plugin.store.add_or_update(
+        Scope("global", "global"), "潮汐锁定", "月球同一面朝向地球", confidence=0.5
+    )
+
+    verified = _memory_action(adapter, "verify_memory", {"memory_id": entry.id})
+    assert verified["success"] is True
+    assert verified["verdict"] == "correct"
+    assert verified["verified"] is True
+    updated = adapter.plugin.store.get_entry_by_id(entry.id)
+    assert updated is not None and updated.verified is True
+    assert updated.content.endswith("（已复核）")
+
+    reverified = _memory_action(adapter, "reverify_memory", {"memory_id": entry.id})
+    assert reverified["success"] is True
+    assert adapter.plugin.verifier.calls == [
+        (entry.id, "provider-test"),
+        (entry.id, "provider-test"),
+    ]
+
+
+def test_unverify_and_refresh_reuse_store_mutations(adapter):
+    entry = adapter.plugin.store.add_or_update(
+        Scope("group", "100"), "群规则", "晚间不打扰", confidence=0.7
+    )
+    adapter.plugin.store.set_verified(entry.id, True, scope=Scope("group", "100"))
+
+    unverified = _memory_action(adapter, "unverify_memory", {"memory_id": entry.id})
+    assert unverified["success"] is True
+    after_unverify = adapter.plugin.store.get_entry_by_id(entry.id)
+    assert after_unverify is not None and after_unverify.verified is False
+
+    refreshed = _memory_action(adapter, "refresh_memory", {"memory_id": entry.id})
+    assert refreshed["success"] is True
+    after_refresh = adapter.plugin.store.get_entry_by_id(entry.id)
+    assert after_refresh is not None and after_refresh.last_accessed_at > 0
+
+
+def test_delete_memory_keeps_version_snapshot(adapter):
+    entry = adapter.plugin.store.add_or_update(
+        Scope("private", "u-2"), "待删除", "即将移除", confidence=0.6
+    )
+
+    result = _memory_action(adapter, "delete_memory", {"memory_id": entry.id})
+
+    assert result["success"] is True
+    assert adapter.plugin.store.get_entry_by_id(entry.id) is None
+    versions = adapter.plugin.store.list_versions(entry.id)
+    assert len(versions) == 1
+    assert versions[0].reason == "manual_forget"
+
+
+def test_memory_actions_fail_closed_for_bad_payload_and_missing_ids(adapter):
+    assert _memory_action(adapter, "view_memory", {})["error"] == "INVALID_PAYLOAD"
+    assert (
+        _memory_action(
+            adapter, "view_memory", {"memory_id": "bad id", "extra": True}
+        )["error"]
+        == "INVALID_PAYLOAD"
+    )
+    assert (
+        _memory_action(adapter, "view_memory", {"memory_id": "bad id"})["error"]
+        == "INVALID_MEMORY_ID"
+    )
+    assert (
+        _memory_action(adapter, "view_memory", {"memory_id": "missing-id"})["error"]
+        == "MEMORY_NOT_FOUND"
+    )
+    assert _memory_action(adapter, "drop_everything", {})["error"] == "UNKNOWN_ACTION"
 
 
 # ---------- 导入 ----------

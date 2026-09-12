@@ -13,16 +13,20 @@
 - 导入目标 scope 只能从受控选项（global + 现存 scope）中选择，拒绝任意字符串；
 - 文件大小 / 扩展名 / 编码 / JSON 形状一律 fail-closed，错误码稳定供核前端展示；
 - 导出只读所选 scope，经 ``store.export_scope`` 生成 JSON bytes 并作为 ``artifacts`` 返回，
-  不含本地路径、内部 ID 或跨 scope 数据。
+  不含本地路径、内部 ID 或跨 scope 数据；
+- 记忆管理动作只编排现有 ``MemoryStore`` / ``Verifier``，不复制验证、版本或删除逻辑；
+- 动作结果只白名单返回知识正文、版本摘要和统计，不返回来源详情、数据库路径或内部对象。
 """
 
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any
 
 from .chunker import chunk_markdown, chunk_text
 from .models import SCOPE_GLOBAL, SCOPE_GROUP, SCOPE_PRIVATE, Scope
@@ -34,10 +38,23 @@ SERIES_ID = "ningxin_suxi"
 
 # 本模块自己声明的 webui 能力；control / diagnostics 仍由
 # series.module@1.0 与 series.diagnostics@1.0 契约声明，这里只做交叉引用。
-WEBUI_CAPABILITIES = ("artifacts", "file_upload")
+WEBUI_CAPABILITIES = (
+    "artifacts",
+    "file_upload",
+    "generic_actions",
+    "idempotency",
+)
 MODULE_CAPABILITIES = ("control", "diagnostics")
 
+MEMORIES_PANEL_ID = "memories"
 TRANSFER_PANEL_ID = "transfer"
+FIND_ACTION_ID = "find_memory"
+VIEW_ACTION_ID = "view_memory"
+VERIFY_ACTION_ID = "verify_memory"
+UNVERIFY_ACTION_ID = "unverify_memory"
+REFRESH_ACTION_ID = "refresh_memory"
+REVERIFY_ACTION_ID = "reverify_memory"
+DELETE_ACTION_ID = "delete_memory"
 IMPORT_ACTION_ID = "import_file"
 EXPORT_ACTION_ID = "export_scope"
 
@@ -53,6 +70,8 @@ MAX_ENTRY_CONTENT_CHARS = 50_000
 MAX_KEYWORDS = 32
 MAX_KEYWORD_CHARS = 64
 MAX_FILENAME_CHARS = 120
+MAX_MEMORY_ID_CHARS = 128
+MAX_QUERY_RESULTS = 50
 
 _FILE_KINDS = (
     (".json", "json"),
@@ -68,6 +87,7 @@ _SCOPE_KINDS = {
 }
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
+_MEMORY_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 EXPORT_FORMAT = "active_learner.knowledge.export"
 EXPORT_FORMAT_VERSION = "1.0"
@@ -79,6 +99,24 @@ def _failure(code: str, message: str = "") -> dict[str, Any]:
     if message:
         payload["message"] = message
     return payload
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _has_control_chars(value: str) -> bool:
+    return any(ord(char) < 0x20 for char in value)
 
 
 def _display_filename(filename: str) -> str:
@@ -117,9 +155,10 @@ class SeriesWebUIPanels:
                     "description": "记忆统计与 scope 概况",
                 },
                 {
-                    "id": "memories",
-                    "title": "记忆列表",
-                    "description": "最近 50 条记忆（只读）",
+                    "id": MEMORIES_PANEL_ID,
+                    "title": "记忆管理",
+                    "description": "查看、查询、验证、刷新与删除最近 50 条记忆",
+                    "actions": self.memory_actions(),
                 },
                 {
                     "id": TRANSFER_PANEL_ID,
@@ -175,6 +214,97 @@ class SeriesWebUIPanels:
             },
         ]
 
+    def memory_actions(self) -> list[dict[str, Any]]:
+        """记忆日常管理动作；全部复用现有 store / verifier 服务。"""
+        memory_id_field = {
+            "name": "memory_id",
+            "label": "记忆 ID",
+            "type": "text",
+            "required": True,
+            "hint": "使用记忆列表中的 ID；也可先按主题查找",
+        }
+        topic_field = {
+            "name": "topic",
+            "label": "主题",
+            "type": "text",
+            "required": True,
+            "hint": "按主题精确匹配；多条同名记忆会返回歧义错误",
+        }
+        return [
+            {
+                "id": FIND_ACTION_ID,
+                "label": "按主题查找",
+                "effect": "idempotent",
+                "idempotency_required": False,
+                "revision_required": False,
+                "min_role": "viewer",
+                "confirm": "",
+                "payload_fields": (topic_field,),
+            },
+            {
+                "id": VIEW_ACTION_ID,
+                "label": "查看详情与版本",
+                "effect": "idempotent",
+                "idempotency_required": False,
+                "revision_required": False,
+                "min_role": "viewer",
+                "confirm": "",
+                "payload_fields": (memory_id_field,),
+            },
+            {
+                "id": VERIFY_ACTION_ID,
+                "label": "验证记忆",
+                "effect": "non_idempotent",
+                "idempotency_required": True,
+                "revision_required": False,
+                "min_role": "admin",
+                "timeout_seconds": 60,
+                "confirm": "确认调用现有多源验证流程？验证会更新内容、置信度与版本记录。",
+                "payload_fields": (memory_id_field,),
+            },
+            {
+                "id": UNVERIFY_ACTION_ID,
+                "label": "撤销验证",
+                "effect": "non_idempotent",
+                "idempotency_required": True,
+                "revision_required": False,
+                "min_role": "admin",
+                "confirm": "确认撤销该记忆的已验证标记？不会删除正文或历史版本。",
+                "payload_fields": (memory_id_field,),
+            },
+            {
+                "id": REFRESH_ACTION_ID,
+                "label": "刷新访问时间",
+                "effect": "non_idempotent",
+                "idempotency_required": True,
+                "revision_required": False,
+                "min_role": "admin",
+                "confirm": "确认刷新该记忆的访问时间？",
+                "payload_fields": (memory_id_field,),
+            },
+            {
+                "id": REVERIFY_ACTION_ID,
+                "label": "重新验证",
+                "effect": "non_idempotent",
+                "idempotency_required": True,
+                "revision_required": False,
+                "min_role": "admin",
+                "timeout_seconds": 60,
+                "confirm": "确认重新执行多源验证？可能覆盖正文并生成新版本。",
+                "payload_fields": (memory_id_field,),
+            },
+            {
+                "id": DELETE_ACTION_ID,
+                "label": "删除记忆",
+                "effect": "non_idempotent",
+                "idempotency_required": True,
+                "revision_required": False,
+                "min_role": "admin",
+                "confirm": "确认删除该记忆？正文会从记忆库移除，删除前会保留版本留痕。",
+                "payload_fields": (memory_id_field,),
+            },
+        ]
+
     # ---------- 面板数据 ----------
 
     def panel_data(self, panel: str) -> dict[str, Any]:
@@ -217,11 +347,12 @@ class SeriesWebUIPanels:
         )
         rows = []
         for entry in entries:
-            data = entry.to_dict()
+            data = self._public_memory(entry)
             content = str(data.get("content") or "").replace("\n", " ")[:120]
             rows.append(
                 {
                     "id": data.get("id", ""),
+                    "scope": f"{data.get('scope_type', '')}:{data.get('scope_id', '')}",
                     "topic": data.get("topic", ""),
                     "content": content,
                     "verified": "是" if data.get("verified") else "否",
@@ -230,19 +361,21 @@ class SeriesWebUIPanels:
             )
         return {
             "success": True,
-            "title": "记忆列表",
+            "title": "记忆管理",
             "description": (
-                f"共 {total} 条，展示最近 {len(rows)} 条（第 1/{total_pages} 页）"
+                f"共 {total} 条，展示最近 {len(rows)} 条（第 1/{total_pages} 页）；"
+                "详情、验证与删除请先选择下方动作并填写 ID"
             ),
             "columns": [
                 {"key": "id", "label": "ID"},
+                {"key": "scope", "label": "Scope"},
                 {"key": "topic", "label": "主题"},
                 {"key": "content", "label": "内容"},
                 {"key": "verified", "label": "已验证"},
                 {"key": "confidence", "label": "置信度"},
             ],
             "rows": rows,
-            "actions": [],
+            "actions": self.memory_actions(),
         }
 
     def _transfer_data(self) -> dict[str, Any]:
@@ -285,15 +418,245 @@ class SeriesWebUIPanels:
         context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         del context  # 幂等/令牌由核网关校验，插件层不重复解释
-        if panel != TRANSFER_PANEL_ID:
-            return _failure("UNKNOWN_PANEL")
         if not isinstance(payload, Mapping):
             return _failure("INVALID_PAYLOAD")
+        if panel == MEMORIES_PANEL_ID:
+            return await self._run_memory_action(action, payload)
+        if panel != TRANSFER_PANEL_ID:
+            return _failure("UNKNOWN_PANEL")
         if action == IMPORT_ACTION_ID:
             return await self._run_import(payload)
         if action == EXPORT_ACTION_ID:
             return self._run_export(payload)
         return _failure("UNKNOWN_ACTION")
+
+    # ---------- 记忆管理动作（复用 store / verifier） ----------
+
+    async def _run_memory_action(
+        self, action: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if action == FIND_ACTION_ID:
+            return self._find_memory(payload)
+        if action not in {
+            VIEW_ACTION_ID,
+            VERIFY_ACTION_ID,
+            UNVERIFY_ACTION_ID,
+            REFRESH_ACTION_ID,
+            REVERIFY_ACTION_ID,
+            DELETE_ACTION_ID,
+        }:
+            return _failure("UNKNOWN_ACTION")
+        if set(payload) != {"memory_id"}:
+            return _failure("INVALID_PAYLOAD", "该动作只接受 memory_id")
+        entry, failure = self._resolve_memory_id(payload.get("memory_id"))
+        if failure is not None:
+            return failure
+        assert entry is not None
+        if action == VIEW_ACTION_ID:
+            return self._view_memory(entry)
+        if action in {VERIFY_ACTION_ID, REVERIFY_ACTION_ID}:
+            return await self._verify_memory(entry)
+        if action == UNVERIFY_ACTION_ID:
+            return self._unverify_memory(entry)
+        if action == REFRESH_ACTION_ID:
+            return self._refresh_memory(entry)
+        return self._delete_memory(entry)
+
+    def _find_memory(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        if set(payload) != {"topic"}:
+            return _failure("INVALID_PAYLOAD", "该动作只接受 topic")
+        topic = str(payload.get("topic") or "").strip()
+        if not topic or len(topic) > MAX_TOPIC_CHARS or _has_control_chars(topic):
+            return _failure("INVALID_TOPIC", "主题不能为空，且不能包含控制字符")
+        try:
+            entries, _total, _ = self.plugin.store.list_all_memories(
+                page=1, per_page=MAX_QUERY_RESULTS, keyword=topic
+            )
+        except Exception:  # noqa: BLE001
+            return _failure("MEMORY_SERVICE_UNAVAILABLE", "记忆库查询失败")
+        exact = [
+            entry
+            for entry in entries
+            if str(getattr(entry, "topic", "")).casefold() == topic.casefold()
+        ]
+        matches = exact or entries
+        if not matches:
+            return _failure("MEMORY_NOT_FOUND", "未找到匹配主题的记忆")
+        if len(matches) > 1:
+            return _failure(
+                "AMBIGUOUS_TOPIC",
+                f"主题「{topic}」匹配到 {len(matches)} 条记忆，请改用精确 ID",
+            )
+        entry = matches[0]
+        data = self._public_memory(entry)
+        return {
+            "success": True,
+            "message": (
+                f"找到「{data['topic']}」，ID：{data['id']}，"
+                f"Scope：{data['scope_type']}:{data['scope_id']}"
+            ),
+            "count": 1,
+            "memory": data,
+        }
+
+    def _view_memory(self, entry: Any) -> dict[str, Any]:
+        try:
+            versions = self.plugin.store.list_versions(entry.id)
+        except Exception:  # noqa: BLE001
+            return _failure("MEMORY_SERVICE_UNAVAILABLE", "历史版本读取失败")
+        public_versions = [
+            self._public_version(item) for item in versions[-MAX_QUERY_RESULTS:]
+        ]
+        data = self._public_memory(entry)
+        document = json.dumps(
+            {"memory": data, "versions": public_versions},
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        filename = f"memory-detail-{str(data['id'])[:32]}.json"
+        return {
+            "success": True,
+            "message": (
+                f"已加载「{data['topic']}」：{len(public_versions)} 个历史版本，"
+                f"当前置信度 {float(data['confidence']):.0%}"
+            ),
+            "memory": data,
+            "versions": public_versions,
+            "artifacts": [
+                {"filename": filename, "mime": "application/json", "data": document}
+            ],
+        }
+
+    async def _verify_memory(self, entry: Any) -> dict[str, Any]:
+        verifier = getattr(self.plugin, "verifier", None)
+        if verifier is None or not callable(getattr(verifier, "run", None)):
+            return _failure("VERIFIER_UNAVAILABLE", "验证服务不可用")
+        try:
+            provider_id = await self._resolve_provider_id()
+        except Exception:  # noqa: BLE001
+            provider_id = ""
+        if not provider_id:
+            return _failure("PROVIDER_UNAVAILABLE", "未找到可用的 LLM Provider")
+        try:
+            result = await verifier.run(entry, provider_id)
+        except Exception:  # noqa: BLE001
+            return _failure("VERIFY_FAILED", "验证失败，请查看插件诊断日志")
+        scope = Scope(entry.scope_type, entry.scope_id)
+        try:
+            updated = self.plugin.store.get_entry_by_id(entry.id, scope)
+        except Exception:  # noqa: BLE001
+            updated = None
+        current = updated or entry
+        confidence = float(getattr(current, "confidence", 0.0) or 0.0)
+        return {
+            "success": True,
+            "message": (
+                f"验证完成：{getattr(result, 'verdict', 'unknown')}，"
+                f"置信度 {confidence:.0%}"
+            ),
+            "verdict": str(getattr(result, "verdict", "unknown")),
+            "confidence": confidence,
+            "verified": bool(getattr(current, "verified", False)),
+            "sources_count": int(getattr(result, "sources_count", 0) or 0),
+        }
+
+    def _unverify_memory(self, entry: Any) -> dict[str, Any]:
+        try:
+            self.plugin.store.set_verified(
+                entry.id, False, scope=Scope(entry.scope_type, entry.scope_id)
+            )
+        except Exception:  # noqa: BLE001
+            return _failure("UPDATE_FAILED", "撤销验证失败")
+        return {
+            "success": True,
+            "message": f"已撤销「{entry.topic}」的已验证标记",
+            "verified": False,
+        }
+
+    def _refresh_memory(self, entry: Any) -> dict[str, Any]:
+        try:
+            self.plugin.store.update_last_accessed(
+                entry.id, scope=Scope(entry.scope_type, entry.scope_id)
+            )
+        except Exception:  # noqa: BLE001
+            return _failure("REFRESH_FAILED", "刷新访问时间失败")
+        return {
+            "success": True,
+            "message": f"已刷新「{entry.topic}」的访问时间",
+        }
+
+    def _delete_memory(self, entry: Any) -> dict[str, Any]:
+        try:
+            deleted, _removed = self.plugin.store.forget(
+                Scope(entry.scope_type, entry.scope_id), entry.topic
+            )
+        except Exception:  # noqa: BLE001
+            return _failure("DELETE_FAILED", "删除失败，请查看插件诊断日志")
+        if not deleted:
+            return _failure("MEMORY_NOT_FOUND", "记忆不存在或已被删除")
+        return {
+            "success": True,
+            "message": f"已删除「{entry.topic}」，历史版本已保留",
+        }
+
+    def _resolve_memory_id(
+        self, raw: Any
+    ) -> tuple[Any | None, dict[str, Any] | None]:
+        value = str(raw or "").strip()
+        if not value or len(value) > MAX_MEMORY_ID_CHARS or not _MEMORY_ID.fullmatch(value):
+            return None, _failure("INVALID_MEMORY_ID", "memory_id 格式无效")
+        try:
+            entry = self.plugin.store.get_entry_by_id(value)
+        except Exception:  # noqa: BLE001
+            return None, _failure("MEMORY_SERVICE_UNAVAILABLE", "记忆库读取失败")
+        if entry is None:
+            return None, _failure("MEMORY_NOT_FOUND", "记忆不存在")
+        return entry, None
+
+    async def _resolve_provider_id(self) -> str:
+        resolver = getattr(self.plugin, "_resolve_plugin_provider_id", None)
+        if not callable(resolver):
+            return ""
+        value = resolver()
+        if inspect.isawaitable(value):
+            value = await value
+        return str(value or "").strip()
+
+    @staticmethod
+    def _public_memory(entry: Any) -> dict[str, Any]:
+        data = entry.to_dict() if hasattr(entry, "to_dict") else dict(entry or {})
+        keywords = data.get("keywords")
+        return {
+            "id": str(data.get("id") or "")[:MAX_MEMORY_ID_CHARS],
+            "scope_type": str(data.get("scope_type") or ""),
+            "scope_id": str(data.get("scope_id") or "")[:128],
+            "topic": str(data.get("topic") or "")[:MAX_TOPIC_CHARS],
+            "content": str(data.get("content") or "")[:MAX_ENTRY_CONTENT_CHARS],
+            "keywords": [
+                str(item)[:MAX_KEYWORD_CHARS]
+                for item in (keywords if isinstance(keywords, list) else [])[
+                    :MAX_KEYWORDS
+                ]
+            ],
+            "verified": bool(data.get("verified")),
+            "confidence": _safe_float(data.get("confidence")),
+            "challenge_count": _safe_int(data.get("challenge_count")),
+            "access_count": _safe_int(data.get("access_count")),
+            "created_at": _safe_float(data.get("created_at")),
+            "updated_at": _safe_float(data.get("updated_at")),
+            "last_accessed_at": _safe_float(data.get("last_accessed_at")),
+        }
+
+    @staticmethod
+    def _public_version(version: Any) -> dict[str, Any]:
+        data = version.to_dict() if hasattr(version, "to_dict") else dict(version or {})
+        return {
+            "version_no": _safe_int(data.get("version_no")),
+            "content": str(data.get("content") or "")[:MAX_ENTRY_CONTENT_CHARS],
+            "confidence": _safe_float(data.get("confidence")),
+            "reason": str(data.get("reason") or "")[:128],
+            "created_at": _safe_float(data.get("created_at")),
+        }
 
     async def _run_import(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         scope, failure = self._resolve_scope(payload.get("scope"))
