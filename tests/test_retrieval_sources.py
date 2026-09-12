@@ -124,13 +124,16 @@ def test_automatic_injection_filters_partial_entity_overlap():
                 verified=False,
             ),
         )
-        scope = SimpleNamespace()
         mismatched_hits, _, _ = await _InjectedRetrieval([wrong])._retrieve_memory(
-            scope, "卡拉彼丘 诺诺 角色 武器 定位 技能"
+            SimpleNamespace(scope_type="private", scope_id="entity-filter-wrong"),
+            "卡拉彼丘 诺诺 角色 武器 定位 技能",
         )
         matched_hits, _, _ = await _InjectedRetrieval(
             [wrong, matching]
-        )._retrieve_memory(scope, "卡拉彼丘 诺诺 角色 武器 定位 技能")
+        )._retrieve_memory(
+            SimpleNamespace(scope_type="private", scope_id="entity-filter-match"),
+            "卡拉彼丘 诺诺 角色 武器 定位 技能",
+        )
         assert mismatched_hits == []
         assert [hit.entry.id for hit in matched_hits] == ["matching"]
 
