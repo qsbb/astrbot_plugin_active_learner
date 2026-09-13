@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=1.8.1-2" />
-    <link rel="stylesheet" href="./series-ui.css?v=1.8.1-2" />
+  <link rel="stylesheet" href="./style.css?v=1.8.2-1" />
+    <link rel="stylesheet" href="./series-ui.css?v=1.8.2-1" />
 </head>
 <body data-series-ui="1">
   <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
@@ -38,6 +38,7 @@
           <option value="">全部作用域</option>
         </select>
       </label>
+      <p class="filter-hint">作用域决定这条记忆对谁生效：全局 / 私聊 / 群聊；切换后列表与统计一起刷新。</p>
       <form id="search-form" class="control search-control">
         <input type="search" id="search-input" placeholder="按主题或内容搜索…" aria-label="按主题或内容搜索" />
         <button type="submit">搜索</button>
@@ -156,7 +157,7 @@
         <div class="settings-panels">
           <div id="settings-panel-llm" class="settings-panel active" data-panel="llm" role="tabpanel" aria-labelledby="settings-tab-llm" aria-hidden="false">
             <div class="settings-section">
-              <div class="settings-label">LLM Provider</div>
+              <div class="settings-label">模型服务商</div>
               <div class="settings-row">
                 <select id="settings-provider"></select>
                 <button type="button" id="btn-refresh-providers" title="刷新列表">↻</button>
@@ -390,11 +391,11 @@
             </label>
             <div class="scope-row">
               <label class="control">
-                <span>Scope 类型 *</span>
+                <span>作用域类型 *</span>
                 <select name="scope_type">
-                  <option value="global">global（全局）</option>
-                  <option value="private">private（私聊）</option>
-                  <option value="group">group（群聊）</option>
+                  <option value="global">全局</option>
+                  <option value="private">私聊</option>
+                  <option value="group">群聊</option>
                 </select>
               </label>
               <label class="control">
@@ -420,11 +421,11 @@
             </label>
             <div class="scope-row">
               <label class="control">
-                <span>Scope 类型 *</span>
+                <span>作用域类型 *</span>
                 <select name="scope_type">
-                  <option value="global">global（全局）</option>
-                  <option value="private">private（私聊）</option>
-                  <option value="group">group（群聊）</option>
+                  <option value="global">全局</option>
+                  <option value="private">私聊</option>
+                  <option value="group">群聊</option>
                 </select>
               </label>
               <label class="control">
@@ -457,11 +458,11 @@
             <p class="hint">批量导入 ZIP 内所有 <code>.md</code> 文件。每个文件成为一条独立记忆，主题取自首个 # 标题或文件名。</p>
             <div class="scope-row">
               <label class="control">
-                <span>Scope 类型 *</span>
+                <span>作用域类型 *</span>
                 <select name="scope_type">
-                  <option value="global">global（全局）</option>
-                  <option value="private">private（私聊）</option>
-                  <option value="group">group（群聊）</option>
+                  <option value="global">全局</option>
+                  <option value="private">私聊</option>
+                  <option value="group">群聊</option>
                 </select>
               </label>
               <label class="control">
@@ -484,11 +485,11 @@
             <p class="hint">PDF 会被自动分块入库，每个 chunk 一条独立记忆。需要后端安装 <code>pypdf</code>。</p>
             <div class="scope-row">
               <label class="control">
-                <span>Scope 类型 *</span>
+                <span>作用域类型 *</span>
                 <select name="scope_type">
-                  <option value="global">global（全局）</option>
-                  <option value="private">private（私聊）</option>
-                  <option value="group">group（群聊）</option>
+                  <option value="global">全局</option>
+                  <option value="private">私聊</option>
+                  <option value="group">群聊</option>
                 </select>
               </label>
               <label class="control">
@@ -521,11 +522,11 @@
             <p class="hint">Word 文档会被自动分块入库。需要后端安装 <code>python-docx</code>。</p>
             <div class="scope-row">
               <label class="control">
-                <span>Scope 类型 *</span>
+                <span>作用域类型 *</span>
                 <select name="scope_type">
-                  <option value="global">global（全局）</option>
-                  <option value="private">private（私聊）</option>
-                  <option value="group">group（群聊）</option>
+                  <option value="global">全局</option>
+                  <option value="private">私聊</option>
+                  <option value="group">群聊</option>
                 </select>
               </label>
               <label class="control">
@@ -558,11 +559,11 @@
             <p class="hint">长文本会被自动分块入库（滑动窗口 + 重叠）。</p>
             <div class="scope-row">
               <label class="control">
-                <span>Scope 类型 *</span>
+                <span>作用域类型 *</span>
                 <select name="scope_type">
-                  <option value="global">global（全局）</option>
-                  <option value="private">private（私聊）</option>
-                  <option value="group">group（群聊）</option>
+                  <option value="global">全局</option>
+                  <option value="private">私聊</option>
+                  <option value="group">群聊</option>
                 </select>
               </label>
               <label class="control">
@@ -627,11 +628,11 @@
 
         <div class="scope-row">
           <label class="control">
-            <span>Scope 类型 *</span>
+            <span>作用域类型 *</span>
             <select id="builtin-kb-scope-type">
-              <option value="global">global（全局）</option>
-              <option value="private">private（私聊）</option>
-              <option value="group">group（群聊）</option>
+              <option value="global">全局</option>
+              <option value="private">私聊</option>
+              <option value="group">群聊</option>
             </select>
           </label>
           <label class="control">
@@ -814,7 +815,7 @@
   </div>
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script src="./series-ui.js?v=1.8.1-2"></script>
-  <script type="module" src="./app.js?v=1.8.1-2"></script>
+  <script src="./series-ui.js?v=1.8.2-1"></script>
+  <script type="module" src="./app.js?v=1.8.2-1"></script>
 </body>
 </html>

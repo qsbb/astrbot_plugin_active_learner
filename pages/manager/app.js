@@ -117,7 +117,8 @@ async function loadScopes() {
   try {
     const data = await bridge.apiGet("scopes");
     const select = document.getElementById("scope-select");
-    const current = `${state.scopeType}:${state.scopeId}`;
+    // 两者都为空时不能拼成 ":"，否则 value 匹配不到任何 option，下拉会显示空白。
+    const current = state.scopeType && state.scopeId ? `${state.scopeType}:${state.scopeId}` : "";
     select.innerHTML = '<option value="">全部作用域</option>';
     for (const s of data.scopes || []) {
       const opt = document.createElement("option");
@@ -188,7 +189,11 @@ function formatOrigin(origin) {
     return fn ? `导入:${fn}` : "导入";
   }
   if (origin.startsWith("kb:")) return `知识库:${origin.slice(3)}`;
-  return escapeHtml(origin);
+  if (origin.startsWith("priority_learn") || origin === "priority_learn") return "主动学习";
+  if (origin.startsWith("search_learn")) return "搜索学习";
+  if (origin.startsWith("verify")) return "交叉验证";
+  // 未知来源不再直接回显内部键名，避免用户看到英文/下划线值。
+  return "其它来源";
 }
 
 function renderTable(items) {

@@ -1702,6 +1702,8 @@ textarea {
   display: inline-flex;
   align-items: center;
   max-width: 100%;
+  min-height: 0;
+  height: auto;
   padding: 2px 8px;
   border: 1px solid var(--si-line-solid);
   border-radius: 999px;
@@ -1724,4 +1726,18 @@ textarea {
   box-shadow: var(--si-focus);
 }
 
-.scope-type { color: var(--si-muted); }
+.scope-type { color: var(--si-muted); margin-right: 4px; }
+
+/* 页头只保留一层玻璃面：内层容器只负责排版，避免外框套内框 */
+body[data-series-ui] .topbar-inner {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 筛选说明：一句话讲清作用域的效果 */
+.filter-hint { color: var(--si-muted); font-size: 12px; line-height: 1.5; }
