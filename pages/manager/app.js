@@ -73,7 +73,13 @@ function formatTime(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000);
   if (isNaN(d.getTime())) return "—";
-  return d.toLocaleString("zh-CN", { hour12: false });
+  return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function fullTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  return isNaN(d.getTime()) ? "—" : d.toLocaleString("zh-CN", { hour12: false });
 }
 
 function truncate(s, n) {
@@ -152,10 +158,7 @@ function formatOrigin(origin) {
   if (origin === "manual") return "手动输入";
   if (origin === "slang") return "群黑话";
   if (origin === "conversation") return "会话";
-  if (origin.startsWith("conversation:")) {
-    const umo = origin.slice("conversation:".length);
-    return umo ? `会话:${umo}` : "会话";
-  }
+  if (origin.startsWith("conversation:")) return "会话";
   if (origin.startsWith("import:")) {
     const fn = origin.slice("import:".length);
     return fn ? `导入:${fn}` : "导入";
@@ -189,7 +192,7 @@ function renderTable(items) {
       <td class="cell-origin" title="${escapeHtml(e.origin || "")}">${formatOrigin(e.origin)}</td>
       <td>${formatConfidence(e.confidence)}</td>
       <td>${verifiedBadge(e)}</td>
-      <td>${formatTime(e.updated_at)}</td>
+      <td title="${escapeHtml(fullTime(e.updated_at))}">${formatTime(e.updated_at)}</td>
       <td class="col-actions">
         <button type="button" data-act="detail" data-id="${escapeHtml(e.id)}">详情</button>
         <button type="button" data-act="verify" data-id="${escapeHtml(e.id)}">验证</button>

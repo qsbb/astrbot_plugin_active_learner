@@ -84,3 +84,11 @@ def test_manager_slang_tab_structure_and_actions():
     assert '"slang/unblock"' in js
     # 拉黑是破坏性操作，必须走确认弹窗
     assert "确认拉黑" in js
+
+
+def test_memory_table_uses_compact_time_and_source_labels():
+    js = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'return "会话";' in js
+    assert 'function fullTime(ts)' in js
+    assert 'month: "2-digit"' in js
+    assert 'title="${escapeHtml(fullTime(e.updated_at))}"' in js
