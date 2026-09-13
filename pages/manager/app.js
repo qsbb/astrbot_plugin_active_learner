@@ -88,6 +88,26 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
+// 作用域 ID、UMO 这类标识常常很长：列表里只显示首尾，点击复制完整值。
+function shortId(value, head = 10, tail = 6) {
+  const text = String(value ?? "");
+  if (text.length <= head + tail + 1) return text;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
+
+function idChip(value, label = "标识") {
+  const text = String(value ?? "");
+  if (!text) return "—";
+  return `<button type="button" class="id-chip" data-copy-id="${escapeHtml(text)}" title="点击复制完整值：${escapeHtml(text)}" aria-label="复制${escapeHtml(label)}：${escapeHtml(text)}">${escapeHtml(shortId(text))}</button>`;
+}
+
+function scopeCell(entry) {
+  const type = String(entry?.scope_type || "");
+  const id = String(entry?.scope_id || "");
+  if (!id) return escapeHtml(type || "—");
+  return `<span class="scope-type">${escapeHtml(type)}:</span>${idChip(id, "作用域")}`;
+}
+
 function verifiedBadge(entry) {
   if (entry.verified) return '<span class="badge ok">已验证</span>';
   return '<span class="badge warn">未验证</span>';
@@ -102,6 +122,9 @@ async function loadScopes() {
     for (const s of data.scopes || []) {
       const opt = document.createElement("option");
       opt.value = `${s.scope_type}:${s.scope_id}`;
+      // 作用域 ID（例如 UMO）本身含冒号，选项里用 data 属性承载真实取值，避免解析歧义。
+      opt.dataset.scopeType = String(s.scope_type ?? "");
+      opt.dataset.scopeId = String(s.scope_id ?? "");
       opt.textContent = `${s.scope_type}:${s.scope_id} (${s.count})`;
       select.appendChild(opt);
     }
@@ -189,7 +212,7 @@ function renderTable(items) {
       </td>
       <td class="cell-topic" title="${escapeHtml(e.topic)}">${escapeHtml(e.topic)}</td>
       <td class="cell-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 80))}</td>
-      <td class="cell-scope">${escapeHtml(e.scope_type)}:${escapeHtml(e.scope_id)}</td>
+      <td class="cell-scope">${scopeCell(e)}</td>
       <td class="cell-origin" title="${escapeHtml(e.origin || "")}">${formatOrigin(e.origin)}</td>
       <td>${formatConfidence(e.confidence)}</td>
       <td>${verifiedBadge(e)}</td>
@@ -443,7 +466,7 @@ async function showDetail(entryId) {
     const versions = versionsResp.items || [];
     body.innerHTML = `
       <div class="detail-grid">
-        <div class="detail-row"><div class="detail-label">作用域</div><div class="detail-value">${escapeHtml(entry.scope_type)}:${escapeHtml(entry.scope_id)}</div></div>
+        <div class="detail-row"><div class="detail-label">作用域</div><div class="detail-value">${scopeCell(entry)}</div></div>
         <div class="detail-row"><div class="detail-label">置信度</div><div class="detail-value">${formatConfidence(entry.confidence)}</div></div>
         <div class="detail-row"><div class="detail-label">状态</div><div class="detail-value">${verifiedBadge(entry)}</div></div>
         <div class="detail-row"><div class="detail-label">被质疑</div><div class="detail-value">${entry.challenge_count || 0} 次</div></div>
@@ -649,7 +672,7 @@ async function loadDebug() {
   try {
     const d = await bridge.apiGet("debug");
     const scopesList = (d.scopes || [])
-      .map((s) => `<li>${escapeHtml(s.scope_type)}:${escapeHtml(s.scope_id)} — ${s.count} 条</li>`)
+      .map((s) => `<li>${scopeCell(s)} — ${s.count} 条</li>`)
       .join("");
     const toolsList = (d.tools_registered || []).join(", ") || "（无）";
     const cfg = d.config || {};
@@ -789,12 +812,32 @@ function closeDiagnosticModal() {
 }
 
 function bindEvents() {
+  document.addEventListener("click", async (event) => {
+    const chip = event.target.closest?.("[data-copy-id]");
+    if (!chip) return;
+    const value = chip.dataset.copyId || "";
+    if (!value) return;
+    let copied = false;
+    try {
+      copied = window.SeriesUI?.copy ? await window.SeriesUI.copy(value) : false;
+    } catch (_) {
+      copied = false;
+    }
+    notify(copied ? "已复制完整标识" : "复制失败，请手动选中后复制", !copied);
+  });
+
   document.getElementById("scope-select").addEventListener("change", (e) => {
     const v = e.target.value;
     if (v) {
-      const [t, id] = v.split(":", 2);
-      state.scopeType = t;
-      state.scopeId = id;
+      const option = e.target.selectedOptions?.[0];
+      if (option && option.dataset.scopeType !== undefined) {
+        state.scopeType = option.dataset.scopeType || "";
+        state.scopeId = option.dataset.scopeId || "";
+      } else {
+        const sep = v.indexOf(":");
+        state.scopeType = sep >= 0 ? v.slice(0, sep) : v;
+        state.scopeId = sep >= 0 ? v.slice(sep + 1) : "";
+      }
     } else {
       state.scopeType = "";
       state.scopeId = "";
@@ -2467,7 +2510,7 @@ function renderSlangCandidates(items) {
       <td class="cell-preview" title="${escapeHtml(c.context)}">${escapeHtml(truncate(c.context, 50))}</td>
       <td>${c.occurrences ?? 0}</td>
       <td>${c.speaker_count ?? 0}</td>
-      <td class="cell-scope">${escapeHtml(c.scope_type)}:${escapeHtml(c.scope_id)}</td>
+      <td class="cell-scope">${scopeCell(c)}</td>
       <td>${status}</td>
       <td class="col-actions">
         <button type="button" data-act="promote" data-phrase="${escapeHtml(c.phrase)}" data-scope-type="${escapeHtml(c.scope_type)}" data-scope-id="${escapeHtml(c.scope_id)}">晋升全局</button>
@@ -2494,7 +2537,7 @@ function renderSlangEntries(items) {
       <td class="cell-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 60))}</td>
       <td>${formatConfidence(e.confidence)}</td>
       <td>${typeLabel}</td>
-      <td class="cell-scope">${escapeHtml(e.scope_type)}:${escapeHtml(e.scope_id)}</td>
+      <td class="cell-scope">${scopeCell(e)}</td>
       <td class="col-actions">
         <button type="button" data-act="block" data-phrase="${escapeHtml(e.topic)}" class="danger">拉黑</button>
       </td>

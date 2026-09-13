@@ -154,3 +154,28 @@ def test_config_search_preserves_dirty_edits_and_invalidates_stale_cache():
     assert "function escapeHtmlAttr(" in js
     assert '"&": "&amp;"' in js
     assert '"\\"": "&quot;"' in js
+
+
+def test_manager_page_shortens_and_copies_long_scope_ids():
+    js = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    css = (PAGE_DIR / "style.css").read_text(encoding="utf-8")
+
+    assert "function shortId(value, head = 10, tail = 6)" in js
+    assert "function idChip(value, label = \"标识\")" in js
+    assert "function scopeCell(entry)" in js
+    assert 'data-copy-id="${escapeHtml(text)}"' in js
+    # 三处作用域单元格 + 详情弹窗 + 调试列表统一走 scopeCell
+    assert js.count("scopeCell(e)") == 2
+    assert js.count("scopeCell(c)") == 1
+    assert '${scopeCell(entry)}' in js
+    assert '${scopeCell(s)}' in js
+    # 复制走共享 SeriesUI.copy，失败降级为提示
+    assert "window.SeriesUI?.copy ? await window.SeriesUI.copy(value) : false" in js
+    assert "已复制完整标识" in js
+    # 作用域筛选改用选项 data，作用域 ID 含冒号也不会被截断
+    assert 'v.split(":", 2)' not in js
+    assert 'opt.dataset.scopeType = String(s.scope_type ?? "");' in js
+    assert 'opt.dataset.scopeId = String(s.scope_id ?? "");' in js
+    assert "const option = e.target.selectedOptions?.[0];" in js
+    assert 'state.scopeId = option.dataset.scopeId || "";' in js
+    assert '.id-chip' in css

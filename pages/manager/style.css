@@ -1313,8 +1313,7 @@ textarea {
 /* Compact interaction polish */
 @media (hover: hover) and (pointer: fine) {
   .kb-item:hover,
-  .url-source-item:hover,
-  .feature:hover {
+  .url-source-item:hover {
     transform: translateY(-1px);
   }
 
@@ -1697,3 +1696,32 @@ textarea {
     padding: 10px 12px;
   }
 }
+
+/* 长标识（作用域 / UMO）短显示 + 一键复制 */
+.id-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--si-line-solid);
+  border-radius: 999px;
+  color: var(--si-muted);
+  background: var(--si-surface-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.id-chip:hover {
+  color: var(--si-primary-strong);
+  border-color: rgba(102, 92, 246, .4);
+  background: var(--si-primary-soft);
+}
+
+.id-chip:focus-visible {
+  outline: 0;
+  box-shadow: var(--si-focus);
+}
+
+.scope-type { color: var(--si-muted); }
