@@ -5,7 +5,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "1.0.1";
+  const VERSION = "1.0.2";
   const THEME_KEY = "ningxin.series.ui.theme";
   const overlays = [];
 
@@ -55,19 +55,42 @@
     return node;
   }
 
-  function toast(message, type = "info", duration = 2600) {
+  function toast(message, type = "info", duration = 2600, action = null) {
     const host = layer("toast");
     const item = document.createElement("div");
     item.className = `toast ${type === "error" ? "error" : ""}`;
     item.setAttribute("role", type === "error" ? "alert" : "status");
     item.style.pointerEvents = "auto";
-    item.textContent = String(message || "");
+    const body = document.createElement("span");
+    body.className = "toast-text";
+    body.textContent = String(message || "");
+    item.appendChild(body);
+    let removed = false;
+    let dismiss = () => {};
+    if (action && typeof action.onClick === "function") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "toast-action";
+      button.textContent = String(action.label || "撤销");
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dismiss();
+        action.onClick();
+      });
+      item.appendChild(button);
+    }
     host.appendChild(item);
-    window.setTimeout(() => {
+    dismiss = () => {
+      if (removed) return;
+      removed = true;
       item.style.opacity = "0";
       item.style.transform = "translateY(8px)";
       window.setTimeout(() => item.remove(), 180);
-    }, Math.max(800, Number(duration) || 2600));
+    };
+    // 带撤销操作时给足反应时间（默认 5.2 秒），普通提示仍是 2.6 秒。
+    const hold = action ? Math.max(5200, Number(duration) || 0) : Math.max(800, Number(duration) || 2600);
+    window.setTimeout(dismiss, hold);
     return item;
   }
 
@@ -454,10 +477,28 @@
     return { activate };
   }
 
+  const SWITCH_INPUT_SELECTOR = 'input[type="checkbox"].si-toggle, .switch input[type="checkbox"], .si-switch input[type="checkbox"], input[type="checkbox"][role="switch"]';
+
+  function syncSwitchState(input) {
+    input.setAttribute('aria-checked', input.checked ? 'true' : 'false');
+  }
+
+  function enhanceSwitches(root) {
+    (root || document).querySelectorAll(SWITCH_INPUT_SELECTOR).forEach((input) => {
+      if (input.dataset.siSwitchBound !== '1') {
+        input.dataset.siSwitchBound = '1';
+        input.setAttribute('role', 'switch');
+        input.addEventListener('change', () => syncSwitchState(input));
+      }
+      syncSwitchState(input);
+    });
+  }
+
   function decorate() {
     document.querySelectorAll('[role="button"]:not(button):not(a)').forEach((node) => {
       node.tabIndex = node.tabIndex >= 0 ? node.tabIndex : 0;
     });
+    enhanceSwitches(document);
   }
 
   function initialize() {
@@ -478,7 +519,8 @@
     prompt: promptDialog,
     copy: copyText,
     setBusy,
-    bindTabs
+    bindTabs,
+    enhanceSwitches
   });
 
   ready(initialize);

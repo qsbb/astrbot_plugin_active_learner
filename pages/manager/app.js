@@ -1205,7 +1205,7 @@ function renderUrlSources() {
     return `
       <div class="url-source-item" data-source-id="${escapeHtmlAttr(source.id)}">
         <label class="url-source-toggle" title="启用或停用此来源">
-          <input type="checkbox" data-act="toggle" ${checked} />
+          <input type="checkbox" class="si-toggle" data-act="toggle" ${checked} />
           <span>${escapeHtml(source.name)}</span>
         </label>
         <span class="url-source-type">${kind}</span>
@@ -1900,7 +1900,7 @@ function renderConfigForm(fields, keyword = "") {
       label.className = isBool ? "config-bool" : "config-input";
       if (isBool) {
         label.innerHTML = `
-          <input type="checkbox" data-field="${escapeHtml(f.name)}" ${f.value ? "checked" : ""} />
+          <input type="checkbox" class="si-toggle" data-field="${escapeHtml(f.name)}" ${f.value ? "checked" : ""} />
           <span class="config-field-name">${escapeHtml(f.description || f.name)}</span>
           <span class="config-field-key">${escapeHtml(f.name)}</span>
         `;

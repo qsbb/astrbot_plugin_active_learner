@@ -573,58 +573,10 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 0 7px 52px;
+  padding: 7px 0;
   color: var(--si-ink);
   font-size: 13px;
   cursor: pointer;
-}
-
-.checkbox-row input[type="checkbox"] {
-  position: absolute;
-  width: 0;
-  height: 0;
-  opacity: 0;
-}
-
-.checkbox-row::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 40px;
-  height: 22px;
-  transform: translateY(-50%);
-  border: 1px solid rgba(105, 115, 158, .18);
-  border-radius: 999px;
-  background: rgba(105, 115, 158, .16);
-  transition: background var(--si-transition), border-color var(--si-transition), box-shadow var(--si-transition);
-}
-
-.checkbox-row::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  transform: translateY(-50%);
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 2px 6px rgba(77, 84, 142, .22);
-  transition: transform var(--si-transition);
-}
-
-.checkbox-row:has(input:checked)::before {
-  border-color: var(--si-primary);
-  background: var(--si-primary);
-}
-
-.checkbox-row:has(input:checked)::after {
-  transform: translate(18px, -50%);
-}
-
-.checkbox-row:has(input:focus-visible)::before {
-  box-shadow: var(--si-focus);
 }
 
 .disabled-hint {

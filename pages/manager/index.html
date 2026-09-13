@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=1.8.4-1" />
-    <link rel="stylesheet" href="./series-ui.css?v=1.8.4-1" />
+  <link rel="stylesheet" href="./style.css?v=1.8.5-1" />
+    <link rel="stylesheet" href="./series-ui.css?v=1.8.5-1" />
 </head>
 <body data-series-ui="1">
   <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
@@ -106,7 +106,7 @@
       <div class="log-toolbar">
         <span class="log-summary-actions">
           <button type="button" id="btn-refresh-logs" class="log-action-btn">刷新</button>
-          <label class="log-action-label"><input type="checkbox" id="log-autoscroll" checked /> 自动滚动</label>
+          <label class="log-action-label"><input type="checkbox" id="log-autoscroll" class="si-toggle" checked /> 自动滚动</label>
         </span>
       </div>
       <div id="log-content" class="debug-content log-content">点击刷新或展开查看</div>
@@ -161,15 +161,15 @@
             <div class="settings-section">
               <div class="settings-label">精炼开关</div>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-refine-search" />
+                <input type="checkbox" id="settings-refine-search" class="si-toggle" />
                 <span>搜索学习时精炼（搜索结果 → LLM 2 步蒸馏 → 入库）</span>
               </label>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-refine-import" />
+                <input type="checkbox" id="settings-refine-import" class="si-toggle" />
                 <span>导入时精炼（原始文本 → LLM 蒸馏 → 入库）</span>
               </label>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-refine-verify" />
+                <input type="checkbox" id="settings-refine-verify" class="si-toggle" />
                 <span>验证时精炼（本期预留，暂不影响行为）</span>
               </label>
             </div>
@@ -179,7 +179,7 @@
             <div class="settings-section">
               <div class="settings-label">自主检索与学习</div>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-enable-learn" />
+                <input type="checkbox" id="settings-enable-learn" class="si-toggle" />
                 <span>启用自主检索策略</span>
               </label>
               <div class="settings-row">
@@ -226,17 +226,17 @@
             <div class="settings-section">
               <div class="settings-label">联网搜索与知识领域</div>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-enable-web-search" />
+                <input type="checkbox" id="settings-enable-web-search" class="si-toggle" />
                 <span>启用联网搜索</span>
               </label>
               <p class="hint">关闭后手动 URL、百科、网页搜索、B 站搜索和主动学习等联网功能均不可用。</p>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-enable-bilibili" />
+                <input type="checkbox" id="settings-enable-bilibili" class="si-toggle" />
                 <span>启用 B 站补充来源</span>
               </label>
               <p class="hint">默认关闭。开启后 B 站标题与简介仅作为补充证据；默认顺序仍在手动来源和网页搜索之后。</p>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-web-search-only-top" />
+                <input type="checkbox" id="settings-web-search-only-top" class="si-toggle" />
                 <span>联网搜索仅使用最高优先级来源</span>
               </label>
               <div class="settings-row">
@@ -261,11 +261,11 @@
               </div>
               <p class="hint">输入兴趣领域后按回车添加；关闭「允许跨领域回复」后，未命中领域的问题会触发 LLM 明确拒绝回答。</p>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-enable-cross-domain" />
+                <input type="checkbox" id="settings-enable-cross-domain" class="si-toggle" />
                 <span>允许跨领域回复</span>
               </label>
               <label class="checkbox-row">
-                <input type="checkbox" id="settings-cross-domain-exclude-admin" />
+                <input type="checkbox" id="settings-cross-domain-exclude-admin" class="si-toggle" />
                 <span>拒绝跨领域搜索时排除管理员</span>
               </label>
             </div>
@@ -643,7 +643,7 @@
           </label>
         </div>
         <label class="checkbox-row">
-          <input type="checkbox" id="builtin-kb-refine" checked />
+          <input type="checkbox" id="builtin-kb-refine" class="si-toggle" checked />
           <span>LLM 精炼后入库（每个文档所有 chunks 合并后重新分块 + 精炼）</span>
         </label>
         <div id="builtin-kb-progress" class="import-result hidden"></div>
@@ -807,7 +807,7 @@
   </div>
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script src="./series-ui.js?v=1.8.4-1"></script>
-  <script type="module" src="./app.js?v=1.8.4-1"></script>
+  <script src="./series-ui.js?v=1.8.5-1"></script>
+  <script type="module" src="./app.js?v=1.8.5-1"></script>
 </body>
 </html>

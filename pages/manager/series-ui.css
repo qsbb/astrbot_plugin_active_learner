@@ -217,8 +217,59 @@ body[data-series-ui] label) { color: #4d547d; font-weight: 590; }
 :where(body[data-series-ui] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover), :where(body[data-series-ui] select:hover), :where(body[data-series-ui] textarea:hover) { border-color: rgba(102,92,246,.32); background: rgba(255,255,255,.78); }
 :where(body[data-series-ui] input[type="range"]) { accent-color: var(--si-primary); }
 :where(body[data-series-ui] input[type="checkbox"]), :where(body[data-series-ui] input[type="radio"]) { accent-color: var(--si-primary); }
-:where(body[data-series-ui] .switch) { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
-:where(body[data-series-ui] .switch input) { width: 18px; height: 18px; }
+/* 统一开关控件：label.switch / label.si-switch 或给 checkbox 加 .si-toggle 即成为滑块开关。
+   单选（radio）与列表勾选保持原生样式，不受此规则影响。 */
+:where(body[data-series-ui] .switch), :where(body[data-series-ui] .si-switch) { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; }
+:where(body[data-series-ui] .switch > span), :where(body[data-series-ui] .si-switch > span) { line-height: 1.5; }
+:where(body[data-series-ui] input[type="checkbox"].si-toggle),
+:where(body[data-series-ui] .switch input[type="checkbox"]),
+:where(body[data-series-ui] .si-switch input[type="checkbox"]) {
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 40px;
+  min-width: 40px;
+  height: 22px;
+  min-height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(105,115,158,.24);
+  border-radius: 999px;
+  background: rgba(105,115,158,.20);
+  box-shadow: inset 0 1px 2px rgba(77,84,142,.10);
+  cursor: pointer;
+  transition: background var(--si-transition), border-color var(--si-transition), box-shadow var(--si-transition);
+}
+:where(body[data-series-ui] input[type="checkbox"].si-toggle)::after,
+:where(body[data-series-ui] .switch input[type="checkbox"])::after,
+:where(body[data-series-ui] .si-switch input[type="checkbox"])::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 7px rgba(77,84,142,.26);
+  transition: transform var(--si-transition);
+}
+:where(body[data-series-ui] input[type="checkbox"].si-toggle:checked),
+:where(body[data-series-ui] .switch input[type="checkbox"]:checked),
+:where(body[data-series-ui] .si-switch input[type="checkbox"]:checked) {
+  border-color: rgba(102,92,246,.42);
+  background: linear-gradient(135deg, #766cff, #5f55ed);
+}
+:where(body[data-series-ui] input[type="checkbox"].si-toggle:checked)::after,
+:where(body[data-series-ui] .switch input[type="checkbox"]:checked)::after,
+:where(body[data-series-ui] .si-switch input[type="checkbox"]:checked)::after { transform: translateX(18px); }
+:where(body[data-series-ui] input[type="checkbox"].si-toggle:focus-visible),
+:where(body[data-series-ui] .switch input[type="checkbox"]:focus-visible),
+:where(body[data-series-ui] .si-switch input[type="checkbox"]:focus-visible) { outline: 0; box-shadow: var(--si-focus); }
+:where(body[data-series-ui] input[type="checkbox"].si-toggle:disabled),
+:where(body[data-series-ui] .switch input[type="checkbox"]:disabled),
+:where(body[data-series-ui] .si-switch input[type="checkbox"]:disabled) { opacity: .5; cursor: not-allowed; }
 :where(body[data-series-ui] .field-row), :where(body[data-series-ui] .form-grid), :where(body[data-series-ui] .settings-grid), :where(body[data-series-ui] .config-form), :where(body[data-series-ui] .field-grid), :where(body[data-series-ui] .service-metrics) { display: grid; gap: 12px; }
 :where(body[data-series-ui] .field-row), :where(body[data-series-ui] .form-grid), :where(body[data-series-ui] .settings-grid) { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 :where(body[data-series-ui] .field-hint), :where(body[data-series-ui] .field-note), :where(body[data-series-ui] .hint), :where(body[data-series-ui] .muted), :where(body[data-series-ui] .note) { color: var(--si-muted); font-size: 12px; }
@@ -344,6 +395,9 @@ body[data-series-ui] .modal:not(.hidden)) {
 }
 :where(body[data-series-ui] .popover-actions), :where(body[data-series-ui] .group-popover) { border: 1px solid var(--si-line); border-radius: var(--si-radius-sm); background: rgba(255,255,255,.9); box-shadow: var(--si-shadow); backdrop-filter: blur(18px); }
 :where(body[data-series-ui] .toast), :where(body[data-series-ui] .toast-stack > *) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 11px 14px;
   border: 1px solid rgba(255,255,255,.84);
   border-radius: var(--si-radius-sm);
@@ -352,6 +406,20 @@ body[data-series-ui] .modal:not(.hidden)) {
   box-shadow: var(--si-shadow);
   backdrop-filter: blur(18px);
 }
+:where(body[data-series-ui] .toast-text) { flex: 1 1 auto; min-width: 0; line-height: 1.5; }
+:where(body[data-series-ui] .toast-action) {
+  flex: none;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--si-primary-strong);
+  background: rgba(102,92,246,.10);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.2;
+}
+:where(body[data-series-ui] .toast-action:hover) { background: rgba(102,92,246,.18); transform: none; border-color: transparent; color: var(--si-primary-strong); box-shadow: none; }
+:where(body[data-series-ui] .toast.error) :where(body[data-series-ui] .toast-action) { color: var(--si-danger); background: var(--si-danger-soft); }
 :where(body[data-series-ui] .toast.error), :where(body[data-series-ui] .toast-stack .error) { color: var(--si-danger); border-color: rgba(209,75,90,.28); }
 
 :where(/* Empty/loading/progress */
