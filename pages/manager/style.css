@@ -206,6 +206,12 @@
   margin-bottom: 3px;
 }
 
+.log-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 6px;
+}
+
 .log-summary-actions {
   display: inline-flex;
   align-items: center;
@@ -272,6 +278,10 @@
 
 .memory-table {
   min-width: 960px;
+}
+
+#slang-modal .memory-table {
+  min-width: 0;
 }
 
 .memory-table .col-check {
@@ -390,20 +400,26 @@ body[data-series-ui] .modal-backdrop {
   width: min(940px, 100%);
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.detail-grid .detail-row {
+  min-width: 0;
+}
+
+.detail-grid .detail-row:nth-child(6) {
+  grid-column: 1 / -1;
+}
+
 .modal-close {
   font-size: 16px;
 }
 
 #import-modal .modal-card {
   width: min(760px, 100%);
-}
-
-#config-modal .modal-footer {
-  justify-content: space-between;
-}
-
-#config-modal .modal-footer > #config-cancel {
-  margin-right: auto;
 }
 
 /* Tabs and import panels */
@@ -641,7 +657,39 @@ textarea {
 
 .config-form {
   display: grid;
+  gap: 16px;
+}
+
+.config-group {
+  display: grid;
+  gap: 10px;
+}
+
+.config-group-title {
+  margin: 0;
+  color: var(--si-ink);
+  font-size: 15px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.settings-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--si-line);
+  background: var(--si-surface-strong);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
 .config-field {
@@ -707,9 +755,9 @@ textarea {
 /* URL sources and tags */
 .url-source-form {
   display: grid;
-  grid-template-columns: 120px minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 9px;
-  align-items: end;
+  align-items: stretch;
 }
 
 .url-source-list {
@@ -720,7 +768,7 @@ textarea {
 
 .url-source-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 11px 12px;
@@ -738,11 +786,19 @@ textarea {
 
 .url-source-toggle {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   color: var(--si-muted);
   font-size: 12px;
   cursor: pointer;
+}
+
+.url-source-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .url-source-type {
@@ -1302,6 +1358,14 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-actions {
+    flex-wrap: wrap;
+  }
+
   #settings-modal .settings-row {
     align-items: stretch;
     flex-direction: column;
@@ -1495,10 +1559,62 @@ textarea {
     -webkit-line-clamp: 2;
   }
 
-  .memory-table td:nth-child(4),
-  .memory-table td:nth-child(5),
-  .memory-table td:nth-child(8) {
-    display: none;
+  .memory-table-primary td:nth-child(4),
+  .memory-table-primary td:nth-child(5),
+  .memory-table-primary td:nth-child(8) {
+    display: block;
+    grid-column: 1 / -1;
+    padding: 0 !important;
+    color: var(--si-muted);
+    font-size: 12px;
+  }
+
+  .memory-table-primary td:nth-child(4)::before { content: "作用域："; }
+  .memory-table-primary td:nth-child(5)::before { content: "来源："; }
+  .memory-table-primary td:nth-child(8)::before { content: "更新时间："; }
+
+  /* 黑话弹窗保留表格语义，不要套用主记忆表的移动卡片映射。 */
+  #slang-modal .memory-table {
+    display: table;
+    width: 100%;
+    min-width: 0;
+  }
+
+  #slang-modal .memory-table thead { display: table-header-group; }
+  #slang-modal .memory-table tbody { display: table-row-group; }
+
+  #slang-modal .memory-table tr {
+    position: static;
+    display: table-row;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  #slang-modal .memory-table td {
+    display: table-cell !important;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--si-line);
+    white-space: nowrap;
+  }
+
+  #slang-modal .memory-table .col-check {
+    position: static;
+    width: auto;
+  }
+
+  #slang-modal .memory-table .col-actions {
+    display: table-cell !important;
+    width: auto;
+    padding-top: 0 !important;
+  }
+
+  #slang-modal .memory-table .col-actions button {
+    width: auto;
+    min-width: 0;
+    margin: 0;
+    padding: 5px 7px;
   }
 
   .memory-table td:nth-child(6),
@@ -1530,7 +1646,10 @@ textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .stats-grid,
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .token-windows {
     grid-template-columns: 1fr;
   }
@@ -1548,5 +1667,33 @@ textarea {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
+  }
+}
+
+@media (max-width: 680px) {
+  .hero {
+    padding: 14px !important;
+  }
+
+  .hero h1 {
+    font-size: 28px;
+  }
+
+  .hero p {
+    font-size: 12px;
+  }
+
+  .controls {
+    margin: 10px 0;
+    gap: 8px;
+  }
+
+  .stats-grid {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .stat-card {
+    padding: 10px 12px;
   }
 }

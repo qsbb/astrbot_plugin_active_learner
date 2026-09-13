@@ -52,6 +52,8 @@ body[data-series-ui] {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+body[data-series-ui] [hidden] { display: none !important; }
+
 body[data-series-ui]::before {
   content: "";
   position: fixed;
@@ -74,7 +76,7 @@ body[data-series-ui] ::selection { background: rgba(102,92,246,.2); }
 body[data-series-ui] .shell,
 body[data-series-ui] .studio-shell,
 body[data-series-ui] .page-shell,
-body[data-series-ui] main:not(.main):not(.studio-main) {
+body[data-series-ui] main:not(.main):not(.studio-main):not(#app) {
   width: min(1420px, calc(100% - 32px));
   margin: 16px auto 40px;
   padding: clamp(16px, 2.2vw, 30px);
@@ -446,8 +448,6 @@ body[data-series-ui] .capability-dot,
 body[data-series-ui] .hero-badge-dot { box-shadow: 0 0 0 4px rgba(17,135,107,.10); }
 
 /* Modals, popovers, dialogs, toast */
-body[data-series-ui] .modal-backdrop,
-body[data-series-ui] .qp-overlay,
 body[data-series-ui] .modal:not(.hidden) {
   position: fixed;
   inset: 0;
@@ -459,12 +459,23 @@ body[data-series-ui] .modal:not(.hidden) {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
-body[data-series-ui] .modal-card,
-body[data-series-ui] .qp-dialog,
-body[data-series-ui] .modal-body {
+body[data-series-ui] .modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+body[data-series-ui] .modal-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
   width: min(760px, 100%);
   max-height: min(86vh, 900px);
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid rgba(255,255,255,.88);
   border-radius: var(--si-radius-lg);
   background: rgba(255,255,255,.86);
@@ -473,9 +484,43 @@ body[data-series-ui] .modal-body {
   -webkit-backdrop-filter: blur(24px) saturate(1.3);
 }
 body[data-series-ui] .modal-header,
-body[data-series-ui] .modal-footer,
-body[data-series-ui] .qp-header { padding: 15px 18px; border-color: var(--si-line-solid); background: rgba(255,255,255,.42); }
-body[data-series-ui] .modal-body { padding: 18px; }
+body[data-series-ui] .modal-footer {
+  flex: 0 0 auto;
+  padding: 15px 18px;
+  border-color: var(--si-line-solid);
+  background: rgba(255,255,255,.42);
+}
+body[data-series-ui] .modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+body[data-series-ui] .modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  border-top: 1px solid var(--si-line-solid);
+}
+body[data-series-ui] .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: auto;
+  max-height: none;
+  overflow: auto;
+  padding: 18px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body[data-series-ui] .dialog-message {
+  white-space: pre-line;
+}
 body[data-series-ui] .popover-actions,
 body[data-series-ui] .group-popover { border: 1px solid var(--si-line); border-radius: var(--si-radius-sm); background: rgba(255,255,255,.9); box-shadow: var(--si-shadow); backdrop-filter: blur(18px); }
 body[data-series-ui] .toast,
@@ -539,7 +584,7 @@ body[data-series-ui] .legacy-notice { border-color: rgba(102,92,246,.18); backgr
   body[data-series-ui] .shell,
   body[data-series-ui] .studio-shell,
   body[data-series-ui] .page-shell,
-  body[data-series-ui] main:not(.main):not(.studio-main) { width: calc(100% - 18px); margin: 9px auto 26px; padding: 14px; border-radius: 20px; }
+  body[data-series-ui] main:not(.main):not(.studio-main):not(#app) { width: calc(100% - 18px); margin: 9px auto 26px; padding: 14px; border-radius: 20px; }
   body[data-series-ui] .hero,
   body[data-series-ui] .page-header,
   body[data-series-ui] .studio-hero { padding: 20px; border-radius: 20px; }
@@ -559,4 +604,141 @@ body[data-series-ui] .legacy-notice { border-color: rgba(102,92,246,.18); backgr
   body[data-series-ui] .page-shell,
   body[data-series-ui] .card,
   body[data-series-ui] .panel { background: rgba(255,255,255,.92); }
+}
+
+/* Task-first layout primitives */
+body[data-series-ui] .si-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0 0 14px;
+}
+body[data-series-ui] .si-summary-strip > * {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--si-line);
+  border-radius: var(--si-radius-sm);
+  background: var(--si-surface-soft);
+}
+body[data-series-ui] .si-metric-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+}
+body[data-series-ui] .si-tabbar,
+body[data-series-ui] .si-subnav {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 5px;
+  border: 1px solid var(--si-line);
+  border-radius: var(--si-radius-sm);
+  background: var(--si-surface-soft);
+}
+body[data-series-ui] .si-tabbar button,
+body[data-series-ui] .si-subnav button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--si-radius-xs);
+  padding: 8px 13px;
+  color: var(--si-muted);
+  background: transparent;
+  font-weight: 650;
+}
+body[data-series-ui] .si-tabbar button.active,
+body[data-series-ui] .si-subnav button.active {
+  color: var(--si-primary-strong);
+  background: rgba(255,255,255,.82);
+  box-shadow: var(--si-shadow-sm);
+}
+body[data-series-ui] .si-disclosure {
+  border: 1px solid var(--si-line);
+  border-radius: var(--si-radius-sm);
+  background: var(--si-surface-soft);
+}
+body[data-series-ui] .si-disclosure > summary {
+  cursor: pointer;
+  padding: 13px 14px;
+  color: var(--si-ink);
+  font-weight: 720;
+  list-style: none;
+}
+body[data-series-ui] .si-disclosure > summary::-webkit-details-marker { display: none; }
+body[data-series-ui] .si-disclosure[open] > summary { border-bottom: 1px solid var(--si-line); }
+body[data-series-ui] .si-actionbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--si-line);
+  background: var(--si-surface-strong);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+body[data-series-ui] .si-master-detail {
+  display: grid;
+  grid-template-columns: minmax(240px, 32%) minmax(0, 1fr);
+  gap: 14px;
+}
+body[data-series-ui] .si-master-detail > .si-detail { min-width: 0; }
+body[data-series-ui] .si-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+body[data-series-ui] .si-data-list { display: grid; gap: 8px; }
+body[data-series-ui] .si-problem-list { display: grid; gap: 8px; }
+body[data-series-ui] .si-problem-list > * {
+  border-left: 4px solid var(--si-warning);
+  border-radius: var(--si-radius-xs);
+  padding: 11px 12px;
+  background: var(--si-surface-soft);
+}
+body[data-series-ui] .si-source-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+body[data-series-ui] .si-empty {
+  padding: 28px 18px;
+  color: var(--si-muted);
+  text-align: center;
+}
+body[data-series-ui] .si-skeleton {
+  min-height: 16px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(105,115,158,.12), rgba(255,255,255,.72), rgba(105,115,158,.12));
+  background-size: 200% 100%;
+  animation: si-shimmer 1.4s ease-in-out infinite;
+}
+body[data-series-ui] .si-mobile-more-sheet {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: calc(64px + env(safe-area-inset-bottom));
+  z-index: 40;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--si-line);
+  border-radius: var(--si-radius);
+  background: var(--si-surface-strong);
+  box-shadow: var(--si-shadow-lg);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+body[data-series-ui] .si-mobile-more-sheet[hidden] { display: none !important; }
+@media (max-width: 760px) {
+  body[data-series-ui] .si-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body[data-series-ui] .si-master-detail { grid-template-columns: 1fr; }
+  body[data-series-ui] .si-actionbar { justify-content: stretch; }
+  body[data-series-ui] .si-actionbar > * { flex: 1 1 auto; }
 }

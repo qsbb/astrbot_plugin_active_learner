@@ -46,6 +46,7 @@
     node.setAttribute(`data-si-${kind}-layer`, "");
     node.style.cssText = "position:fixed;z-index:1200;pointer-events:none;";
     if (kind === "toast") {
+      node.style.zIndex = "1400";
       node.style.cssText += "right:18px;bottom:18px;display:grid;gap:8px;width:min(380px,calc(100vw - 36px));";
     } else {
       node.style.cssText += "inset:0;display:grid;place-items:center;padding:18px;background:rgba(35,39,72,.28);backdrop-filter:blur(12px);";
@@ -70,64 +71,305 @@
     return item;
   }
 
+  const dialogStack = [];
+  let dialogDepth = 0;
+  let dialogSequence = 0;
+  const inertStates = [];
+
+  function setBackgroundInert(inert) {
+    if (inert) {
+      if (dialogDepth === 0) {
+        inertStates.length = 0;
+        [...document.body.children]
+          .filter((node) => !node.matches("[data-si-toast-layer], [data-si-dialog-layer], script, style, link, noscript"))
+          .forEach((node) => {
+            inertStates.push({
+              node,
+              inert: node.inert,
+              ariaHidden: node.getAttribute("aria-hidden"),
+            });
+            node.inert = true;
+            node.setAttribute("aria-hidden", "true");
+          });
+      }
+      dialogDepth += 1;
+      return;
+    }
+    dialogDepth = Math.max(0, dialogDepth - 1);
+    if (dialogDepth !== 0) return;
+    inertStates.forEach(({ node, inert, ariaHidden }) => {
+      node.inert = inert;
+      if (ariaHidden === null) node.removeAttribute("aria-hidden");
+      else node.setAttribute("aria-hidden", ariaHidden);
+    });
+    inertStates.length = 0;
+  }
+
+  function syncDialogStackFocus() {
+    dialogStack.forEach((item, index) => {
+      const active = index === dialogStack.length - 1;
+      item.element.inert = !active;
+      if (active) item.element.removeAttribute("aria-hidden");
+      else item.element.setAttribute("aria-hidden", "true");
+    });
+  }
+
+  function createDialogLayer() {
+    const node = document.createElement("div");
+    node.className = "si-dialog-layer";
+    node.setAttribute("data-si-dialog-layer", "");
+    node.style.cssText = "position:fixed;inset:0;z-index:1300;display:grid;place-items:center;padding:18px;background:rgba(35,39,72,.28);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);";
+    document.body.appendChild(node);
+    return node;
+  }
+
+  function focusableElements(root) {
+    return [...root.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter((node) => (
+      (node.offsetParent !== null || node === document.activeElement) &&
+      node.getAttribute("tabindex") !== "-1" &&
+      !node.hidden &&
+      node.getAttribute("aria-hidden") !== "true"
+    ));
+  }
+
+  function resolveFocus(value, root) {
+    if (!value) return null;
+    const node = value instanceof Node
+      ? value
+      : (typeof value === "string" ? root.querySelector(value) : null);
+    return node && root.contains(node) ? node : null;
+  }
+
+  function dialog(options = {}) {
+    const {
+      title = "对话框",
+      body = "",
+      actions = [],
+      onAction = null,
+      onClose = null,
+      onKeydown = null,
+      initialFocus = null,
+      initialActionId = null,
+      closeOnBackdrop = true,
+      closeOnEscape = true,
+      className = "",
+      bodyClassName = "",
+      width = "min(760px, 100%)",
+    } = options;
+
+    const host = createDialogLayer();
+    const card = document.createElement("div");
+    card.className = `modal-card ${className}`.trim();
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-modal", "true");
+    card.setAttribute("tabindex", "-1");
+    card.style.pointerEvents = "auto";
+    card.style.width = width;
+
+    const header = document.createElement("header");
+    header.className = "modal-header";
+    const titleId = `si-dialog-title-${++dialogSequence}`;
+    card.setAttribute("aria-labelledby", titleId);
+    const heading = document.createElement("h3");
+    heading.id = titleId;
+    heading.textContent = String(title);
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "modal-close";
+    closeButton.setAttribute("aria-label", "关闭");
+    closeButton.textContent = "✕";
+    header.append(heading, closeButton);
+
+    const bodyHost = document.createElement("div");
+    bodyHost.className = `modal-body ${bodyClassName}`.trim();
+    const appendBody = (value) => {
+      bodyHost.replaceChildren();
+      if (value instanceof Node) bodyHost.appendChild(value);
+      else if (typeof value === "string") {
+        const paragraph = document.createElement("p");
+        paragraph.className = "dialog-message";
+        paragraph.textContent = value;
+        bodyHost.appendChild(paragraph);
+      }
+    };
+    appendBody(body);
+
+    const footer = document.createElement("footer");
+    footer.className = "modal-footer";
+    const actionButtons = new Map();
+    actions.forEach((action) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.siDialogAction = action.id;
+      if (action.variant) button.className = action.variant;
+      button.textContent = String(action.label || action.id);
+      if (action.disabled) button.disabled = true;
+      button.addEventListener("click", async () => {
+        if (closed) return;
+        const busyLabel = action.busyLabel || "";
+        if (busyLabel) setBusy(button, true, busyLabel);
+        try {
+          const result = onAction ? await onAction(action.id, controller) : undefined;
+          if (action.closeOnClick !== false && !closed) {
+            controller.close(result === undefined ? action.id : result);
+          }
+        } catch (error) {
+          toast(error?.message || String(error), "error");
+        } finally {
+          if (busyLabel) setBusy(button, false);
+        }
+      });
+      actionButtons.set(action.id, button);
+      footer.appendChild(button);
+    });
+    if (actions.length) card.append(header, bodyHost, footer);
+    else card.append(header, bodyHost);
+    host.appendChild(card);
+
+    const previousFocus = document.activeElement;
+    let closed = false;
+    let resolveClosed;
+    const closedPromise = new Promise((resolve) => { resolveClosed = resolve; });
+
+    const close = (value = null) => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("keydown", handleDocumentKeydown, true);
+      const index = dialogStack.indexOf(controller);
+      if (index >= 0) dialogStack.splice(index, 1);
+      host.remove();
+      document.removeEventListener("focusin", handleFocusIn, true);
+      setBackgroundInert(false);
+      syncDialogStackFocus();
+      if (previousFocus && previousFocus.isConnected && typeof previousFocus.focus === "function") {
+        previousFocus.focus();
+      } else {
+        const parentDialog = dialogStack[dialogStack.length - 1];
+        parentDialog?.element?.focus?.();
+      }
+      try {
+        if (typeof onClose === "function") onClose(value);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        resolveClosed(value);
+      }
+    };
+
+    const controller = {
+      element: card,
+      closed: closedPromise,
+      close,
+      isOpen: () => !closed,
+      setBusy: (actionId, busy, label = "") => {
+        const button = actionButtons.get(actionId);
+        if (button) setBusy(button, busy, label);
+      },
+      setDisabled: (actionId, disabled) => {
+        const button = actionButtons.get(actionId);
+        if (button) button.disabled = Boolean(disabled);
+      },
+      update: (patch = {}) => {
+        if (Object.prototype.hasOwnProperty.call(patch, "title")) {
+          heading.textContent = String(patch.title);
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, "body")) {
+          appendBody(patch.body);
+        }
+      },
+    };
+
+    function handleFocusIn(event) {
+      if (closed || dialogStack[dialogStack.length - 1] !== controller) return;
+      if (!card.contains(event.target)) {
+        (focusableElements(card)[0] || card).focus();
+      }
+    }
+    document.addEventListener("focusin", handleFocusIn, true);
+
+    const handleDocumentKeydown = (event) => {
+      if (!controller.isOpen() || dialogStack[dialogStack.length - 1] !== controller) return;
+      if (event.key === "Escape" && closeOnEscape) {
+        event.preventDefault();
+        event.stopPropagation();
+        close(null);
+        return;
+      }
+      if (typeof onKeydown === "function") onKeydown(event, controller);
+    };
+    document.addEventListener("keydown", handleDocumentKeydown, true);
+
+    host.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab" || dialogStack[dialogStack.length - 1] !== controller) return;
+      const focusable = focusableElements(card);
+      if (!focusable.length) {
+        event.preventDefault();
+        card.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    host.addEventListener("click", (event) => {
+      if (closeOnBackdrop && event.target === host) close(null);
+    });
+    closeButton.addEventListener("click", () => close(null));
+
+    dialogStack.push(controller);
+    setBackgroundInert(true);
+    syncDialogStackFocus();
+    const actionTarget = initialActionId ? actionButtons.get(initialActionId) : null;
+    const target = resolveFocus(initialFocus, card) || actionTarget || focusableElements(card)[0] || card;
+    target.focus();
+    return controller;
+  }
+
   function modal({ title = "确认操作", message = "", confirmText = "确认", cancelText = "取消", danger = false, input = null } = {}) {
     return new Promise((resolve) => {
-      const host = layer("modal");
-      const dialog = document.createElement("div");
-      dialog.className = "modal-card";
-      dialog.setAttribute("role", "dialog");
-      dialog.setAttribute("aria-modal", "true");
-      dialog.style.pointerEvents = "auto";
-      dialog.style.width = "min(520px, 100%)";
-      dialog.style.padding = "20px";
-
-      const heading = document.createElement("h3");
-      heading.textContent = String(title);
-      const copy = document.createElement("p");
-      copy.className = "muted";
-      copy.textContent = String(message);
-
       let field = null;
+      const body = document.createElement("div");
+      const copy = document.createElement("p");
+      copy.className = "muted dialog-message";
+      copy.style.whiteSpace = "pre-line";
+      copy.textContent = String(message);
+      body.appendChild(copy);
       if (input && typeof input === "object") {
         field = document.createElement("input");
         field.type = input.type === "password" ? "password" : "text";
         field.value = String(input.value || "");
         field.placeholder = String(input.placeholder || "");
         field.setAttribute("aria-label", String(input.label || "输入内容"));
+        body.appendChild(field);
       }
-
-      const actions = document.createElement("div");
-      actions.className = "dialog-actions";
-      actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:18px;";
-      const cancel = document.createElement("button");
-      cancel.type = "button";
-      cancel.textContent = String(cancelText);
-      const confirm = document.createElement("button");
-      confirm.type = "button";
-      confirm.className = danger ? "danger" : "primary";
-      confirm.textContent = String(confirmText);
-      actions.append(cancel, confirm);
-      dialog.append(heading, copy);
-      if (field) dialog.append(field);
-      dialog.append(actions);
-      host.appendChild(dialog);
-      overlays.push(dialog);
-
-      const finish = (value) => {
-        dialog.remove();
-        if (!host.childElementCount) host.style.background = "transparent";
-        const index = overlays.indexOf(dialog);
-        if (index >= 0) overlays.splice(index, 1);
-        resolve(value);
-      };
-      cancel.addEventListener("click", () => finish(null));
-      confirm.addEventListener("click", () => finish(field ? field.value : true));
-      dialog.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") finish(null);
-        if (event.key === "Enter" && event.target === field) finish(field.value);
+      dialog({
+        title,
+        body,
+        width: "min(520px, 100%)",
+        initialFocus: field,
+        initialActionId: field ? null : "confirm",
+        closeOnBackdrop: false,
+        actions: [
+          { id: "cancel", label: cancelText },
+          { id: "confirm", label: confirmText, variant: danger ? "danger" : "primary" },
+        ],
+        onAction: (id) => (id === "cancel" ? null : (field ? field.value : true)),
+        onKeydown: (event, controller) => {
+          if (event.key === "Enter" && event.target === field) {
+            event.preventDefault();
+            controller.close(field.value);
+          }
+        },
+        onClose: (value) => resolve(value),
       });
-      host.style.background = "rgba(35,39,72,.28)";
-      (field || confirm).focus();
     });
   }
 
@@ -178,6 +420,40 @@
     return () => setBusy(button, false);
   }
 
+  function bindTabs(root, tabSelector, panelSelector, activeAttribute = 'data-si-tab') {
+    const scope = root || document;
+    const tabs = [...scope.querySelectorAll(tabSelector)];
+    const panels = [...scope.querySelectorAll(panelSelector)];
+    const activate = (value) => {
+      tabs.forEach((tab) => {
+        const active = tab.getAttribute(activeAttribute) === value;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach((panel) => {
+        panel.hidden = panel.getAttribute(activeAttribute.replace('tab', 'panel')) !== value;
+      });
+    };
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => activate(tab.getAttribute(activeAttribute)));
+      tab.addEventListener('keydown', (event) => {
+        let next = index;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        const value = tabs[next].getAttribute(activeAttribute);
+        activate(value);
+        tabs[next].focus();
+      });
+    });
+    if (tabs[0]) activate(tabs.find((tab) => tab.classList.contains('active'))?.getAttribute(activeAttribute) || tabs[0].getAttribute(activeAttribute));
+    return { activate };
+  }
+
   function decorate() {
     document.querySelectorAll('[role="button"]:not(button):not(a)').forEach((node) => {
       node.tabIndex = node.tabIndex >= 0 ? node.tabIndex : 0;
@@ -196,11 +472,13 @@
     ready,
     setTheme,
     toast,
+    dialog,
     modal,
     confirm: confirmDialog,
     prompt: promptDialog,
     copy: copyText,
-    setBusy
+    setBusy,
+    bindTabs
   });
 
   ready(initialize);

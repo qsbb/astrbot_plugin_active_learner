@@ -1,5 +1,19 @@
 const bridge = window.AstrBotPluginPage;
 
+const notify = (message, error = false) => {
+  if (window.SeriesUI?.toast) {
+    window.SeriesUI.toast(message, error ? "error" : "info");
+    return;
+  }
+  const fallback = document.querySelector("[data-toast-fallback], #bridge-error, #startup-error, #page-error");
+  if (fallback) {
+    fallback.textContent = String(message || "");
+    fallback.hidden = false;
+  } else {
+    console.error(message);
+  }
+};
+
 const state = {
   scopeType: "",
   scopeId: "",
@@ -40,20 +54,7 @@ const state = {
   },
 };
 
-function showToast(msg, isErr = false) {
-  // Shared Glass feedback when available; keep the legacy node as a hard fallback.
-  if (window.SeriesUI && typeof window.SeriesUI.toast === "function") {
-    window.SeriesUI.toast(msg, isErr ? "error" : "info", 3000);
-    return;
-  }
-  const t = document.getElementById("toast");
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.toggle("error", isErr);
-  t.classList.remove("hidden");
-  clearTimeout(showToast._timer);
-  showToast._timer = setTimeout(() => t.classList.add("hidden"), 3000);
-}
+
 
 function scopeParams() {
   const p = {};
@@ -106,7 +107,7 @@ async function loadScopes() {
     }
     if (current) select.value = current;
   } catch (e) {
-    showToast(`加载 scope 失败: ${e.message}`, true);
+    notify(`加载 scope 失败: ${e.message}`, true);
   }
 }
 
@@ -124,7 +125,7 @@ async function loadStats() {
     setVal("avg_confidence", s.avg_confidence != null ? formatConfidence(s.avg_confidence) : "—");
     setVal("access_total", s.access_total ?? 0);
   } catch (e) {
-    showToast(`加载统计失败: ${e.message}`, true);
+    notify(`加载统计失败: ${e.message}`, true);
   }
 }
 
@@ -312,7 +313,7 @@ async function _batchDelete(ids) {
     btn.disabled = false;
     btn.textContent = "批量删除";
   }
-  showToast(`批量删除完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
+  notify(`批量删除完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
   state.selectedIds.clear();
   await Promise.all([loadMemories(), loadStats()]);
 }
@@ -324,7 +325,7 @@ async function batchDeleteSelected() {
 async function batchVerifySelected() {
   const ids = Array.from(state.selectedIds);
   if (!ids.length) {
-    showToast("请先选择需要验证的记忆", true);
+    notify("请先选择需要验证的记忆", true);
     return;
   }
   const confirmed = await _confirmModal(
@@ -348,9 +349,9 @@ async function batchVerifySelected() {
     const ok = result.ok || 0;
     const fail = result.fail || 0;
     const total = result.total || ids.length;
-    showToast(`批量验证完成：${ok}/${total} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
+    notify(`批量验证完成：${ok}/${total} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
   } catch (e) {
-    showToast(`批量验证失败: ${e.message}`, true);
+    notify(`批量验证失败: ${e.message}`, true);
   }
 
   if (btn) {
@@ -364,7 +365,7 @@ async function batchVerifySelected() {
 async function batchEnrichSelected() {
   const ids = Array.from(state.selectedIds);
   if (!ids.length) {
-    showToast("请先选择需要补充信息的记忆", true);
+    notify("请先选择需要补充信息的记忆", true);
     return;
   }
   const CONCURRENCY = 3;
@@ -394,9 +395,9 @@ async function batchEnrichSelected() {
     if (enriched > 0) parts.push(`${enriched} 条已补充`);
     if (noNew > 0) parts.push(`${noNew} 条无新信息`);
     if (fail > 0) parts.push(`${fail} 条失败`);
-    showToast(`补充完成：${parts.join("，")}`, fail > 0);
+    notify(`补充完成：${parts.join("，")}`, fail > 0);
   } catch (e) {
-    showToast(`补充信息失败: ${e.message}`, true);
+    notify(`补充信息失败: ${e.message}`, true);
   }
 
   if (btn) {
@@ -507,14 +508,14 @@ async function verifyMemory(entryId, btn) {
     const result = await bridge.apiPost(`memory/${entryId}/verify`, {
       provider_id: providerId,
     });
-    showToast(`验证完成：${result.verdict}（置信度 ${formatConfidence(result.confidence)}）`);
+    notify(`验证完成：${result.verdict}（置信度 ${formatConfidence(result.confidence)}）`);
     showVerifyDetail(result);
     if (state.currentDetailId === entryId) {
       showDetail(entryId);
     }
     await Promise.all([loadMemories(), loadStats()]);
   } catch (e) {
-    showToast(`验证失败：${e.message}`, true);
+    notify(`验证失败：${e.message}`, true);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -528,20 +529,20 @@ async function forgetMemory(entryId) {
   if (!confirmed) return;
   try {
     await bridge.apiPost(`memory/${entryId}/forget`, {});
-    showToast("已删除");
+    notify("已删除");
     if (state.currentDetailId === entryId) closeModal();
     await Promise.all([loadScopes(), loadMemories(), loadStats()]);
   } catch (e) {
-    showToast(`删除失败：${e.message}`, true);
+    notify(`删除失败：${e.message}`, true);
   }
 }
 
 async function exportData() {
   try {
     await bridge.download("export", scopeParams(), "memories.json");
-    showToast("已开始下载");
+    notify("已开始下载");
   } catch (e) {
-    showToast(`导出失败：${e.message}`, true);
+    notify(`导出失败：${e.message}`, true);
   }
 }
 
@@ -819,8 +820,8 @@ function bindEvents() {
 
   document.getElementById("btn-refresh").addEventListener("click", refreshAll);
   document.getElementById("btn-export").addEventListener("click", exportData);
-  document.getElementById("btn-settings").addEventListener("click", openSettingsModal);
-  document.getElementById("btn-config").addEventListener("click", openConfigModal);
+  document.getElementById("btn-settings").addEventListener("click", () => openSettingsModal("llm"));
+  document.getElementById("btn-config").addEventListener("click", () => openSettingsModal("advanced"));
 
   document.getElementById("page-prev").addEventListener("click", () => {
     if (state.page > 1) {
@@ -933,11 +934,13 @@ function bindEvents() {
 
 // ---------- Settings Modal ----------
 
-function openSettingsModal() {
+function openSettingsModal(tabName = "llm") {
   const modal = document.getElementById("settings-modal");
   modal.classList.remove("hidden");
-  Promise.all([loadProviderSettings(), loadUrlSources()]).catch((e) => {
-    showToast(`加载设置失败: ${e.message}`, true);
+  switchSettingsTab(tabName);
+  const tasks = [loadProviderSettings(), loadUrlSources()];
+  Promise.all(tasks).catch((e) => {
+    notify(`加载设置失败: ${e.message}`, true);
   });
 }
 
@@ -1025,7 +1028,7 @@ async function loadSettings() {
     );
     return s;
   } catch (e) {
-    showToast(`加载设置失败: ${e.message}`, true);
+    notify(`加载设置失败: ${e.message}`, true);
     throw e;
   }
 }
@@ -1075,9 +1078,9 @@ async function addUrlSource(form) {
     await bridge.apiPost("url_sources", payload);
     form.reset();
     await loadUrlSources();
-    showToast("URL 来源已添加");
+    notify("URL 来源已添加");
   } catch (e) {
-    showToast(`添加失败: ${e.message}`, true);
+    notify(`添加失败: ${e.message}`, true);
   }
 }
 
@@ -1086,7 +1089,7 @@ async function setUrlSourceEnabled(sourceId, enabled) {
     await bridge.apiPost(`url_sources/${sourceId}/enabled`, { enabled });
     await loadUrlSources();
   } catch (e) {
-    showToast(`更新来源失败: ${e.message}`, true);
+    notify(`更新来源失败: ${e.message}`, true);
     await loadUrlSources();
   }
 }
@@ -1097,9 +1100,9 @@ async function deleteUrlSource(sourceId) {
   try {
     await bridge.apiPost(`url_sources/${sourceId}/delete`, {});
     await loadUrlSources();
-    showToast("URL 来源已删除");
+    notify("URL 来源已删除");
   } catch (e) {
-    showToast(`删除失败: ${e.message}`, true);
+    notify(`删除失败: ${e.message}`, true);
   }
 }
 
@@ -1234,10 +1237,11 @@ async function saveSettings() {
       enable_cross_domain: result.enable_cross_domain !== false,
       cross_domain_exclude_admin: result.cross_domain_exclude_admin !== false,
     };
-    showToast("设置已保存");
+    configState.stale = true;
+    notify("设置已保存");
     closeSettingsModal();
   } catch (e) {
-    showToast(`保存失败: ${e.message}`, true);
+    notify(`保存失败: ${e.message}`, true);
   } finally {
     if (saveBtn) {
       saveBtn.disabled = false;
@@ -1259,6 +1263,12 @@ function switchSettingsTab(tabName) {
     panel.setAttribute("aria-hidden", String(!active));
     panel.hidden = !active;
   });
+  const advanced = tabName === "advanced";
+  const footer = document.getElementById("settings-footer");
+  if (footer) footer.hidden = advanced;
+  if (advanced && (!configState.fields.length || (!configState.dirty && configState.stale))) {
+    loadConfigSchema().catch((e) => notify(`加载配置失败: ${e.message}`, true));
+  }
 }
 
 function bindTabKeyboardNavigation(selector, activate) {
@@ -1286,6 +1296,19 @@ function bindSettingsEvents() {
       el.addEventListener("click", closeSettingsModal);
     });
   document.getElementById("settings-save").addEventListener("click", saveSettings);
+  document.getElementById("config-save").addEventListener("click", saveConfig);
+  document.getElementById("config-reset").addEventListener("click", resetConfigToDefault);
+  document.getElementById("config-cancel").addEventListener("click", closeSettingsModal);
+  document.getElementById("config-search").addEventListener("input", (e) => {
+    syncConfigFormState();
+    renderConfigForm(configState.fields, e.target.value);
+  });
+  document.getElementById("config-form").addEventListener("input", () => {
+    configState.dirty = true;
+  });
+  document.getElementById("config-form").addEventListener("change", () => {
+    configState.dirty = true;
+  });
   document.getElementById("btn-refresh-providers").addEventListener("click", loadProviderSettings);
   document.querySelectorAll(".settings-tab").forEach((btn) => {
     btn.addEventListener("click", () => switchSettingsTab(btn.dataset.tab));
@@ -1601,22 +1624,61 @@ function bindImportEvents() {
 
 // ---------- Config Modal（直接读取 _conf_schema.json 渲染） ----------
 
+const CONFIG_GROUPS = ["记忆与检索", "向量与图谱", "LLM 与性能", "搜索与来源", "主动学习", "黑话与学习", "其它"];
+const CONFIG_GROUP_MAP = {
+  max_entries: "记忆与检索",
+  min_confidence: "记忆与检索",
+  chunk_size: "记忆与检索",
+  chunk_overlap: "记忆与检索",
+  decay_half_life_days: "记忆与检索",
+  enable_scope_fallback: "记忆与检索",
+  context_inject_count: "记忆与检索",
+  embedding_enabled: "向量与图谱",
+  memory_recall_gate_enabled: "向量与图谱",
+  hybrid_search_weight: "向量与图谱",
+  graph_memory_enabled: "向量与图谱",
+  graph_reconstruction_mode: "向量与图谱",
+  graph_max_hops: "向量与图谱",
+  llm_provider_id: "LLM 与性能",
+  llm_max_concurrency: "LLM 与性能",
+  enable_bilibili: "搜索与来源",
+  verifier_search_source: "搜索与来源",
+  enable_web_search: "搜索与来源",
+  external_search_first_result_grace_seconds: "搜索与来源",
+  web_search_only_highest_priority: "搜索与来源",
+  knowledge_source_priority: "搜索与来源",
+  knowledge_domain_scope: "搜索与来源",
+  enable_cross_domain: "搜索与来源",
+  cross_domain_exclude_admin: "搜索与来源",
+  enable_active_learn_hint: "主动学习",
+  learn_weight: "主动学习",
+  search_top_k: "主动学习",
+  default_confidence: "主动学习",
+  priority_topics: "主动学习",
+  auto_learn_topic_limit: "主动学习",
+  priority_boost_max: "主动学习",
+  priority_boost_min: "主动学习",
+  priority_boost_decay: "主动学习",
+  enable_slang_capture: "黑话与学习",
+  admin_ids: "黑话与学习",
+  slang_capture_interval_hours: "黑话与学习",
+  slang_capture_batch_size: "黑话与学习",
+  slang_capture_min_occurrences: "黑话与学习",
+  slang_capture_scope_only_group: "黑话与学习",
+  slang_capture_min_speakers: "黑话与学习",
+  slang_capture_count_interval_seconds: "黑话与学习",
+  enable_slang_recall: "黑话与学习",
+  slang_recall_max_per_msg: "黑话与学习",
+  slang_promotion_enabled: "黑话与学习",
+  slang_promotion_min_groups: "黑话与学习",
+  slang_promotion_external_verify: "黑话与学习",
+};
 const configState = {
   fields: [],
   original: {},
+  dirty: false,
+  stale: false,
 };
-
-function openConfigModal() {
-  const modal = document.getElementById("config-modal");
-  modal.classList.remove("hidden");
-  loadConfigSchema().catch((e) => {
-    showToast(`加载配置失败: ${e.message}`, true);
-  });
-}
-
-function closeConfigModal() {
-  document.getElementById("config-modal").classList.add("hidden");
-}
 
 async function loadConfigSchema() {
   const container = document.getElementById("config-form");
@@ -1625,6 +1687,8 @@ async function loadConfigSchema() {
     const data = await bridge.apiGet("config_schema");
     configState.fields = data.fields || [];
     configState.original = {};
+    configState.dirty = false;
+    configState.stale = false;
     for (const f of configState.fields) {
       configState.original[f.name] = f.value;
     }
@@ -1635,47 +1699,82 @@ async function loadConfigSchema() {
   }
 }
 
-function renderConfigForm(fields) {
+function syncConfigFormState() {
+  for (const field of configState.fields) {
+    const element = document.querySelector(`#config-form [data-field="${cssEscape(field.name)}"]`);
+    if (!element) continue;
+    field.value = field.type === "bool" ? !!element.checked : element.value;
+  }
+}
+
+function configGroupFor(name) {
+  return CONFIG_GROUP_MAP[name] || "其它";
+}
+
+function renderConfigForm(fields, keyword = "") {
   const container = document.getElementById("config-form");
   if (!fields.length) {
     container.innerHTML = '<p class="muted">未读取到任何配置字段</p>';
     return;
   }
+  const query = String(keyword || "").trim().toLowerCase();
+  const filtered = fields.filter((field) => {
+    if (!query) return true;
+    return `${field.name} ${field.description || ""}`.toLowerCase().includes(query);
+  });
+  if (!filtered.length) {
+    container.innerHTML = '<p class="muted">没有匹配的配置字段</p>';
+    return;
+  }
   container.innerHTML = "";
-  for (const f of fields) {
-    const card = document.createElement("div");
-    card.className = "config-field";
-    const isBool = f.type === "bool";
-    const label = document.createElement("label");
-    label.className = isBool ? "config-bool" : "config-input";
-    if (isBool) {
-      label.innerHTML = `
-        <input type="checkbox" data-field="${escapeHtml(f.name)}" ${f.value ? "checked" : ""} />
-        <span class="config-field-name">${escapeHtml(f.description || f.name)}</span>
-        <span class="config-field-key">${escapeHtml(f.name)}</span>
-      `;
-    } else {
-      const inputAttrs = configInputAttrs(f);
-      label.innerHTML = `
-        <span class="config-field-name">${escapeHtml(f.description || f.name)}</span>
-        <span class="config-field-key">${escapeHtml(f.name)}</span>
-        <input ${inputAttrs} data-field="${escapeHtml(f.name)}" value="${escapeHtmlAttr(f.value)}" />
-      `;
+  for (const groupName of CONFIG_GROUPS) {
+    const groupFields = filtered.filter((field) => configGroupFor(field.name) === groupName);
+    if (!groupFields.length) continue;
+    const section = document.createElement("section");
+    section.className = "config-group";
+    const heading = document.createElement("h3");
+    heading.className = "config-group-title";
+    heading.textContent = groupName;
+    section.appendChild(heading);
+    const grid = document.createElement("div");
+    grid.className = "config-grid";
+    for (const f of groupFields) {
+      const card = document.createElement("div");
+      card.className = "config-field";
+      const isBool = f.type === "bool";
+      const label = document.createElement("label");
+      label.className = isBool ? "config-bool" : "config-input";
+      if (isBool) {
+        label.innerHTML = `
+          <input type="checkbox" data-field="${escapeHtml(f.name)}" ${f.value ? "checked" : ""} />
+          <span class="config-field-name">${escapeHtml(f.description || f.name)}</span>
+          <span class="config-field-key">${escapeHtml(f.name)}</span>
+        `;
+      } else {
+        const inputAttrs = configInputAttrs(f);
+        label.innerHTML = `
+          <span class="config-field-name">${escapeHtml(f.description || f.name)}</span>
+          <span class="config-field-key">${escapeHtml(f.name)}</span>
+          <input ${inputAttrs} data-field="${escapeHtml(f.name)}" value="${escapeHtml(f.value)}" />
+        `;
+      }
+      card.appendChild(label);
+      if (f.hint) {
+        const hint = document.createElement("p");
+        hint.className = "config-hint";
+        hint.textContent = f.hint;
+        card.appendChild(hint);
+      }
+      if (f.default !== undefined && f.default !== null && f.default !== "") {
+        const def = document.createElement("p");
+        def.className = "config-default";
+        def.textContent = `默认值：${typeof f.default === "boolean" ? (f.default ? "true" : "false") : f.default}`;
+        card.appendChild(def);
+      }
+      grid.appendChild(card);
     }
-    card.appendChild(label);
-    if (f.hint) {
-      const hint = document.createElement("p");
-      hint.className = "config-hint";
-      hint.textContent = f.hint;
-      card.appendChild(hint);
-    }
-    if (f.default !== undefined && f.default !== null && f.default !== "") {
-      const def = document.createElement("p");
-      def.className = "config-default";
-      def.textContent = `默认值：${typeof f.default === "boolean" ? (f.default ? "true" : "false") : f.default}`;
-      card.appendChild(def);
-    }
-    container.appendChild(card);
+    section.appendChild(grid);
+    container.appendChild(section);
   }
 }
 
@@ -1692,7 +1791,13 @@ function configInputAttrs(f) {
 function escapeHtmlAttr(v) {
   if (v == null) return "";
   if (typeof v === "boolean") return v ? "true" : "false";
-  return String(v);
+  return String(v).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;"
+  })[ch]);
 }
 
 function collectConfigPayload() {
@@ -1741,7 +1846,7 @@ async function saveConfig() {
   try {
     payload = collectConfigPayload();
   } catch (e) {
-    showToast(`校验失败：${e.message}`, true);
+    notify(`校验失败：${e.message}`, true);
     if (btn) {
       btn.disabled = false;
       btn.textContent = original;
@@ -1751,19 +1856,21 @@ async function saveConfig() {
   try {
     const result = await bridge.apiPost("settings", payload);
     const changed = Object.keys(payload).length;
-    showToast(`✅ 已保存 ${changed} 项配置并即时生效`);
+    notify(`✅ 已保存 ${changed} 项配置并即时生效`);
     // 更新本地 original，便于"恢复默认"判断
     for (const k of Object.keys(payload)) {
       configState.original[k] = payload[k];
     }
-    closeConfigModal();
+    configState.dirty = false;
+    configState.stale = false;
+    closeSettingsModal();
     // 仅当诊断弹窗打开时才重新拉取诊断数据，避免多余请求
     const diagModal = document.getElementById("diagnostic-modal");
     if (diagModal && !diagModal.classList.contains("hidden")) {
       await loadDebug();
     }
   } catch (e) {
-    showToast(`保存失败：${escapeHtml(e.message || String(e))}`, true);
+    notify(`保存失败：${escapeHtml(e.message || String(e))}`, true);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -1786,27 +1893,16 @@ async function resetConfigToDefault() {
     if (f.type === "bool") {
       el.checked = !!f.default;
     } else {
-      el.value = f.default !== undefined && f.default !== null ? escapeHtmlAttr(f.default) : "";
+      el.value = f.default !== undefined && f.default !== null ? String(f.default) : "";
     }
   }
-  showToast("已填入默认值，请点击「保存」生效");
-}
-
-function bindConfigEvents() {
-  document
-    .querySelectorAll("#config-modal .modal-close, #config-modal .modal-backdrop, #config-cancel")
-    .forEach((el) => {
-      el.addEventListener("click", closeConfigModal);
-    });
-  document.getElementById("config-save").addEventListener("click", saveConfig);
-  document.getElementById("config-reset").addEventListener("click", resetConfigToDefault);
+  notify("已填入默认值，请点击「保存」生效");
 }
 
 function bindPageEvents() {
   bindEvents();
   bindImportEvents();
   bindSettingsEvents();
-  bindConfigEvents();
   bindBuiltinKbEvents();
   bindConfidenceModalEvents();
   bindPriorityLearnEvents();
@@ -1831,12 +1927,17 @@ async function waitForBridgeReady(timeoutMs = 5000) {
 }
 
 async function init() {
+  if (window.matchMedia("(max-width: 680px)").matches) {
+    state.perPage = 10;
+    const pageSize = document.getElementById("page-size");
+    if (pageSize) pageSize.value = "10";
+  }
   bindPageEvents();
   await waitForBridgeReady();
   await refreshAll();
 }
 
-init().catch((e) => showToast(`初始化失败：${e.message}`, true));
+init().catch((e) => notify(`初始化失败：${e.message}`, true));
 
 // ---------- 置信度阈值选择弹窗 ----------
 
@@ -1902,7 +2003,7 @@ function bindConfidenceModalEvents() {
       }
     });
     _applySelectionToUI();
-    showToast(`已选择 ${state.selectedIds.size} 条置信度低于 ${threshold}% 的记忆`);
+    notify(`已选择 ${state.selectedIds.size} 条置信度低于 ${threshold}% 的记忆`);
     closeConfidenceModal();
   });
 }
@@ -1918,7 +2019,7 @@ async function startPriorityLearn() {
     if (st && st.running) {
       openPriorityLearnModal();
       pollPriorityLearnStatus();
-      showToast("已有主动学习任务在运行，已为你打开进度面板");
+      notify("已有主动学习任务在运行，已为你打开进度面板");
       return;
     }
   } catch (e) {
@@ -1937,7 +2038,7 @@ async function startPriorityLearn() {
   }
 
   if (!topics.length) {
-    showToast("未设置关心领域，请先在「📋 配置」中设置 priority_topics", true);
+    notify("未设置关心领域，请先在「📋 配置」中设置 priority_topics", true);
     return;
   }
 
@@ -1961,9 +2062,9 @@ async function startPriorityLearn() {
     });
     openPriorityLearnModal();
     pollPriorityLearnStatus();
-    showToast("主动学习已启动");
+    notify("主动学习已启动");
   } catch (e) {
-    showToast(`启动失败: ${e.message}`, true);
+    notify(`启动失败: ${e.message}`, true);
   }
 }
 
@@ -2022,7 +2123,7 @@ async function pollPriorityLearnStatus() {
       stopPolling = true;
       if (st.finished_at != null) {
         const errs = st.errors || [];
-        showToast(
+        notify(
           `主动学习完成：${done}/${total} 条${errs.length ? `，${errs.length} 条错误` : ""}`,
           errs.length > 0
         );
@@ -2231,7 +2332,7 @@ function builtinKbSelectNone() {
 
 async function importBuiltinKb() {
   if (!builtinKbState.selectedKbId || builtinKbState.selectedDocIds.size === 0) {
-    showToast("请先选择知识库和文档", true);
+    notify("请先选择知识库和文档", true);
     return;
   }
   const scopeType = document.getElementById("builtin-kb-scope-type").value;
@@ -2240,7 +2341,7 @@ async function importBuiltinKb() {
   const chunkOverlap = parseInt(document.getElementById("builtin-kb-chunk-overlap").value, 10) || 50;
   const refine = document.getElementById("builtin-kb-refine").checked;
   if (!scopeType) {
-    showToast("请选择 Scope 类型", true);
+    notify("请选择 Scope 类型", true);
     return;
   }
 
@@ -2280,7 +2381,7 @@ async function importBuiltinKb() {
       }
     }
     progressEl.innerHTML = html;
-    showToast(`内置 KB 导入完成：${success}/${total} 成功`);
+    notify(`内置 KB 导入完成：${success}/${total} 成功`);
     if (success > 0) {
       await refreshAll();
     }
@@ -2291,7 +2392,7 @@ async function importBuiltinKb() {
       ? "（详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看）"
       : "";
     progressEl.innerHTML = `<p>❌ 导入失败：${escapeHtml(errMsg)}${hint}</p>`;
-    showToast(`导入失败：${errMsg}`, true);
+    notify(`导入失败：${errMsg}`, true);
   } finally {
     btn.disabled = false;
     btn.textContent = original;
@@ -2317,7 +2418,7 @@ function bindBuiltinKbEvents() {
 
 function openSlangModal() {
   document.getElementById("slang-modal").classList.remove("hidden");
-  loadSlangData().catch((e) => showToast(`加载黑话数据失败: ${e.message}`, true));
+  loadSlangData().catch((e) => notify(`加载黑话数据失败: ${e.message}`, true));
 }
 
 function closeSlangModal() {
@@ -2447,10 +2548,10 @@ async function slangAction(act, btn) {
   btn.disabled = true;
   try {
     const result = await bridge.apiPost(endpoint, payload);
-    showToast(result.msg || "操作完成", result.ok === false);
+    notify(result.msg || "操作完成", result.ok === false);
     await loadSlangData();
   } catch (e) {
-    showToast(`操作失败: ${e.message}`, true);
+    notify(`操作失败: ${e.message}`, true);
   } finally {
     btn.disabled = false;
   }
@@ -2464,7 +2565,7 @@ function bindSlangEvents() {
       el.addEventListener("click", closeSlangModal);
     });
   document.getElementById("slang-refresh").addEventListener("click", () => {
-    loadSlangData().catch((e) => showToast(`加载黑话数据失败: ${e.message}`, true));
+    loadSlangData().catch((e) => notify(`加载黑话数据失败: ${e.message}`, true));
   });
   document.querySelectorAll("#slang-modal .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchSlangTab(btn.dataset.tab));
@@ -2487,7 +2588,6 @@ const _ESCAPE_CLOSERS = [
   ["confidence-modal", closeConfidenceModal],
   ["builtin-kb-modal", closeBuiltinKbModal],
   ["import-modal", closeImportModal],
-  ["config-modal", closeConfigModal],
   ["diagnostic-modal", closeDiagnosticModal],
   ["settings-modal", closeSettingsModal],
   ["detail-modal", closeModal],

@@ -92,3 +92,65 @@ def test_memory_table_uses_compact_time_and_source_labels():
     assert 'function fullTime(ts)' in js
     assert 'month: "2-digit"' in js
     assert 'title="${escapeHtml(fullTime(e.updated_at))}"' in js
+
+
+def test_manager_url_sources_and_mobile_memory_meta_are_structured():
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    css = (PAGE_DIR / "style.css").read_text(encoding="utf-8")
+
+    assert 'class="memory-table memory-table-primary"' in html
+    assert "grid-template-columns: 120px minmax(180px, 1fr) auto;" not in css
+    assert "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;" in css
+    assert "#slang-modal .memory-table {" in css
+    assert 'content: "作用域："' in css
+    assert 'content: "来源："' in css
+    assert 'content: "更新时间："' in css
+
+
+def test_detail_modal_uses_two_column_desktop_grid():
+    css = (PAGE_DIR / "style.css").read_text(encoding="utf-8")
+    assert ".detail-grid {" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
+    assert ".detail-grid .detail-row:nth-child(6)" in css
+
+
+def test_settings_center_merges_schema_config_and_groups_every_field():
+    import json
+    import re
+
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    js = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    schema = json.loads((PAGE_DIR.parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
+
+    assert 'data-tab="advanced"' in html
+    assert 'id="settings-panel-advanced"' in html
+    assert 'id="config-search"' in html
+    assert 'id="config-modal"' not in html
+    assert "function openSettingsModal(tabName = \"llm\")" in js
+    assert "function configGroupFor(" in js
+    mapping_block = js[js.index("const CONFIG_GROUP_MAP = {") : js.index("const configState = {")]
+    mapped = set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*):", mapping_block, re.M))
+    assert mapped == set(schema)
+
+
+def test_log_actions_are_not_nested_inside_summary():
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    summary = html.split('<summary>📜 插件日志</summary>', 1)[1].split("</details>", 1)[0]
+    assert "btn-refresh-logs" in summary
+    assert '<summary>' not in summary.split('<div class="log-toolbar">', 1)[0]
+    assert "log-toolbar" in html
+
+
+def test_config_search_preserves_dirty_edits_and_invalidates_stale_cache():
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    js = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function syncConfigFormState(" in js
+    assert "syncConfigFormState();" in js
+    assert "configState.dirty" in js
+    assert "configState.stale" in js
+    assert "configState.dirty = false;" in js
+    assert "configState.stale = true;" in js
+    assert 'data-toast-fallback' in html
+    assert "function escapeHtmlAttr(" in js
+    assert '"&": "&amp;"' in js
+    assert '"\\"": "&quot;"' in js

@@ -4,10 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=1.8.0-1" />
+  <link rel="stylesheet" href="./style.css?v=1.8.1-1" />
     <link rel="stylesheet" href="./series-ui.css" />
 </head>
 <body data-series-ui="1">
+  <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
   <div class="shell">
   <header class="topbar hero">
     <div class="topbar-inner">
@@ -21,7 +22,7 @@
         <button id="btn-import" type="button" title="导入">⬆ 导入</button>
         <button id="btn-builtin-kb" type="button" title="从 AstrBot 内置知识库导入">📚 内置知识库</button>
         <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
-        <button id="btn-config" type="button" title="编辑配置文件">📋 配置</button>
+        <button id="btn-config" type="button" title="打开全部配置">📋 全部配置</button>
         <button id="btn-priority-learn" type="button" title="主动搜索已设置的关心领域并持续学习">🎯 主动学习</button>
         <button id="btn-slang" type="button" title="群黑话候选审核、晋升全局与拉黑名单">🏷 黑话</button>
         <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
@@ -53,16 +54,6 @@
       <div class="stat-card desktop-stat"><div class="stat-label">总访问次数</div><div class="stat-value" data-stat="access_total">—</div></div>
     </section>
 
-    <details id="verify-detail-panel" class="debug-panel" style="display:none;">
-      <summary>🔬 上次验证详情</summary>
-      <div id="verify-detail-content" class="debug-content"></div>
-    </details>
-
-    <details id="log-panel" class="debug-panel">
-      <summary>📜 插件日志 <span class="log-summary-actions"><button type="button" id="btn-refresh-logs" class="log-action-btn">刷新</button><label class="log-action-label"><input type="checkbox" id="log-autoscroll" checked /> 自动滚动</label></span></summary>
-      <div id="log-content" class="debug-content log-content">点击刷新或展开查看</div>
-    </details>
-
     <section class="table-wrap">
       <div id="selection-toolbar" class="selection-toolbar hidden">
         <button type="button" id="btn-select-all">全选本页</button>
@@ -76,7 +67,7 @@
         <button type="button" id="btn-batch-verify" class="primary">批量验证</button>
         <button type="button" id="btn-batch-enrich">补充信息</button>
       </div>
-      <table class="memory-table">
+      <table class="memory-table memory-table-primary">
         <thead>
           <tr>
             <th class="col-check"><span class="sr-only">选择</span></th>
@@ -111,6 +102,22 @@
       <span id="page-info">—</span>
       <button id="page-next" type="button">下一页 ›</button>
     </section>
+
+    <details id="verify-detail-panel" class="debug-panel" style="display:none;">
+      <summary>🔬 上次验证详情</summary>
+      <div id="verify-detail-content" class="debug-content"></div>
+    </details>
+
+    <details id="log-panel" class="debug-panel">
+      <summary>📜 插件日志</summary>
+      <div class="log-toolbar">
+        <span class="log-summary-actions">
+          <button type="button" id="btn-refresh-logs" class="log-action-btn">刷新</button>
+          <label class="log-action-label"><input type="checkbox" id="log-autoscroll" checked /> 自动滚动</label>
+        </span>
+      </div>
+      <div id="log-content" class="debug-content log-content">点击刷新或展开查看</div>
+    </details>
   </main>
   </div>
 
@@ -143,6 +150,7 @@
           <button id="settings-tab-search" type="button" class="settings-tab" data-tab="search" role="tab" aria-controls="settings-panel-search" aria-selected="false" tabindex="-1">搜索 / 领域</button>
           <button id="settings-tab-sources" type="button" class="settings-tab" data-tab="sources" role="tab" aria-controls="settings-panel-sources" aria-selected="false" tabindex="-1">URL 来源</button>
           <button id="settings-tab-other" type="button" class="settings-tab" data-tab="other" role="tab" aria-controls="settings-panel-other" aria-selected="false" tabindex="-1">其它</button>
+          <button id="settings-tab-advanced" type="button" class="settings-tab" data-tab="advanced" role="tab" aria-controls="settings-panel-advanced" aria-selected="false" tabindex="-1">全部配置</button>
         </div>
 
         <div class="settings-panels">
@@ -309,9 +317,28 @@
               </div>
             </div>
           </div>
+
+          <div id="settings-panel-advanced" class="settings-panel" data-panel="advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" aria-hidden="true" hidden>
+            <div class="settings-section">
+              <div class="settings-label">全部配置</div>
+              <p class="hint">直接读取 <code>_conf_schema.json</code> 渲染；按字段名或说明搜索。修改后点击保存即时生效。</p>
+              <label class="settings-row" for="config-search">
+                <span class="settings-label-sm">搜索</span>
+                <input id="config-search" class="settings-text" type="search" placeholder="输入字段名或说明" />
+              </label>
+              <div id="config-form" class="config-form">
+                <p class="muted">加载中…</p>
+              </div>
+              <div id="advanced-actions" class="settings-actions">
+                <button type="button" id="config-cancel">取消</button>
+                <button type="button" id="config-reset" title="重置为 schema 默认">↺ 恢复默认</button>
+                <button type="button" id="config-save" class="primary">保存</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-      <footer class="modal-footer">
+      <footer id="settings-footer" class="modal-footer">
         <button type="button" id="btn-diagnostic">🔧 诊断信息</button>
         <button type="button" id="settings-cancel">取消</button>
         <button type="button" id="settings-save" class="primary">保存</button>
@@ -330,27 +357,6 @@
       <footer class="modal-footer">
         <button type="button" id="diagnostic-refresh">刷新</button>
         <button type="button" id="diagnostic-close" class="primary">关闭</button>
-      </footer>
-    </div>
-  </div>
-
-  <div id="config-modal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-backdrop"></div>
-    <div class="modal-card">
-      <header class="modal-header">
-        <h2>📋 编辑配置</h2>
-        <button type="button" class="modal-close" aria-label="关闭">✕</button>
-      </header>
-      <div class="modal-body">
-        <p class="config-intro">直接读取 <code>_conf_schema.json</code> 渲染。修改后保存即时生效（无需重启 AstrBot）。</p>
-        <div id="config-form" class="config-form">
-          <p class="muted">加载中…</p>
-        </div>
-      </div>
-      <footer class="modal-footer">
-        <button type="button" id="config-cancel">取消</button>
-        <button type="button" id="config-reset" title="重置为 schema 默认">↺ 恢复默认</button>
-        <button type="button" id="config-save" class="primary">保存</button>
       </footer>
     </div>
   </div>
@@ -732,8 +738,6 @@
     </div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
-
   <!-- 确认弹窗 -->
   <div id="confirm-modal" class="modal hidden" role="alertdialog" aria-modal="true">
     <div class="modal-backdrop"></div>
@@ -811,6 +815,6 @@
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
   <script src="./series-ui.js"></script>
-  <script type="module" src="./app.js?v=1.8.0-1"></script>
+  <script type="module" src="./app.js?v=1.8.1-1"></script>
 </body>
 </html>
