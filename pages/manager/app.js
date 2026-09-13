@@ -142,8 +142,11 @@ async function loadStats() {
       const el = document.querySelector(`[data-stat="${k}"]`);
       if (el) el.textContent = v ?? "—";
     };
-    setVal("total", s.total ?? 0);
-    setVal("verified", s.verified ?? 0);
+    const total = s.total ?? 0;
+    const verified = s.verified ?? 0;
+    setVal("total", total);
+    setVal("verified", verified);
+    setVal("unverified", Math.max(0, (Number(total) || 0) - (Number(verified) || 0)));
     setVal("challenged", s.challenged ?? 0);
     setVal("challenged_total", s.challenged_total ?? 0);
     setVal("avg_confidence", s.avg_confidence != null ? formatConfidence(s.avg_confidence) : "—");
@@ -155,7 +158,8 @@ async function loadStats() {
 
 async function loadMemories() {
   const tbody = document.getElementById("memory-tbody");
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="9">加载中…</td></tr>';
+  tbody.setAttribute("aria-busy", "true");
+  tbody.innerHTML = '<div class="empty-row">加载中…</div>';
   try {
     const params = {
       ...scopeParams(),
@@ -172,8 +176,11 @@ async function loadMemories() {
     }
     renderTable(data.items || []);
     renderPagination();
+    const countEl = document.getElementById("memory-count");
+    if (countEl) countEl.textContent = String(state.total);
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">加载失败：${e.message}</td></tr>`;
+    tbody.setAttribute("aria-busy", "false");
+    tbody.innerHTML = `<div class="empty-row">加载失败：${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -203,32 +210,41 @@ function renderTable(items) {
     const emptyMsg = state.keyword
       ? `没有找到与「${escapeHtml(state.keyword)}」相关的记忆，换个关键词试试`
       : "记忆库为空，可通过顶部「⬆ 导入」或「🎯 主动学习」添加记忆";
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${emptyMsg}</td></tr>`;
+    tbody.innerHTML = `<div class="empty-row">${emptyMsg}</div>`;
+    tbody.setAttribute("aria-busy", "false");
     _updateSelectionToolbar();
     return;
   }
   // 一次性拼接再写入，避免逐行 appendChild 触发多次重排
   tbody.innerHTML = items.map((e) => {
     const checked = state.selectedIds.has(e.id) ? "checked" : "";
+    const id = escapeHtml(e.id);
     return `
-    <tr${checked ? ' class="selected"' : ""}>
-      <td class="col-check">
-        <input type="checkbox" data-id="${escapeHtml(e.id)}" aria-label="选择「${escapeHtml(e.topic)}」" ${checked} />
-      </td>
-      <td class="cell-topic" title="${escapeHtml(e.topic)}">${escapeHtml(e.topic)}</td>
-      <td class="cell-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 80))}</td>
-      <td class="cell-scope">${scopeCell(e)}</td>
-      <td class="cell-origin" title="${escapeHtml(e.origin || "")}">${formatOrigin(e.origin)}</td>
-      <td>${formatConfidence(e.confidence)}</td>
-      <td>${verifiedBadge(e)}</td>
-      <td title="${escapeHtml(fullTime(e.updated_at))}">${formatTime(e.updated_at)}</td>
-      <td class="col-actions">
-        <button type="button" data-act="detail" data-id="${escapeHtml(e.id)}">详情</button>
-        <button type="button" data-act="verify" data-id="${escapeHtml(e.id)}">验证</button>
-        <button type="button" data-act="forget" data-id="${escapeHtml(e.id)}" class="danger">删除</button>
-      </td>
-    </tr>`;
+    <article class="memory-card${checked ? " selected" : ""}" role="listitem">
+      <label class="memory-check">
+        <input type="checkbox" data-id="${id}" aria-label="选择「${escapeHtml(e.topic)}」" ${checked} />
+      </label>
+      <div class="memory-body">
+        <h3 class="memory-topic" title="${escapeHtml(e.topic)}">${escapeHtml(e.topic)}</h3>
+        <p class="memory-preview" title="${escapeHtml(e.content)}">${escapeHtml(truncate(e.content, 96))}</p>
+        <p class="memory-meta">
+          <span class="memory-scope">${scopeCell(e)}</span>
+          <span class="memory-origin" title="${escapeHtml(e.origin || "")}">${formatOrigin(e.origin)}</span>
+          <span class="memory-time" title="${escapeHtml(fullTime(e.updated_at))}">${formatTime(e.updated_at)}</span>
+        </p>
+      </div>
+      <div class="memory-side">
+        <span class="memory-state">${verifiedBadge(e)}<span class="badge conf">置信度 ${formatConfidence(e.confidence)}</span></span>
+        <button type="button" class="kebab" data-kebab="${id}" aria-haspopup="menu" aria-expanded="false" aria-label="「${escapeHtml(e.topic)}」更多操作">⋮</button>
+        <div class="kebab-menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="detail" data-id="${id}">查看详情</button>
+          <button type="button" role="menuitem" data-act="verify" data-id="${id}">触发验证</button>
+          <button type="button" role="menuitem" data-act="forget" data-id="${id}" class="danger">删除</button>
+        </div>
+      </div>
+    </article>`;
   }).join("");
+  tbody.setAttribute("aria-busy", "false");
   _updateSelectionToolbar();
 }
 
@@ -242,12 +258,21 @@ function _updateSelectionToolbar() {
   countEl.textContent = count ? `已选 ${count} 条` : "";
 }
 
+function closeKebabMenus() {
+  document.querySelectorAll("#memory-tbody .kebab-menu").forEach((menu) => {
+    menu.hidden = true;
+  });
+  document.querySelectorAll("#memory-tbody button[data-kebab]").forEach((btn) => {
+    btn.setAttribute("aria-expanded", "false");
+  });
+}
+
 function _applySelectionToUI() {
   document.querySelectorAll("#memory-tbody input[data-id]").forEach((cb) => {
     const id = cb.dataset.id;
     const sel = state.selectedIds.has(id);
     cb.checked = sel;
-    cb.closest("tr")?.classList.toggle("selected", sel);
+    cb.closest(".memory-card")?.classList.toggle("selected", sel);
   });
   _updateSelectionToolbar();
 }
@@ -893,13 +918,56 @@ function bindEvents() {
   });
 
   document.getElementById("memory-tbody").addEventListener("click", (e) => {
+    const kebab = e.target.closest("button[data-kebab]");
+    if (kebab) {
+      const menu = kebab.parentElement?.querySelector(".kebab-menu");
+      const willOpen = menu ? menu.hidden : false;
+      closeKebabMenus();
+      if (menu && willOpen) {
+        menu.hidden = false;
+        kebab.setAttribute("aria-expanded", "true");
+      }
+      return;
+    }
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
+    closeKebabMenus();
     const id = btn.dataset.id;
     const act = btn.dataset.act;
     if (act === "detail") showDetail(id);
     else if (act === "verify") verifyMemory(id, btn);
     else if (act === "forget") forgetMemory(id);
+  });
+
+  // 点击空白处 / Esc 关闭行内菜单与「更多」菜单
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest?.(".kebab-menu") && !e.target.closest?.("button[data-kebab]")) {
+      closeKebabMenus();
+    }
+    const more = document.getElementById("more-menu");
+    if (more && more.open && !e.target.closest?.("#more-menu")) {
+      more.open = false;
+      more.querySelector(".more-trigger")?.setAttribute("aria-expanded", "false");
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    closeKebabMenus();
+    const more = document.getElementById("more-menu");
+    if (more?.open) {
+      more.open = false;
+      more.querySelector(".more-trigger")?.setAttribute("aria-expanded", "false");
+    }
+  });
+  const moreMenu = document.getElementById("more-menu");
+  moreMenu?.addEventListener("toggle", () => {
+    moreMenu.querySelector(".more-trigger")?.setAttribute("aria-expanded", String(moreMenu.open));
+  });
+  moreMenu?.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      moreMenu.open = false;
+      moreMenu.querySelector(".more-trigger")?.setAttribute("aria-expanded", "false");
+    });
   });
 
   // 多选：行 checkbox 切换
@@ -912,7 +980,7 @@ function bindEvents() {
     } else {
       state.selectedIds.delete(id);
     }
-    cb.closest("tr").classList.toggle("selected", cb.checked);
+    cb.closest(".memory-card").classList.toggle("selected", cb.checked);
     _updateSelectionToolbar();
   });
 

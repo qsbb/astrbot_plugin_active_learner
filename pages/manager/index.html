@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=1.8.2-1" />
-    <link rel="stylesheet" href="./series-ui.css?v=1.8.2-1" />
+  <link rel="stylesheet" href="./style.css?v=1.8.3-1" />
+    <link rel="stylesheet" href="./series-ui.css?v=1.8.3-1" />
 </head>
 <body data-series-ui="1">
   <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
@@ -18,41 +18,44 @@
         <p class="subtitle">知识学习、跨 scope 检索、验证与记忆条目管理</p>
       </div>
       <div class="actions" aria-label="知识管理操作">
-        <button id="btn-refresh" type="button" title="刷新">↻ 刷新</button>
-        <button id="btn-import" type="button" title="导入">⬆ 导入</button>
-        <button id="btn-builtin-kb" type="button" title="从 AstrBot 内置知识库导入">📚 内置知识库</button>
-        <button id="btn-export" type="button" title="导出 JSON">⬇ 导出</button>
-        <button id="btn-config" type="button" title="打开全部配置">📋 全部配置</button>
-        <button id="btn-priority-learn" type="button" title="主动搜索已设置的关心领域并持续学习">🎯 主动学习</button>
-        <button id="btn-slang" type="button" title="群黑话候选审核、晋升全局与拉黑名单">🏷 黑话</button>
-        <button id="btn-settings" type="button" title="插件设置">⚙ 设置</button>
+        <button id="btn-import" type="button" class="action-main primary" title="导入文本 / Markdown / ZIP / PDF / Word">⬆ 导入</button>
+        <button id="btn-priority-learn" type="button" class="action-main" title="主动搜索已设置的关心领域并持续学习">🎯 主动学习</button>
+        <details id="more-menu" class="more-menu">
+          <summary class="more-trigger" role="button" aria-haspopup="menu" aria-expanded="false">更多 ▾</summary>
+          <div class="more-panel" role="menu" aria-label="更多操作">
+            <button id="btn-refresh" type="button" role="menuitem" title="刷新">↻ 刷新</button>
+            <button id="btn-builtin-kb" type="button" role="menuitem" title="从 AstrBot 内置知识库导入">📚 内置知识库</button>
+            <button id="btn-export" type="button" role="menuitem" title="导出 JSON">⬇ 导出</button>
+            <button id="btn-slang" type="button" role="menuitem" title="群黑话候选审核、晋升全局与拉黑名单">🏷 黑话</button>
+            <button id="btn-settings" type="button" role="menuitem" title="插件设置">⚙ 设置</button>
+            <button id="btn-config" type="button" role="menuitem" title="打开全部配置">📋 全部配置</button>
+          </div>
+        </details>
       </div>
     </div>
   </header>
 
   <main>
-    <section class="controls">
-      <label class="control">
+    <section id="stats" class="controls summary-strip" aria-label="记忆概览与筛选">
+      <div class="kpi-row">
+        <span class="kpi-chip"><b data-stat="total">—</b><small>记忆总数</small></span>
+        <span class="kpi-chip ok"><b data-stat="verified">—</b><small>已验证</small></span>
+        <span class="kpi-chip warn"><b data-stat="unverified">—</b><small>待验证</small></span>
+        <span class="kpi-chip"><b data-stat="avg_confidence">—</b><small>平均置信度</small></span>
+        <span class="kpi-more">被质疑 <b data-stat="challenged">—</b> 条 · 质疑累计 <b data-stat="challenged_total">—</b> 次 · 总访问 <b data-stat="access_total">—</b></span>
+      </div>
+      <form id="search-form" class="control search-control">
+        <input type="search" id="search-input" placeholder="搜索记忆（主题 / 内容 / 作用域）…" aria-label="按主题或内容搜索" />
+        <button type="submit">搜索</button>
+        <button type="button" id="search-clear">清空</button>
+      </form>
+      <label class="control scope-control">
         <span>作用域</span>
         <select id="scope-select">
           <option value="">全部作用域</option>
         </select>
       </label>
       <p class="filter-hint">作用域决定这条记忆对谁生效：全局 / 私聊 / 群聊；切换后列表与统计一起刷新。</p>
-      <form id="search-form" class="control search-control">
-        <input type="search" id="search-input" placeholder="按主题或内容搜索…" aria-label="按主题或内容搜索" />
-        <button type="submit">搜索</button>
-        <button type="button" id="search-clear">清空</button>
-      </form>
-    </section>
-
-    <section id="stats" class="stats-grid" aria-label="记忆概览">
-      <div class="stat-card"><div class="stat-label">总条数</div><div class="stat-value" data-stat="total">—</div></div>
-      <div class="stat-card"><div class="stat-label">已验证</div><div class="stat-value" data-stat="verified">—</div></div>
-      <div class="stat-card desktop-stat"><div class="stat-label">被质疑条数</div><div class="stat-value" data-stat="challenged">—</div></div>
-      <div class="stat-card desktop-stat"><div class="stat-label">质疑总次数</div><div class="stat-value" data-stat="challenged_total">—</div></div>
-      <div class="stat-card"><div class="stat-label">平均置信度</div><div class="stat-value" data-stat="avg_confidence">—</div></div>
-      <div class="stat-card desktop-stat"><div class="stat-label">总访问次数</div><div class="stat-value" data-stat="access_total">—</div></div>
     </section>
 
     <section class="table-wrap">
@@ -68,24 +71,13 @@
         <button type="button" id="btn-batch-verify" class="primary">批量验证</button>
         <button type="button" id="btn-batch-enrich">补充信息</button>
       </div>
-      <table class="memory-table memory-table-primary">
-        <thead>
-          <tr>
-            <th class="col-check"><span class="sr-only">选择</span></th>
-            <th>主题</th>
-            <th>内容预览</th>
-            <th>作用域</th>
-            <th>来源</th>
-            <th>置信度</th>
-            <th>状态</th>
-            <th>更新时间</th>
-            <th class="col-actions">操作</th>
-          </tr>
-        </thead>
-        <tbody id="memory-tbody">
-          <tr class="empty-row"><td colspan="9">加载中…</td></tr>
-        </tbody>
-      </table>
+      <div class="memory-list-head">
+        <h2>记忆库</h2>
+        <span class="memory-list-sort">按更新时间 · <b id="memory-count">—</b> 条</span>
+      </div>
+      <div id="memory-tbody" class="memory-list" role="list" aria-live="polite" aria-busy="false">
+        <div class="empty-row">加载中…</div>
+      </div>
     </section>
 
     <section class="pagination">
@@ -815,7 +807,7 @@
   </div>
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script src="./series-ui.js?v=1.8.2-1"></script>
-  <script type="module" src="./app.js?v=1.8.2-1"></script>
+  <script src="./series-ui.js?v=1.8.3-1"></script>
+  <script type="module" src="./app.js?v=1.8.3-1"></script>
 </body>
 </html>

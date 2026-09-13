@@ -98,13 +98,36 @@ def test_manager_url_sources_and_mobile_memory_meta_are_structured():
     html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
     css = (PAGE_DIR / "style.css").read_text(encoding="utf-8")
 
-    assert 'class="memory-table memory-table-primary"' in html
+    # 方案 A：主记忆列表从 9 列表格改为两行式行卡；黑话弹窗仍保留表格语义。
+    assert 'id="memory-tbody" class="memory-list"' in html
+    assert 'class="memory-list-head"' in html
+    assert 'class="memory-card' not in html  # 行卡由 JS 渲染，避免静态骨架与渲染逻辑漂移
     assert "grid-template-columns: 120px minmax(180px, 1fr) auto;" not in css
-    assert "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;" in css
     assert "#slang-modal .memory-table {" in css
-    assert 'content: "作用域："' in css
-    assert 'content: "来源："' in css
-    assert 'content: "更新时间："' in css
+
+
+def test_manager_memory_cards_follow_two_line_design():
+    js = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    css = (PAGE_DIR / "style.css").read_text(encoding="utf-8")
+
+    # 行卡结构：标题 / 预览 / meta 三段，操作收进 kebab 菜单
+    assert 'class="memory-card' in js
+    assert 'class="memory-topic"' in js
+    assert 'class="memory-preview"' in js
+    assert 'class="memory-meta"' in js
+    assert 'class="kebab"' in js or "class=\"kebab\"" in js
+    assert 'class="kebab-menu"' in js
+    assert "function closeKebabMenus()" in js
+    assert 'data-kebab=' in js
+    # 移动端两列网格 + kebab 菜单位置
+    assert ".memory-card {" in css
+    assert "grid-template-columns: auto minmax(0, 1fr) auto;" in css
+    assert ".kebab-menu {" in css
+    # 顶部动作为 导入 / 主动学习 / 更多 三个入口，其余收进更多菜单
+    html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="more-menu"' in html
+    assert html.count("action-main") == 2
+    assert 'id="btn-refresh"' in html and 'id="btn-settings"' in html
 
 
 def test_detail_modal_uses_two_column_desktop_grid():

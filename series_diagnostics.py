@@ -136,7 +136,11 @@ class DiagnosticBuffer(logging.Handler):
     def snapshot(self, *, after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
         after, size = max(0, int(after_seq or 0)), min(1000, max(1, int(limit or 200)))
         with self._lock:
-            events = [item for item in self._events if item["seq"] > after][-size:]
+            pending = [item for item in self._events if item["seq"] > after]
+            # 只返回最早窗口，消费者按 next_seq 继续追平；绝不能跳到全局
+            # 最新 seq，否则中间积压事件会被静默跳过。
+            events = pending[:size]
+            has_more = len(pending) > size
             first = self._events[0]["seq"] if self._events else self._sequence + 1
             return {
                 "contract": DIAGNOSTIC_CONTRACT,
@@ -144,8 +148,10 @@ class DiagnosticBuffer(logging.Handler):
                 "plugin_name": PLUGIN_NAME,
                 "stream_id": self._stream_id,
                 "events": events,
-                "next_seq": self._sequence,
+                "next_seq": events[-1]["seq"] if events else self._sequence,
                 "dropped_before": max(0, first - 1),
+                "has_more": has_more,
+                "truncated": has_more,
             }
 
     def clear(self) -> None:
