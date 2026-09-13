@@ -57,6 +57,7 @@
         "description": "验证搜索源",
         "type": "string",
         "options": ["auto", "web", "bilibili", "web+bilibili", "llm"],
+        "labels": ["自动", "网页搜索", "哔哩哔哩", "网页 + 哔哩哔哩", "仅 LLM"],
         "hint": "验证记忆时使用的搜索源。auto=优先使用手动 URL 与网页搜索，仅在 enable_bilibili 开启时补充 B 站；web=仅网页搜索(Tavily/BoCha/Brave)；bilibili=仅B站且仍需开启 B 站开关；web+bilibili=网页+B站且仍需开启 B 站开关；llm=纯LLM验证不搜索。",
         "default": "auto"
     },
@@ -157,6 +158,7 @@
         "description": "关联图重建方式",
         "type": "string",
         "options": ["off", "fast", "smart"],
+        "labels": ["关闭", "快速", "智能"],
         "hint": "off=不参与检索；fast=只走本地 SQLite 图索引，不增加模型调用；smart=复杂问题最多额外调用一次插件 LLM 对候选排序，2.5 秒超时或失败时自动退回本地顺序。",
         "default": "fast"
     },

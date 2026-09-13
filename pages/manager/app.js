@@ -14,6 +14,23 @@ const notify = (message, error = false) => {
   }
 };
 
+const showUnsavedConfirm = window.SeriesUI.confirm;
+
+function hasUnsavedChanges() {
+  return Boolean(configState?.dirty);
+}
+
+async function confirmDiscardChanges() {
+  if (!hasUnsavedChanges()) return true;
+  return (await showUnsavedConfirm({
+    title: "未保存的修改",
+    message: "当前页面还有未保存的改动，离开将放弃这些改动。",
+    confirmText: "放弃修改",
+    cancelText: "继续编辑",
+    danger: true,
+  })) === true;
+}
+
 const state = {
   scopeType: "",
   scopeId: "",
@@ -1060,8 +1077,24 @@ function openSettingsModal(tabName = "llm") {
   });
 }
 
-function closeSettingsModal() {
+function discardConfigChanges() {
+  for (const field of configState.fields) {
+    field.value = configState.original[field.name];
+  }
+  configState.dirty = false;
+  configState.stale = false;
+  const search = document.getElementById("config-search")?.value || "";
+  renderConfigForm(configState.fields, search);
+}
+
+async function closeSettingsModal(options = {}) {
+  const force = options === true || options?.force === true;
+  if (!force && hasUnsavedChanges()) {
+    if (!await confirmDiscardChanges()) return false;
+    discardConfigChanges();
+  }
   document.getElementById("settings-modal").classList.add("hidden");
+  return true;
 }
 
 async function loadProviders() {
@@ -1366,7 +1399,12 @@ async function saveSettings() {
   }
 }
 
-function switchSettingsTab(tabName) {
+async function switchSettingsTab(tabName) {
+  const current = document.querySelector(".settings-tab.active")?.dataset.tab;
+  if (current && current !== tabName) {
+    if (!await confirmDiscardChanges()) return false;
+    if (hasUnsavedChanges()) discardConfigChanges();
+  }
   document.querySelectorAll(".settings-tab").forEach((btn) => {
     const active = btn.dataset.tab === tabName;
     btn.classList.toggle("active", active);
@@ -1385,12 +1423,13 @@ function switchSettingsTab(tabName) {
   if (advanced && (!configState.fields.length || (!configState.dirty && configState.stale))) {
     loadConfigSchema().catch((e) => notify(`加载配置失败: ${e.message}`, true));
   }
+  return true;
 }
 
 function bindTabKeyboardNavigation(selector, activate) {
   const tabs = Array.from(document.querySelectorAll(selector));
   tabs.forEach((tab, index) => {
-    tab.addEventListener("keydown", (event) => {
+    tab.addEventListener("keydown", async (event) => {
       let nextIndex = null;
       if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % tabs.length;
       if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + tabs.length) % tabs.length;
@@ -1399,8 +1438,7 @@ function bindTabKeyboardNavigation(selector, activate) {
       if (nextIndex === null) return;
       event.preventDefault();
       const nextTab = tabs[nextIndex];
-      activate(nextTab.dataset.tab);
-      nextTab.focus();
+      if (await activate(nextTab.dataset.tab)) nextTab.focus();
     });
   });
 }
@@ -1979,7 +2017,7 @@ async function saveConfig() {
     }
     configState.dirty = false;
     configState.stale = false;
-    closeSettingsModal();
+    await closeSettingsModal();
     // 仅当诊断弹窗打开时才重新拉取诊断数据，避免多余请求
     const diagModal = document.getElementById("diagnostic-modal");
     if (diagModal && !diagModal.classList.contains("hidden")) {
@@ -2697,6 +2735,12 @@ function bindSlangEvents() {
     });
   });
 }
+
+window.addEventListener("beforeunload", (event) => {
+  if (!hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 const _ESCAPE_CLOSERS = [
   ["slang-modal", closeSlangModal],

@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## 1.8.4 - 2026-09-14
+
+### 变更
+
+- 诊断契约升级到 series.diagnostics@1.1：新增只读 diagnostic_state() 与 record_link_state（状态迁移才发事件，heartbeat 不进事件流）。
+- 字段级 i18n：枚举字段补中文 labels 与 en-US 文案（.astrbot-plugin/i18n）。
+- 页面新增未保存守卫：页内导航用 SeriesUI 确认，beforeunload 兜底。
+
 ## 1.8.3 - 2026-09-14
 
 ### 变更

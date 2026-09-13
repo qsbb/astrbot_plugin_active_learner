@@ -192,3 +192,106 @@ def diagnostic_events(*, after_seq: int = 0, limit: int = 200) -> dict[str, Any]
 
 def diagnostic_clear() -> None:
     _buffer.clear()
+
+# ---------------------------------------------------------------- 联动健康（series.diagnostics@1.1）
+# 事件流只做历史；当前状态由 diagnostic_state_payload() 纯读返回。
+# 唯一 writer 原则：谁调用谁记录；只有状态迁移才发一条事件（heartbeat 不进事件流）。
+
+LINK_STATE_LIMIT = 64
+_link_states: dict[str, dict[str, Any]] = {}
+_link_lock = threading.Lock()
+
+
+def _link_now() -> str:
+    try:
+        return datetime.now(UTC).isoformat(timespec="seconds")
+    except Exception:  # pragma: no cover - 兜底
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def record_link_state(
+    link_id: Any,
+    *,
+    state: str,
+    peer_plugin_id: str = "",
+    contract: str = "",
+    contract_version: str = "",
+    method: str = "",
+    reason_code: str = "",
+    fallback: str = "",
+) -> dict[str, Any]:
+    """记录一条联动链路的当前状态；状态迁移时发一条诊断事件。"""
+    key = _safe_text(link_id, limit=120)
+    if not key:
+        return {}
+    normalized = str(state or "unknown").strip().lower() or "unknown"
+    now_text = _link_now()
+    with _link_lock:
+        previous = _link_states.get(key)
+        changed = (
+            previous is None
+            or previous.get("state") != normalized
+            or previous.get("reason_code") != str(reason_code or "")
+            or previous.get("contract_version") != str(contract_version or "")
+        )
+        entry = {
+            "state": normalized,
+            "since": (previous or {}).get("since", now_text) if previous and not changed else now_text,
+            "last_attempt_at": now_text,
+            "last_success_at": (
+                now_text
+                if normalized == "ready"
+                else str((previous or {}).get("last_success_at", ""))
+            ),
+            "reason_code": _safe_text(reason_code, limit=80),
+            "peer_plugin_id": _safe_text(peer_plugin_id, limit=120),
+            "contract": _safe_text(contract, limit=120),
+            "contract_version": _safe_text(contract_version, limit=40),
+            "method": _safe_text(method, limit=80),
+            "fallback": _safe_text(fallback, limit=120),
+            "consecutive_failures": (
+                0
+                if normalized == "ready"
+                else int((previous or {}).get("consecutive_failures", 0)) + 1
+            ),
+            "observed_at": now_text,
+        }
+        _link_states[key] = entry
+        if len(_link_states) > LINK_STATE_LIMIT:
+            oldest = min(
+                _link_states.items(), key=lambda item: item[1].get("observed_at", "")
+            )
+            _link_states.pop(oldest[0], None)
+    if changed:
+        level = "INFO" if normalized == "ready" else "WARNING"
+        diagnostic_event(
+            f"contract.link.{normalized}",
+            f"{key} -> {normalized}",
+            level=level,
+            details={
+                "link_id": key,
+                "state": normalized,
+                "peer_plugin_id": entry["peer_plugin_id"],
+                "contract": entry["contract"],
+                "contract_version": entry["contract_version"],
+                "method": entry["method"],
+                "reason_code": entry["reason_code"],
+                "fallback": entry["fallback"],
+                "consecutive_failures": entry["consecutive_failures"],
+            },
+        )
+    return dict(entry)
+
+
+def diagnostic_state_payload() -> dict[str, Any]:
+    """返回当前联动状态快照（纯读：不写事件、不改计数）。"""
+    with _link_lock:
+        links = {key: dict(value) for key, value in _link_states.items()}
+    return {
+        "contract": "series.diagnostics@1.1",
+        "plugin_id": PLUGIN_ID,
+        "plugin_name": PLUGIN_NAME,
+        "stream_id": str(getattr(_buffer, "_stream_id", "")),
+        "observed_at": _link_now(),
+        "links": links,
+    }

@@ -1,0 +1,28 @@
+{
+  "config": {
+    "general": {
+      "verifier_search_source": {
+        "labels": [
+          "Auto",
+          "Web",
+          "Bilibili",
+          "Web + Bilibili",
+          "LLM only"
+        ]
+      },
+      "graph_reconstruction_mode": {
+        "labels": [
+          "Off",
+          "Fast",
+          "Smart"
+        ]
+      }
+    }
+  },
+  "pages": {
+    "manager": {
+      "title": "Knowledge Manager",
+      "description": "Learn, search, verify, and manage the plugin's memory store"
+    }
+  }
+}
