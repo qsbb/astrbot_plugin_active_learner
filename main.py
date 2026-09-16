@@ -47,7 +47,7 @@ from .url_sources import UrlSourceRegistry
 from .verifier import Verifier
 
 # v1.1.5.0：架构重构 —— 统一服务层
-from .config_manager import ConfigManager
+from .config_manager import ConfigManager, apply_native_series_control_values
 from .series_control import SeriesControlAdapter
 from .series_webui import SeriesWebUIPanels
 from .llm_service import LLMService
@@ -1426,6 +1426,27 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
 
     def series_control_snapshot(self):
         return self._series_control.series_control_snapshot()
+
+    def series_control_native_write(self, patch, *, expected_revision=None):
+        """一键固化入口（核调用）：把当前值写进本插件自身配置。"""
+        return self._series_control.series_control_native_write(
+            patch, expected_revision=expected_revision
+        )
+
+    def _backup_native_config(self) -> str:
+        """写原生配置前先备份，返回 backup_id（写入失败可人工/自动恢复）。"""
+        try:
+            backup = getattr(self.config_manager, "backup", None)
+            if callable(backup):
+                return str(backup() or "")
+        except Exception as exc:
+            logger.warning(f"原生配置备份失败: {exc}")
+            return ""
+        return ""
+
+    def _apply_native_series_control_values(self, values):
+        """把给定字段写进插件自身配置并落盘（固化用；失败不改内存）。"""
+        return apply_native_series_control_values(self, values)
 
     def series_control_set_mode(self, mode):
         return self._series_control.series_control_set_mode(mode)

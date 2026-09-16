@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -193,28 +194,78 @@ class ConfigManager:
             # 过滤 None：None 表示调用方不更新该字段（部分更新模式）。
             # 清空字段应传空字符串 ""（"" 非 None，能正常通过）。
             filtered = {k: v for k, v in kwargs.items() if v is not None}
-            self._overlay.update(filtered)
-            self._astrbot_cfg.update(filtered)
-
-            # 回写 AstrBot 插件配置页，让两个页面显示同一份值。
-            # 成功回写的字段，其 baseline 直接记为新值：此后插件配置页若再被改动，
-            # 就能被识别为「更晚的修改」并压过 overlay。
-            native_ok = self._write_native(filtered)
-            for key, val in filtered.items():
-                if native_ok:
-                    # 插件配置页已同步为新值
-                    self._plugin_config[key] = val
-                    self._baseline[key] = val
-                elif key in self._plugin_config:
-                    # 回写不可用：AstrBot 侧仍是旧值，如实记录
-                    self._baseline[key] = self._plugin_config[key]
-                else:
-                    # AstrBot 侧本就没有该字段，不记基线。
-                    # 否则下次启动 schema 默认值一出现就会被误判成「用户改过配置页」。
-                    self._baseline.pop(key, None)
-
+            self._merge_locked(filtered)
             self._persist_unlocked()
             return dict(self._overlay)
+
+    def _merge_locked(self, filtered: dict[str, Any]) -> None:
+        """把给定值并入内存各层并回写插件配置页。调用方需已持有锁。"""
+        self._overlay.update(filtered)
+        self._astrbot_cfg.update(filtered)
+
+        # 回写 AstrBot 插件配置页，让两个页面显示同一份值。
+        # 成功回写的字段，其 baseline 直接记为新值：此后插件配置页若再被改动，
+        # 就能被识别为「更晚的修改」并压过 overlay。
+        native_ok = self._write_native(filtered)
+        for key, val in filtered.items():
+            if native_ok:
+                # 插件配置页已同步为新值
+                self._plugin_config[key] = val
+                self._baseline[key] = val
+            elif key in self._plugin_config:
+                # 回写不可用：AstrBot 侧仍是旧值，如实记录
+                self._baseline[key] = self._plugin_config[key]
+            else:
+                # AstrBot 侧本就没有该字段，不记基线。
+                # 否则下次启动 schema 默认值一出现就会被误判成「用户改过配置页」。
+                self._baseline.pop(key, None)
+
+    def native_write(self, values: dict[str, Any]) -> bool:
+        """一键固化：把给定值并入本插件自管配置并原子落盘。
+
+        与 ``update`` 的区别：落盘失败会回滚内存并返回 False，让「核」能如实
+        判断固化是否真的生效（核掉线后插件必须仍按这些值运行）。
+        """
+        filtered = {k: v for k, v in dict(values or {}).items() if v is not None}
+        if not filtered:
+            return False
+        with self._lock:
+            state = (
+                dict(self._overlay),
+                dict(self._astrbot_cfg),
+                dict(self._plugin_config),
+                dict(self._baseline),
+            )
+            self._merge_locked(filtered)
+            try:
+                self._persist_unlocked(strict=True)
+            except OSError:
+                (
+                    self._overlay,
+                    self._astrbot_cfg,
+                    self._plugin_config,
+                    self._baseline,
+                ) = state
+                return False
+            return True
+
+    def backup(self) -> str:
+        """备份当前自管配置文件，返回 backup_id（尚无文件时返回 ""）。
+
+        备份失败（IO 错误）会抛给调用方，由插件层记 warning —— 不能把「备份失败」
+        和「本来就没有备份点」混为一谈。
+        """
+        if not self._path.is_file():
+            return ""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        backup = self._path.with_name(f"native-backup-{stamp}.json")
+        backup.write_text(self._path.read_text(encoding="utf-8"), encoding="utf-8")
+        return stamp
+
+    @property
+    def settings_path(self) -> Path:
+        """本插件自管配置文件路径（诊断/备份用）。"""
+        return self._path
 
     def _write_native(self, values: dict[str, Any]) -> bool:
         """把配置回写到 AstrBot 原生配置对象并持久化。
@@ -231,8 +282,12 @@ class ConfigManager:
         except Exception:
             return False
 
-    def _persist_unlocked(self) -> None:
-        """原子落盘 overlay + baseline。调用方需已持有锁。"""
+    def _persist_unlocked(self, strict: bool = False) -> None:
+        """原子落盘 overlay + baseline。调用方需已持有锁。
+
+        ``strict=True`` 时把写入失败如实抛给调用方（一键固化必须知道是否落盘成功），
+        其余场景保持「落盘失败不阻塞运行」的旧行为。
+        """
         payload = dict(self._overlay)
         if self._baseline:
             payload[self._BASELINE_KEY] = self._baseline
@@ -250,6 +305,8 @@ class ConfigManager:
                     tmp.unlink()
             except OSError:
                 pass
+            if strict:
+                raise
 
     def all(self) -> dict[str, Any]:
         """返回合并后的全量设置（overlay + astrbot_cfg）。"""
@@ -262,3 +319,51 @@ class ConfigManager:
         """仅返回 Dashboard 写入的 overlay 层（不含 AstrBot 配置默认值）。"""
         with self._lock:
             return dict(self._overlay)
+
+
+def apply_native_series_control_values(plugin: Any, values: dict[str, Any]) -> dict[str, Any]:
+    """一键固化：把核接管的当前值写进插件自身配置（核掉线后行为不变）。
+
+    顺序：备份 → 合并进自管配置并原子落盘（失败回滚内存）→ 刷新运行时。
+
+    ``main.py`` 只做绑定（``_apply_native_series_control_values``），逻辑放在本模块
+    以便脱离 AstrBot 运行时直接测试。
+    """
+    if not isinstance(values, dict) or not values:
+        return {"status": "error", "reason": "INVALID_PATCH"}
+    manager = getattr(plugin, "config_manager", None)
+    writer = getattr(manager, "native_write", None)
+    if not callable(writer):
+        return {"status": "error", "reason": "UNSUPPORTED"}
+
+    backup_id = ""
+    backup = getattr(plugin, "_backup_native_config", None)
+    if callable(backup):
+        try:
+            backup_id = str(backup() or "")
+        except Exception:  # 备份失败不阻塞固化，backup_id 为空即代表无回滚点
+            backup_id = ""
+    else:
+        manager_backup = getattr(manager, "backup", None)
+        if callable(manager_backup):
+            try:
+                backup_id = str(manager_backup() or "")
+            except Exception:
+                backup_id = ""
+
+    if not writer(dict(values)):
+        return {"status": "error", "reason": "PERSIST_FAILED"}
+
+    applier = getattr(plugin, "_apply_config_to_runtime", None)
+    if callable(applier):
+        try:
+            applier(manager.all())
+        except Exception as exc:
+            # 已落盘的值会在下次启动生效；此处如实上报，避免核误判为已完全生效。
+            return {"status": "error", "reason": f"APPLY_FAILED:{exc}"}
+    return {
+        "status": "ok",
+        "written": sorted(values.keys()),
+        "skipped": [],
+        "backup_id": backup_id,
+    }

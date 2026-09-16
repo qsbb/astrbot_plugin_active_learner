@@ -125,17 +125,31 @@ class SeriesControlAdapter:
                 os.unlink(tmp_name)
 
     def _native(self, field: str) -> Any:
+        """插件自身配置（自管存储 + 插件配置页）的当前值。
+
+        这是「核掉线后插件实际会用」的值，一键读取/一键固化都以它为准。
+        """
         manager = getattr(self.plugin, "config_manager", None)
+        getter = getattr(manager, "get", None)
+        if callable(getter):
+            return getter(field, _FIELDS[field]["default"])
         native_get = getattr(manager, "native_get", None)
         if callable(native_get):
             return native_get(field, _FIELDS[field]["default"])
-        if manager is not None:
-            return manager.get(field, _FIELDS[field]["default"])
         config = getattr(self.plugin, "config", {})
-        return config.get(field, _FIELDS[field]["default"])
+        if isinstance(config, dict):
+            return config.get(field, _FIELDS[field]["default"])
+        return _FIELDS[field]["default"]
 
     def _native_configured(self, field: str) -> bool:
         manager = getattr(self.plugin, "config_manager", None)
+        overlay_all = getattr(manager, "overlay_all", None)
+        if callable(overlay_all):
+            try:
+                if field in overlay_all():
+                    return True
+            except Exception:
+                pass
         native_has = getattr(manager, "native_has", None)
         if callable(native_has):
             return bool(native_has(field))
@@ -190,9 +204,11 @@ class SeriesControlAdapter:
             "capabilities": [
                 "read_schema",
                 "read_snapshot",
+                "read_native",
                 "validate_patch",
                 "apply_patch",
                 "reset_override",
+                "write_native",
             ],
             "read_only": False,
             "secrets_in_response": False,
@@ -223,15 +239,51 @@ class SeriesControlAdapter:
 
     def series_control_snapshot(self) -> dict[str, Any]:
         fields: dict[str, dict[str, Any]] = {}
-        for name in _FIELDS:
+        for name, spec in _FIELDS.items():
             managed = name in self._overlay
-            fields[name] = {
+            native = self._native(name)
+            item: dict[str, Any] = {
                 "native_configured": self._native_configured(name),
                 "managed_configured": managed,
                 "effective_source": "managed" if managed else "plugin",
                 "effective_value": self.effective_value(name),
             }
+            # 原生值：供核「一键读取当前配置」使用（secret 字段不回传）
+            if spec.get("secret") or spec.get("write_only"):
+                item["secret"] = True
+            else:
+                item["native_value"] = native
+            fields[name] = item
         return {"status": "ok", "revision": self._revision, "fields": fields}
+
+    def series_control_native_write(
+        self, patch: dict[str, Any], *, expected_revision: int | None = None
+    ) -> dict[str, Any]:
+        """一键固化：把当前值写进插件自身配置（核掉线后仍按此运行）。
+
+        只接受 _FIELDS 内的字段；先按白名单 + 类型校验，再交给插件层
+        「备份 → 合并 → 原子落盘」。
+        """
+        revision = self._revision if expected_revision is None else expected_revision
+        result = self._validate(dict(patch or {}), revision)
+        if result.get("status") != "ok":
+            return result
+        clean = dict(result.get("patch") or {})
+        hook = getattr(self.plugin, "_apply_native_series_control_values", None)
+        if not callable(hook):
+            return {"status": "error", "reason": "UNSUPPORTED", "revision": self._revision}
+        outcome = hook(clean)
+        if not isinstance(outcome, dict) or outcome.get("status") != "ok":
+            reason = str((outcome or {}).get("reason") or "PERSIST_FAILED")
+            return {"status": "error", "reason": reason, "revision": self._revision}
+        return {
+            "status": "ok",
+            "reason": "APPLIED",
+            "revision": self._revision,
+            "written": list(outcome.get("written") or clean.keys()),
+            "skipped": list(outcome.get("skipped") or []),
+            "backup_id": str(outcome.get("backup_id") or ""),
+        }
 
     def _validate(self, patch: dict[str, Any], expected_revision: int) -> dict[str, Any]:
         if expected_revision != self._revision:

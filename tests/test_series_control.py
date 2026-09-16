@@ -1,8 +1,13 @@
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from astrbot_plugin_active_learner.config_manager import (
+    ConfigManager,
+    apply_native_series_control_values,
+)
 from astrbot_plugin_active_learner.series_control import SeriesControlAdapter
 
 
@@ -43,9 +48,11 @@ def test_contract_schema_exposes_exact_safe_fields(tmp_path):
     assert adapter.series_control_contract()["capabilities"] == [
         "read_schema",
         "read_snapshot",
+        "read_native",
         "validate_patch",
         "apply_patch",
         "reset_override",
+        "write_native",
     ]
     schema = adapter.series_control_schema()
     assert set(schema["fields"]) == {
@@ -161,3 +168,104 @@ def test_reset_failure_restores_previous_overlay_and_revision(tmp_path, monkeypa
     assert adapter._overlay == {"search_top_k": 12}
     assert adapter._revision == 1
     monkeypatch.setattr(adapter, "_persist", original)
+
+
+class _NativePlugin:
+    """真实 ConfigManager + 本仓固化钩子，验证「一键固化」确实写进插件自身配置。"""
+
+    def __init__(self, tmp_path: Path, values=None):
+        values = values or {
+            "embedding_enabled": True,
+            "context_inject_count": 3,
+            "search_top_k": 5,
+        }
+        self._db_path = tmp_path / "memory.db"
+        self.config_manager = ConfigManager(tmp_path, dict(values))
+        self.config = self.config_manager.all()
+        self.applied: dict = {}
+
+    def _apply_config_to_runtime(self, settings):
+        self.applied = dict(settings)
+        self.config = dict(settings)
+
+    def _backup_native_config(self) -> str:
+        return self.config_manager.backup()
+
+    _apply_native_series_control_values = apply_native_series_control_values
+
+
+def test_snapshot_exposes_native_value_for_kernel_read(tmp_path):
+    adapter = SeriesControlAdapter(_Plugin(tmp_path, {"search_top_k": 8}))
+    fields = adapter.series_control_snapshot()["fields"]
+    assert fields["search_top_k"]["native_value"] == 8
+    assert fields["embedding_enabled"]["native_value"] is True
+    assert all("secret" not in item for item in fields.values())
+
+
+def test_native_write_persists_into_plugin_config_file(tmp_path):
+    plugin = _NativePlugin(tmp_path)
+    plugin.config_manager.update(search_top_k=5)
+    adapter = SeriesControlAdapter(plugin)
+
+    result = adapter.series_control_native_write(
+        {"search_top_k": 9, "context_inject_count": 2}
+    )
+    assert result["status"] == "ok"
+    assert result["reason"] == "APPLIED"
+    assert result["written"] == ["context_inject_count", "search_top_k"]
+    assert result["backup_id"]
+
+    on_disk = json.loads(
+        (tmp_path / "active_learner_settings.json").read_text(encoding="utf-8")
+    )
+    assert on_disk["search_top_k"] == 9
+    assert on_disk["context_inject_count"] == 2
+
+    backup = tmp_path / f"native-backup-{result['backup_id']}.json"
+    assert json.loads(backup.read_text(encoding="utf-8"))["search_top_k"] == 5
+
+    assert plugin.applied["search_top_k"] == 9
+    assert (
+        adapter.series_control_snapshot()["fields"]["search_top_k"]["native_value"]
+        == 9
+    )
+
+
+def test_native_write_rejects_unknown_field_and_bad_type(tmp_path):
+    plugin = _NativePlugin(tmp_path)
+    adapter = SeriesControlAdapter(plugin)
+    assert (
+        adapter.series_control_native_write({"unknown_field": 1})["reason"]
+        == "UNKNOWN_FIELD"
+    )
+    assert (
+        adapter.series_control_native_write({"embedding_enabled": "yes"})["reason"]
+        == "INVALID_TYPE"
+    )
+    assert (
+        adapter.series_control_native_write({"context_inject_count": True})["reason"]
+        == "INVALID_VALUE"
+    )
+    assert (
+        adapter.series_control_native_write({"search_top_k": 21}, expected_revision=1)[
+            "reason"
+        ]
+        == "REVISION_CONFLICT"
+    )
+    assert not (tmp_path / "active_learner_settings.json").exists()
+
+
+def test_native_write_persist_failure_is_reported(tmp_path, monkeypatch):
+    plugin = _NativePlugin(tmp_path)
+    plugin.config_manager.update(search_top_k=5)
+    adapter = SeriesControlAdapter(plugin)
+
+    def fail_persist(strict: bool = False):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(plugin.config_manager, "_persist_unlocked", fail_persist)
+    result = adapter.series_control_native_write({"search_top_k": 7})
+    assert result["status"] == "error"
+    assert result["reason"] == "PERSIST_FAILED"
+    # 内存回滚：overlay 仍是固化前的值
+    assert plugin.config_manager.overlay_all()["search_top_k"] == 5
