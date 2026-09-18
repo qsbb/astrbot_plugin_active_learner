@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-知 · 知识管理</title>
-  <link rel="stylesheet" href="./style.css?v=1.8.6-1" />
-    <link rel="stylesheet" href="./series-ui.css?v=1.8.6-1" />
+  <link rel="stylesheet" href="./style.css?v=1.8.7-1" />
+    <link rel="stylesheet" href="./series-ui.css?v=1.8.7-1" />
 </head>
 <body data-series-ui="1">
   <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
@@ -18,7 +18,7 @@
         <p class="subtitle">知识学习、跨 scope 检索、验证与记忆条目管理</p>
       </div>
       <div class="actions" aria-label="知识管理操作">
-        <button id="btn-import" type="button" class="action-main primary" title="导入文本 / Markdown / ZIP / PDF / Word">⬆ 导入</button>
+        <button id="btn-import" type="button" class="action-main primary" title="导入文本 / 文件">⬆ 导入</button>
         <button id="btn-priority-learn" type="button" class="action-main" title="主动搜索已设置的关心领域并持续学习">🎯 主动学习</button>
         <details id="more-menu" class="more-menu">
           <summary class="more-trigger" role="button" aria-haspopup="menu" aria-expanded="false">更多 ▾</summary>
@@ -55,7 +55,7 @@
           <option value="">全部作用域</option>
         </select>
       </label>
-      <p class="filter-hint">作用域决定这条记忆对谁生效：全局 / 私聊 / 群聊；切换后列表与统计一起刷新。</p>
+      <p class="filter-hint">作用域决定这条记忆对谁生效：全局 / 私聊 / 群聊。</p>
     </section>
 
     <section class="table-wrap">
@@ -73,7 +73,7 @@
       </div>
       <div class="memory-list-head">
         <h2>记忆库</h2>
-        <span class="memory-list-sort">按更新时间 · <b id="memory-count">—</b> 条</span>
+        <span class="memory-list-sort">按更新时间</span>
       </div>
       <div id="memory-tbody" class="memory-list" role="list" aria-live="polite" aria-busy="false">
         <div class="empty-row">加载中…</div>
@@ -147,7 +147,7 @@
         </div>
 
         <div class="settings-panels">
-          <div id="settings-panel-llm" class="settings-panel active" data-panel="llm" role="tabpanel" aria-labelledby="settings-tab-llm" aria-hidden="false">
+          <div id="settings-panel-llm" class="settings-panel" data-panel="llm" role="tabpanel" aria-labelledby="settings-tab-llm">
             <div class="settings-section">
               <div class="settings-label">模型服务商</div>
               <div class="settings-row">
@@ -162,20 +162,20 @@
               <div class="settings-label">精炼开关</div>
               <label class="checkbox-row">
                 <input type="checkbox" id="settings-refine-search" class="si-toggle" />
-                <span>搜索学习时精炼（搜索结果 → LLM 2 步蒸馏 → 入库）</span>
+                <span>搜索学习时精炼（搜索结果经 LLM 提炼后入库）</span>
               </label>
               <label class="checkbox-row">
                 <input type="checkbox" id="settings-refine-import" class="si-toggle" />
-                <span>导入时精炼（原始文本 → LLM 蒸馏 → 入库）</span>
+                <span>导入时精炼（原始文本经 LLM 提炼后入库）</span>
               </label>
               <label class="checkbox-row">
                 <input type="checkbox" id="settings-refine-verify" class="si-toggle" />
-                <span>验证时精炼（本期预留，暂不影响行为）</span>
+                <span>验证时精炼（验证修正后的内容经 LLM 结构化精简后入库）</span>
               </label>
             </div>
           </div>
 
-          <div id="settings-panel-learn" class="settings-panel" data-panel="learn" role="tabpanel" aria-labelledby="settings-tab-learn" aria-hidden="true" hidden>
+          <div id="settings-panel-learn" class="settings-panel" data-panel="learn" role="tabpanel" aria-labelledby="settings-tab-learn" hidden>
             <div class="settings-section">
               <div class="settings-label">自主检索与学习</div>
               <label class="checkbox-row">
@@ -187,7 +187,7 @@
                 <input type="range" id="settings-learn-weight" min="0" max="1" step="0.1" class="settings-slider" />
                 <span id="settings-learn-weight-val">0.7</span>
               </div>
-              <p class="hint">由当前对话模型结合不确定性、时效性、实体匹配和答错代价判断是否检索，不会额外增加一次模型调用。数值是倾向，不是搜索概率。</p>
+              <p class="hint">由当前对话模型结合不确定性、时效性、实体匹配和答错代价判断是否检索。数值是倾向，不是搜索概率。</p>
               <div class="settings-row">
                 <span class="settings-label-sm">搜索返回条数</span>
                 <input type="number" id="settings-search-top-k" min="1" max="20" class="settings-number" />
@@ -208,7 +208,7 @@
             </div>
           </div>
 
-          <div id="settings-panel-search" class="settings-panel" data-panel="search" role="tabpanel" aria-labelledby="settings-tab-search" aria-hidden="true" hidden>
+          <div id="settings-panel-search" class="settings-panel" data-panel="search" role="tabpanel" aria-labelledby="settings-tab-search" hidden>
             <div class="settings-section">
               <div class="settings-label">验证搜索源</div>
               <div class="settings-row">
@@ -271,7 +271,7 @@
             </div>
           </div>
 
-          <div id="settings-panel-sources" class="settings-panel" data-panel="sources" role="tabpanel" aria-labelledby="settings-tab-sources" aria-hidden="true" hidden>
+          <div id="settings-panel-sources" class="settings-panel" data-panel="sources" role="tabpanel" aria-labelledby="settings-tab-sources" hidden>
             <div class="settings-section">
               <div class="settings-label">手动 URL / 百科来源</div>
               <form id="url-source-form" class="url-source-form">
@@ -297,7 +297,7 @@
             </div>
           </div>
 
-          <div id="settings-panel-other" class="settings-panel" data-panel="other" role="tabpanel" aria-labelledby="settings-tab-other" aria-hidden="true" hidden>
+          <div id="settings-panel-other" class="settings-panel" data-panel="other" role="tabpanel" aria-labelledby="settings-tab-other" hidden>
             <div class="settings-section">
               <div class="settings-label">文档分块</div>
               <div class="settings-row">
@@ -311,10 +311,10 @@
             </div>
           </div>
 
-          <div id="settings-panel-advanced" class="settings-panel" data-panel="advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" aria-hidden="true" hidden>
+          <div id="settings-panel-advanced" class="settings-panel" data-panel="advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" hidden>
             <div class="settings-section">
               <div class="settings-label">全部配置</div>
-              <p class="hint">直接读取 <code>_conf_schema.json</code> 渲染；按字段名或说明搜索。修改后点击保存即时生效。</p>
+              <p class="hint">按字段名或说明搜索。修改后点击保存即时生效。</p>
               <label class="settings-row" for="config-search">
                 <span class="settings-label-sm">搜索</span>
                 <input id="config-search" class="settings-text" type="search" placeholder="输入字段名或说明" />
@@ -372,7 +372,7 @@
         </div>
 
         <div class="tab-panels">
-          <form id="import-text-form" class="tab-panel active" data-panel="text" role="tabpanel" aria-labelledby="import-tab-text" aria-hidden="false">
+          <form id="import-text-form" class="tab-panel" data-panel="text" role="tabpanel" aria-labelledby="import-tab-text">
             <label class="control">
               <span>主题 *</span>
               <input type="text" name="topic" required placeholder="如：量子纠缠" />
@@ -402,7 +402,7 @@
             <button type="submit" class="primary">导入</button>
           </form>
 
-          <form id="import-md-form" class="tab-panel" data-panel="md" role="tabpanel" aria-labelledby="import-tab-md" aria-hidden="true" hidden>
+          <form id="import-md-form" class="tab-panel" data-panel="md" role="tabpanel" aria-labelledby="import-tab-md" hidden>
             <label class="control">
               <span>Markdown 文件 *</span>
               <input type="file" name="file" accept=".md,.markdown,text/markdown" required />
@@ -442,7 +442,7 @@
             <button type="submit" class="primary">导入</button>
           </form>
 
-          <form id="import-zip-form" class="tab-panel" data-panel="zip" role="tabpanel" aria-labelledby="import-tab-zip" aria-hidden="true" hidden>
+          <form id="import-zip-form" class="tab-panel" data-panel="zip" role="tabpanel" aria-labelledby="import-tab-zip" hidden>
             <label class="control">
               <span>ZIP 压缩包 *</span>
               <input type="file" name="file" accept=".zip,application/zip" required />
@@ -469,7 +469,7 @@
             <button type="submit" class="primary">批量导入</button>
           </form>
 
-          <form id="import-pdf-form" class="tab-panel" data-panel="pdf" role="tabpanel" aria-labelledby="import-tab-pdf" aria-hidden="true" hidden>
+          <form id="import-pdf-form" class="tab-panel" data-panel="pdf" role="tabpanel" aria-labelledby="import-tab-pdf" hidden>
             <label class="control">
               <span>PDF 文件 *</span>
               <input type="file" name="file" accept=".pdf,application/pdf" required />
@@ -506,7 +506,7 @@
             <button type="submit" class="primary">导入 PDF</button>
           </form>
 
-          <form id="import-docx-form" class="tab-panel" data-panel="docx" role="tabpanel" aria-labelledby="import-tab-docx" aria-hidden="true" hidden>
+          <form id="import-docx-form" class="tab-panel" data-panel="docx" role="tabpanel" aria-labelledby="import-tab-docx" hidden>
             <label class="control">
               <span>Word 文件 *</span>
               <input type="file" name="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required />
@@ -543,7 +543,7 @@
             <button type="submit" class="primary">导入 Word</button>
           </form>
 
-          <form id="import-txt-form" class="tab-panel" data-panel="txt" role="tabpanel" aria-labelledby="import-tab-txt" aria-hidden="true" hidden>
+          <form id="import-txt-form" class="tab-panel" data-panel="txt" role="tabpanel" aria-labelledby="import-tab-txt" hidden>
             <label class="control">
               <span>TXT 文件 *</span>
               <input type="file" name="file" accept=".txt,text/plain" required />
@@ -671,7 +671,7 @@
         </div>
 
         <div class="tab-panels">
-          <div id="slang-panel-candidates" class="tab-panel active" data-panel="candidates" role="tabpanel" aria-labelledby="slang-tab-candidates" aria-hidden="false">
+          <div id="slang-panel-candidates" class="tab-panel" data-panel="candidates" role="tabpanel" aria-labelledby="slang-tab-candidates">
             <table class="memory-table">
               <thead>
                 <tr>
@@ -690,7 +690,7 @@
             </table>
           </div>
 
-          <div id="slang-panel-entries" class="tab-panel" data-panel="entries" role="tabpanel" aria-labelledby="slang-tab-entries" aria-hidden="true" hidden>
+          <div id="slang-panel-entries" class="tab-panel" data-panel="entries" role="tabpanel" aria-labelledby="slang-tab-entries" hidden>
             <table class="memory-table">
               <thead>
                 <tr>
@@ -708,7 +708,7 @@
             </table>
           </div>
 
-          <div id="slang-panel-blocklist" class="tab-panel" data-panel="blocklist" role="tabpanel" aria-labelledby="slang-tab-blocklist" aria-hidden="true" hidden>
+          <div id="slang-panel-blocklist" class="tab-panel" data-panel="blocklist" role="tabpanel" aria-labelledby="slang-tab-blocklist" hidden>
             <table class="memory-table">
               <thead>
                 <tr>
@@ -807,7 +807,7 @@
   </div>
 
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script src="./series-ui.js?v=1.8.6-1"></script>
-  <script type="module" src="./app.js?v=1.8.6-1"></script>
+  <script src="./series-ui.js?v=1.8.7-1"></script>
+  <script type="module" src="./app.js?v=1.8.7-1"></script>
 </body>
 </html>

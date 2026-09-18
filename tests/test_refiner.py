@@ -405,6 +405,50 @@ def test_refine_import_propagates_exception():
         asyncio.run(refiner.refine_import("t", "raw", "pid"))
 
 
+# ---------- refine_verified ----------
+
+
+def test_refine_verified_without_provider_degrades_with_content():
+    refiner, plugin = _refiner()
+    content = "已验证修正后的内容"
+    result = asyncio.run(refiner.refine_verified("主题", content, ""))
+    # 无 provider：降级返回原内容，调用方据 refined=False 决定不入库精炼结果
+    assert result.summary == content
+    assert result.refined is False
+    assert result.keywords == ["主题"]
+    assert plugin.llm_service.calls == []
+
+
+def test_refine_verified_normal_reply_and_prompt_guard_facts():
+    refiner, plugin = _refiner(_GOOD_REPLY)
+    result = asyncio.run(refiner.refine_verified("三体", "验证后的正确内容", "pid"))
+    assert result.refined is True
+    assert result.summary.startswith("三体是刘慈欣")
+    assert result.confidence == 0.85
+    # 专用提示词：强调已通过验证、禁止改写事实、只做结构化精简
+    prompt = plugin.llm_service.calls[0]["prompt"]
+    assert "已通过验证" in prompt
+    assert "不改变任何事实" in prompt
+    assert "验证后的正确内容" in prompt
+
+
+def test_refine_verified_empty_reply_degrades_to_content():
+    refiner, _ = _refiner("")
+    result = asyncio.run(refiner.refine_verified("主题", "验证后内容", "pid"))
+    # 解析失败（空响应）时降级 refined=False，summary 回落验证后内容
+    assert result.refined is False
+    assert result.summary == "验证后内容"
+    assert result.keywords == ["主题"]
+
+
+def test_refine_verified_malformed_reply_falls_back_to_content():
+    refiner, _ = _refiner("模型答非所问")
+    result = asyncio.run(refiner.refine_verified("主题", "验证后内容", "pid"))
+    # 格式错误但响应非空：摘要回落输入内容，仍算精炼成功（与 refine_import 一致）
+    assert result.summary == "验证后内容"
+    assert result.refined is True
+
+
 # ---------- refine_snippet ----------
 
 

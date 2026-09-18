@@ -170,7 +170,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         )
         self._background_tasks = BackgroundTaskHost()
 
-        # Phase 1：精炼器 + 自管设置
+        # 精炼器与自管设置
         self._cfg_llm_provider_id = (cfg.get("llm_provider_id") or "").strip()
         if not self._cfg_llm_provider_id:
             # 诊断：列出 cfg 中所有和 provider/llm 相关的 key
@@ -281,7 +281,7 @@ class ActiveLearnerPlugin(WebApiMixin, RetrievalMixin, LearningMixin, Star):
         self._chunk_size = max(100, min(5000, int(cfg.get("chunk_size", 500))))
         self._chunk_overlap = max(0, min(1000, int(cfg.get("chunk_overlap", 50))))
         # 主动学习追踪状态绑定到每个请求 event，避免并发会话互相覆盖。
-        # 保留同名属性供旧版扩展读取，但核心流程不再依赖它们。
+        # 同名属性供旧版扩展读取；核心流程不依赖。
         self._active_learn_hinted = False
         self._active_learn_was_called = False
         # v1.1.4.9：后置学习节流

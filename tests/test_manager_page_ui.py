@@ -19,15 +19,23 @@ def test_manager_tabs_support_keyboard_and_progress_reports_state():
     html = (PAGE_DIR / "index.html").read_text(encoding="utf-8")
     js = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
     css = (PAGE_DIR / "style.css").read_text(encoding="utf-8")
+    shared = (PAGE_DIR / "series-ui.js").read_text(encoding="utf-8")
 
     assert 'role="progressbar"' in html
     assert 'aria-valuenow="0"' in html
-    assert "function bindTabKeyboardNavigation" in js
-    assert 'event.key === "ArrowRight"' in js
-    assert 'event.key === "Home"' in js
-    assert "btn.tabIndex = active ? 0 : -1" in js
-    assert "panel.hidden = !active" in js
-    assert 'panel.setAttribute("aria-hidden", String(!active))' in js
+    # tab 点击切换与方向键导航统一走共享层 SeriesUI.bindTabs（含 ArrowRight/Home/End）
+    assert "function bindPageTabs(" in js
+    assert "window.SeriesUI?.bindTabs" in js
+    assert 'window.SeriesUI.bindTabs(root, tabSelector, panelSelector, "data-tab")' in js
+    assert "function bindTabs(" in shared
+    assert "event.key === 'ArrowRight'" in shared
+    assert "event.key === 'Home'" in shared
+    assert "tab.tabIndex = active ? 0 : -1" in shared
+    assert "panel.hidden = " in shared
+    # 面板可见性由 hidden 属性驱动（bindTabs 只切 hidden，不再维护 active/aria-hidden）
+    assert ".tab-panel:not([hidden])" in css
+    assert ".settings-panel:not([hidden])" in css
+    assert "tab-panel.active" not in js
     assert 'aria-controls="settings-panel-llm"' in html
     assert 'aria-labelledby="settings-tab-llm"' in html
     assert 'aria-controls="import-text-form"' in html
@@ -71,8 +79,8 @@ def test_manager_slang_tab_structure_and_actions():
     assert "function renderSlangEntries" in js
     assert "function renderSlangBlocklist" in js
     assert "async function slangAction" in js
-    assert "function switchSlangTab" in js
-    assert 'bindTabKeyboardNavigation("#slang-modal .tab-btn", switchSlangTab)' in js
+    # tab 切换（含方向键导航）复用共享层 SeriesUI.bindTabs
+    assert 'bindPageTabs(document.getElementById("slang-modal"), ".tab-btn", ".tab-panel")' in js
     assert "bindSlangEvents();" in js
     # 前端调用的路由与后端注册保持一致
     assert 'apiGet("slang/candidates"' in js
@@ -174,9 +182,14 @@ def test_config_search_preserves_dirty_edits_and_invalidates_stale_cache():
     assert "configState.dirty = false;" in js
     assert "configState.stale = true;" in js
     assert 'data-toast-fallback' in html
-    assert "function escapeHtmlAttr(" in js
+    # 转义统一走共享层 SeriesUI.escapeHtml/escapeHtmlAttr，本地保留最小兜底
+    assert "const escapeHtml = (...args) =>" in js
+    assert "const escapeHtmlAttr = (...args) =>" in js
+    assert "window.SeriesUI?.escapeHtmlAttr" in js
     assert '"&": "&amp;"' in js
-    assert '"\\"": "&quot;"' in js
+    shared_js = (PAGE_DIR / "series-ui.js").read_text(encoding="utf-8")
+    assert "function escapeHtmlAttr(" in shared_js
+    assert '"&quot;"' in shared_js
 
 
 def test_manager_page_shortens_and_copies_long_scope_ids():

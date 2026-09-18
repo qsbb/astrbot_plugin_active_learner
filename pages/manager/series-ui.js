@@ -5,7 +5,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "1.0.2";
+  const VERSION = "1.0.3";
   const THEME_KEY = "ningxin.series.ui.theme";
   const overlays = [];
 
@@ -426,6 +426,65 @@
     return copied;
   }
 
+  const HTML_ESCAPES = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
+  }
+
+  // 属性场景与文本场景同一套转义（引号已覆盖）；保留独立名字便于调用方表意
+  function escapeHtmlAttr(value) {
+    return escapeHtml(value);
+  }
+
+  // 统一解析 bridge / HTTP 的 JSON 响应：字符串先 JSON.parse，
+  // success === false 时按 errorMessages 映射为可读错误。
+  function parseApiResponse(value, errorMessages) {
+    let response = value;
+    if (typeof value === "string") {
+      try {
+        response = JSON.parse(value);
+      } catch (_error) {
+        throw new Error("服务端返回了无法识别的数据");
+      }
+    }
+    if (!response || typeof response !== "object") {
+      throw new Error("服务端返回了空响应");
+    }
+    if (response.success === false) {
+      const code = String(response.error || response.code || "");
+      const table = errorMessages || {};
+      throw new Error(table[code] || response.detail || response.message || code || "请求失败");
+    }
+    return response.data ?? response;
+  }
+
+  // 生成 { get, post } 调用对；get/post 参数是原始传输函数
+  // （name, payload) => Promise<raw>，由调用方注入 bridge 或 fetch 实现。
+  function makeApi({ get, post, errorMessages } = {}) {
+    const wrap = (fn) => async (...args) => parseApiResponse(await fn(...args), errorMessages);
+    return { get: wrap(get), post: wrap(post) };
+  }
+
+  // Blob 下载 JSON 导出
+  function downloadJson(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function setBusy(button, busy, label = "") {
     if (!button) return () => {};
     const state = button.dataset.siBusyState;
@@ -520,7 +579,12 @@
     copy: copyText,
     setBusy,
     bindTabs,
-    enhanceSwitches
+    enhanceSwitches,
+    escapeHtml,
+    escapeHtmlAttr,
+    parseApiResponse,
+    makeApi,
+    downloadJson
   });
 
   ready(initialize);

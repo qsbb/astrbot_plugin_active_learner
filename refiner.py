@@ -1,8 +1,10 @@
 """知识精炼器：把搜索结果或原始导入内容蒸馏成结构化记忆。
 
-2 种精炼入口：
+精炼入口：
 - refine_search_results: 搜索结果 → 1 步精炼（直接抽取事实并结构化为知识卡）
 - refine_import: 原始文本 → 1 步精炼（蒸馏为摘要 + 关键词 + 置信度）
+- refine_snippet: 对话片段 → 1 步精炼
+- refine_verified: 验证修正后的内容 → 保持事实不变的结构化精简
 
 无 provider 时降级返回原始内容，refined=False，由调用方决定是否接受。
 """
@@ -130,6 +132,54 @@ class KnowledgeRefiner:
 
         reply = await self._safe_generate(provider_id, prompt)
         return self._parse_result(reply, fallback_summary=raw_content, topic=topic)
+
+    async def refine_verified(
+        self,
+        topic: str,
+        content: str,
+        provider_id: str,
+    ) -> RefineResult:
+        """验证时精炼：输入验证修正后的内容，保持事实不变，只做结构化与精简。
+
+        与 refine_import 的区别：输入已是验证过的正确内容，提示词禁止改写事实，
+        避免精炼环节引入二次错误。provider 为空或解析失败时降级 refined=False。
+        """
+        if not provider_id:
+            return RefineResult(
+                summary=content,
+                keywords=[topic] if topic else [],
+                confidence=0.5,
+                reasoning="未配置 LLM provider，跳过精炼",
+                refined=False,
+            )
+
+        prompt = (
+            f"你是知识工程师。以下关于「{topic}」的内容已通过验证，事实正确。\n"
+            f"请在不改变任何事实的前提下，将其整理为结构化的精简知识卡。\n\n"
+            f"已验证内容：\n{content[:3000]}\n\n"
+            f"要求：\n"
+            f"1. 严格保持原内容的事实与结论不变，禁止新增、删除或改写事实\n"
+            f"2. 只做结构化与精简：剔除冗余措辞，SUMMARY ≤200 字，中文表达\n"
+            f"3. 关键词 3-5 个，便于检索\n"
+            f"4. 置信度 0-100（信息完整度+可信度）\n"
+            f"5. 严格按以下格式输出（每行一个字段）：\n"
+            f"SUMMARY: <摘要>\n"
+            f"KEYWORDS: <关键词1>, <关键词2>, ...\n"
+            f"CONFIDENCE: <0-100>\n"
+            f"REASON: <简述依据，≤50字>\n"
+        )
+
+        reply = await self._safe_generate(provider_id, prompt)
+        result = self._parse_result(reply, fallback_summary=content, topic=topic)
+        if result is None:
+            return RefineResult(
+                summary=content,
+                keywords=[topic] if topic else [],
+                confidence=0.5,
+                reasoning="LLM 精炼失败，降级返回验证后内容",
+                refined=False,
+            )
+        return result
 
     async def refine_snippet(
         self,

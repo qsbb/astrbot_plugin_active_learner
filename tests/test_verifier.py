@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_active_learner.models import MemoryEntry
+from astrbot_plugin_active_learner.refiner import RefineResult
 from astrbot_plugin_active_learner.verifier import (
     VerificationResult,
     Verifier,
@@ -58,6 +59,37 @@ class _FakeStore:
         return True
 
 
+class _FakeConfigManager:
+    """最小 ConfigManager 替身：verifier 只会调 get(key, default)。"""
+
+    def __init__(self, values=None):
+        self._values = dict(values or {})
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+
+class _FakeRefiner:
+    """记录 refine_verified 调用并按预置结果返回的替身。
+
+    默认返回 refined=False 的降级结果，保持既有用例的内容断言不受影响。
+    """
+
+    def __init__(self, result=None):
+        self.calls = []
+        self._result = (
+            result
+            if result is not None
+            else RefineResult(summary="", reasoning="fake 默认降级", refined=False)
+        )
+
+    async def refine_verified(self, topic, content, provider_id):
+        self.calls.append(
+            {"topic": topic, "content": content, "provider_id": provider_id}
+        )
+        return self._result
+
+
 class _FakePlugin:
     """最小可用的 plugin 替身，只提供 Verifier 真正读到的属性。"""
 
@@ -69,8 +101,11 @@ class _FakePlugin:
         enable_web_search=True,
         only_highest_priority=False,
         priority=None,
+        refiner=None,
     ):
         self.config = config if config is not None else {}
+        self.config_manager = _FakeConfigManager(self.config)
+        self.refiner = refiner if refiner is not None else _FakeRefiner()
         self.llm_service = _FakeLLMService(llm_replies)
         self.store = _FakeStore()
         self._enable_web_search = enable_web_search
@@ -851,3 +886,91 @@ def test_run_propagates_search_failure():
     with pytest.raises(ConnectionError, match="网络不可达"):
         asyncio.run(Verifier(plugin).run(_entry(), "pid"))
     assert plugin.store.updates == []
+
+# ---------- 验证时精炼（refine_on_verify） ----------
+
+
+_PARTIAL_WITH_CONTENT = (
+    "VERDICT: 部分正确\n"
+    "CONFIDENCE: 80\n"
+    "CONTENT: 修正后的冗长内容\n"
+    "REASON: 主体成立"
+)
+
+
+def test_run_refines_corrected_content_when_enabled():
+    """开关开启且内容被修正：精炼结果（summary）作为最终内容入库。"""
+    refiner = _FakeRefiner(
+        RefineResult(
+            summary="精炼后的结构化内容",
+            keywords=["测试主题"],
+            confidence=0.9,
+            reasoning="结构化精简",
+            refined=True,
+        )
+    )
+    plugin = _FakePlugin(
+        config={"verifier_search_source": "llm", "refine_on_verify": True},
+        llm_replies=["KEYWORDS: kw", "支持方", "质疑方", _PARTIAL_WITH_CONTENT],
+        refiner=refiner,
+    )
+    result = asyncio.run(Verifier(plugin).run(_entry(confidence=0.5), "pid"))
+    # 精炼收到的是验证修正后的内容，而不是原始内容
+    assert refiner.calls == [
+        {"topic": "测试主题", "content": "修正后的冗长内容", "provider_id": "pid"}
+    ]
+    assert result.content == "精炼后的结构化内容"
+    assert plugin.store.updates[0]["content"] == "精炼后的结构化内容"
+    assert result.debug_info["refine"] == {"refined": True, "reason": "ok"}
+
+
+def test_run_skips_refine_when_disabled():
+    """开关关闭：不调用精炼，修正内容原样入库。"""
+    refiner = _FakeRefiner(RefineResult(summary="不应出现", refined=True))
+    plugin = _FakePlugin(
+        config={"verifier_search_source": "llm", "refine_on_verify": False},
+        llm_replies=["KEYWORDS: kw", "支持方", "质疑方", _PARTIAL_WITH_CONTENT],
+        refiner=refiner,
+    )
+    result = asyncio.run(Verifier(plugin).run(_entry(confidence=0.5), "pid"))
+    assert refiner.calls == []
+    assert result.content == "修正后的冗长内容"
+    assert plugin.store.updates[0]["content"] == "修正后的冗长内容"
+    assert result.debug_info["refine"] == {"refined": False, "reason": "disabled"}
+
+
+def test_run_falls_back_to_unrefined_content_when_refine_fails():
+    """精炼失败（refined=False）：降级使用未精炼的修正内容入库。"""
+    refiner = _FakeRefiner(
+        RefineResult(summary="解析失败的兜底", reasoning="LLM 精炼失败", refined=False)
+    )
+    plugin = _FakePlugin(
+        config={"verifier_search_source": "llm", "refine_on_verify": True},
+        llm_replies=["KEYWORDS: kw", "支持方", "质疑方", _PARTIAL_WITH_CONTENT],
+        refiner=refiner,
+    )
+    result = asyncio.run(Verifier(plugin).run(_entry(confidence=0.5), "pid"))
+    assert len(refiner.calls) == 1
+    assert result.content == "修正后的冗长内容"
+    assert plugin.store.updates[0]["content"] == "修正后的冗长内容"
+    assert result.debug_info["refine"] == {
+        "refined": False,
+        "reason": "LLM 精炼失败",
+    }
+
+
+def test_run_skips_refine_when_content_unchanged():
+    """内容未被修正（correct / inconclusive）：跳过精炼，不额外消耗 LLM 调用。"""
+    refiner = _FakeRefiner(RefineResult(summary="不应出现", refined=True))
+    plugin = _FakePlugin(
+        config={"verifier_search_source": "llm", "refine_on_verify": True},
+        llm_replies=["KEYWORDS: kw", "支持方", "质疑方", _ARBITER_CORRECT],
+        refiner=refiner,
+    )
+    result = asyncio.run(Verifier(plugin).run(_entry(confidence=0.4), "pid"))
+    assert refiner.calls == []
+    assert result.content == "原始内容"
+    assert result.debug_info["refine"] == {
+        "refined": False,
+        "reason": "content_unchanged",
+    }

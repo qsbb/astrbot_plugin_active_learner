@@ -7,18 +7,6 @@
   display: none !important;
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 /* Header and page actions */
 .shell {
   max-width: 1460px;
@@ -98,28 +86,6 @@
 .search-control input {
   flex: 1;
   min-width: 180px;
-}
-
-/* Overview metrics */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.stat-card {
-  min-width: 0;
-}
-
-.stat-label {
-  margin-bottom: 5px;
-}
-
-.stat-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Diagnostics and logs */
@@ -276,17 +242,8 @@
   font-weight: 720;
 }
 
-.memory-table {
-  min-width: 960px;
-}
-
 #slang-modal .memory-table {
   min-width: 0;
-}
-
-.memory-table .col-check {
-  width: 46px;
-  text-align: center;
 }
 
 .memory-table .col-actions {
@@ -311,8 +268,7 @@
   white-space: nowrap;
 }
 
-.memory-table .cell-scope,
-.memory-table .cell-origin {
+.memory-table .cell-scope {
   color: var(--si-muted);
 }
 
@@ -321,10 +277,6 @@
   margin-right: 4px;
   padding: 5px 9px;
   font-size: 11px;
-}
-
-.memory-table tbody tr.selected {
-  background: var(--si-primary-soft);
 }
 
 .badge {
@@ -384,6 +336,7 @@
 #page-info {
   color: var(--si-muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* Dialog chrome. Surfaces and controls are supplied by series-ui.css.
@@ -425,7 +378,6 @@ body[data-series-ui] .modal-backdrop {
 /* Tabs and import panels */
 .tabs,
 .settings-tabs {
-  overflow-x: auto;
   scrollbar-width: thin;
 }
 
@@ -444,7 +396,7 @@ body[data-series-ui] .modal-backdrop {
   gap: 13px;
 }
 
-.tab-panel.active {
+.tab-panel:not([hidden]) {
   display: flex;
 }
 
@@ -517,7 +469,7 @@ textarea {
   display: none;
 }
 
-.settings-panel.active {
+.settings-panel:not([hidden]) {
   display: grid;
   gap: 14px;
 }
@@ -1184,10 +1136,6 @@ textarea {
   color: var(--si-primary-strong) !important;
 }
 
-#confidence-modal .modal-body > p::first-letter {
-  color: inherit;
-}
-
 /* Active-learning progress */
 .priority-learn-progress-wrap {
   display: flex;
@@ -1196,21 +1144,17 @@ textarea {
   margin-bottom: 16px;
 }
 
+/* 轨道的 overflow/圆角/底色与填充的 高度/圆角/渐变 由 series-ui.css 提供，这里只保留页面布局。
+   JS 通过 transform: scaleX() 驱动进度，transition 以 transform 为准（覆盖共享层的 width 过渡）。 */
 .priority-learn-progress-bar {
   flex: 1;
   height: 10px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(105, 115, 158, .14);
 }
 
 .priority-learn-progress-fill {
   width: 100%;
-  height: 100%;
   transform: scaleX(0);
   transform-origin: left center;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #7b72ff, #54c6e8);
   transition: transform 220ms cubic-bezier(.2, .7, .2, 1);
 }
 
@@ -1285,10 +1229,6 @@ textarea {
     max-width: 100%;
     justify-content: flex-start;
   }
-
-  .stats-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 760px) {
@@ -1298,10 +1238,6 @@ textarea {
 
   .search-control {
     min-width: 100%;
-  }
-
-  .stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .scope-row,
@@ -1365,10 +1301,6 @@ textarea {
 }
 
 @media (max-width: 760px) and (orientation: portrait) {
-  .desktop-stat {
-    display: none;
-  }
-
   .actions {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1401,23 +1333,6 @@ textarea {
     grid-column: 1 / -1;
   }
 
-  .stats-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 7px;
-  }
-
-  .stat-card {
-    padding: 11px 9px;
-  }
-
-  .stat-label {
-    font-size: 10px;
-  }
-
-  .stat-value {
-    font-size: 18px;
-  }
-
   .table-wrap {
     overflow: visible;
     border: 0;
@@ -1435,96 +1350,9 @@ textarea {
     order: -1;
   }
 
-  body[data-series-ui] table.memory-table,
-  body[data-series-ui] .memory-table tbody {
-    display: block;
-    width: 100%;
-    min-width: 0;
-  }
 
-  .memory-table thead {
-    display: none;
-  }
 
-  .memory-table tbody {
-    display: grid;
-    gap: 9px;
-  }
-
-  .memory-table tbody tr {
-    position: relative;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 7px 9px;
-    padding: 13px;
-    border: 1px solid var(--si-line);
-    border-radius: var(--si-radius);
-    background: rgba(255, 255, 255, .48);
-    box-shadow: var(--si-shadow-sm);
-  }
-
-  .memory-table tbody tr.selected {
-    border-color: rgba(102, 92, 246, .38);
-    background: var(--si-primary-soft);
-  }
-
-  .memory-table td {
-    display: block;
-    padding: 0;
-    border: 0;
-  }
-
-  .memory-table .empty-row {
-    display: block;
-    padding: 0;
-  }
-
-  .memory-table .empty-row td {
-    padding: 24px 12px;
-  }
-
-  .memory-table .col-check {
-    position: absolute;
-    top: 13px;
-    right: 13px;
-    z-index: 1;
-    width: auto;
-  }
-
-  .memory-table .cell-topic {
-    grid-column: 1 / -1;
-    max-width: none;
-    padding-right: 28px !important;
-    font-size: 15px;
-    white-space: normal;
-  }
-
-  .memory-table .cell-preview {
-    grid-column: 1 / -1;
-    display: -webkit-box !important;
-    max-width: none;
-    overflow: hidden;
-    line-height: 1.45;
-    white-space: normal;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-  }
-
-  .memory-table-primary td:nth-child(4),
-  .memory-table-primary td:nth-child(5),
-  .memory-table-primary td:nth-child(8) {
-    display: block;
-    grid-column: 1 / -1;
-    padding: 0 !important;
-    color: var(--si-muted);
-    font-size: 12px;
-  }
-
-  .memory-table-primary td:nth-child(4)::before { content: "作用域："; }
-  .memory-table-primary td:nth-child(5)::before { content: "来源："; }
-  .memory-table-primary td:nth-child(8)::before { content: "更新时间："; }
-
-  /* 黑话弹窗保留表格语义，不要套用主记忆表的移动卡片映射。 */
+  /* 黑话弹窗保留表格语义与紧凑排版。 */
   #slang-modal .memory-table {
     display: table;
     width: 100%;
@@ -1550,11 +1378,6 @@ textarea {
     white-space: nowrap;
   }
 
-  #slang-modal .memory-table .col-check {
-    position: static;
-    width: auto;
-  }
-
   #slang-modal .memory-table .col-actions {
     display: table-cell !important;
     width: auto;
@@ -1568,36 +1391,10 @@ textarea {
     padding: 5px 7px;
   }
 
-  .memory-table td:nth-child(6),
-  .memory-table td:nth-child(7) {
-    align-self: center;
-    font-size: 12px;
-  }
-
-  .memory-table .col-actions {
-    grid-column: 1 / -1;
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-    width: auto;
-    padding-top: 4px !important;
-  }
-
-  .memory-table .col-actions button {
-    width: 100%;
-    min-width: 0;
-    margin: 0;
-    padding-right: 4px;
-    padding-left: 4px;
-  }
 }
 
 @media (max-width: 420px) {
   .actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1637,15 +1434,6 @@ textarea {
   .controls {
     margin: 10px 0;
     gap: 8px;
-  }
-
-  .stats-grid {
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-
-  .stat-card {
-    padding: 10px 12px;
   }
 }
 
@@ -1752,10 +1540,6 @@ body[data-series-ui] .topbar-inner {
   flex: 0 0 auto;
 }
 
-.memory-card-wrap {
-  overflow: visible;
-}
-
 .memory-list-head {
   display: flex;
   align-items: baseline;
@@ -1773,11 +1557,7 @@ body[data-series-ui] .topbar-inner {
 .memory-list-sort {
   color: var(--si-muted);
   font-size: 12px;
-}
-
-.memory-list-sort b {
-  color: var(--si-ink);
-  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .memory-list {

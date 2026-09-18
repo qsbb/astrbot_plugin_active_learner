@@ -180,6 +180,8 @@ body[data-series-ui] button), :where(body[data-series-ui] .btn), body[data-serie
   font: inherit;
   font-weight: 650;
   cursor: pointer;
+  /* 按钮文字永不从词语中间断行；中文 min-content 只有 1 字宽，缺了这条就会被 flex 挤压断字 */
+  white-space: nowrap;
   transition: transform var(--si-transition), box-shadow var(--si-transition), border-color var(--si-transition), background var(--si-transition), color var(--si-transition);
 }
 :where(body[data-series-ui] button:hover), :where(body[data-series-ui] .btn:hover), :where(body[data-series-ui] .button:hover) { transform: translateY(-1px); border-color: rgba(102,92,246,.42); color: var(--si-primary-strong); box-shadow: 0 9px 24px rgba(77,84,142,.13); }

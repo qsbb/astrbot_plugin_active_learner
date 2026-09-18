@@ -5,6 +5,8 @@
 2. LLM 自辩论 2 轮（支持方 → 质疑方 → 仲裁）
 3. 交叉验证：≥2 个独立来源结论一致才升 verified=True
 4. 版本快照：内容发生任何变化或置信度下降 >0.15 时写 memory_versions
+5. 验证时精炼（refine_on_verify 开启且内容被修正时）：对修正结果做一次
+   保持事实不变的结构化精简后入库；失败降级为未精炼内容。
 """
 
 from __future__ import annotations
@@ -164,6 +166,13 @@ class Verifier:
         elif debate_result.verdict == "partial" and debate_result.content:
             new_content = debate_result.content
 
+        # 6.5 验证时精炼：内容被修正且开关开启时，对修正结果做一次
+        # 保持事实不变的结构化精简；任何失败都降级为未精炼内容入库。
+        new_content, refine_info = await self._maybe_refine_verified(
+            topic, entry, new_content, provider_id
+        )
+        debug_info["refine"] = refine_info
+
         # 7. 版本快照 + 更新记忆
         verified = (
             debate_result.verdict in ("correct", "partial")
@@ -199,6 +208,40 @@ class Verifier:
         )
 
     # ---------- 内部方法 ----------
+
+    async def _maybe_refine_verified(
+        self,
+        topic: str,
+        entry: MemoryEntry,
+        new_content: str,
+        provider_id: str,
+    ) -> tuple[str, dict]:
+        """验证修正后的内容按需精炼（refine_on_verify）。
+
+        返回 (最终入库内容, {"refined": bool, "reason": str})。
+        仅在内容被验证修正、开关开启且 provider 可用时调用 LLM；
+        任何失败都降级为未精炼内容，绝不影响验证主流程。
+        """
+        if new_content == entry.content:
+            return new_content, {"refined": False, "reason": "content_unchanged"}
+        if not self._plugin.config_manager.get("refine_on_verify", True):
+            return new_content, {"refined": False, "reason": "disabled"}
+        if not provider_id:
+            return new_content, {"refined": False, "reason": "no_provider"}
+
+        try:
+            result = await self._plugin.refiner.refine_verified(
+                topic, new_content, provider_id
+            )
+        except Exception as e:
+            logger.debug(f"验证时精炼异常，使用未精炼内容 ({topic}): {e}")
+            return new_content, {"refined": False, "reason": f"error: {e}"}
+        if result is not None and result.refined and result.summary:
+            logger.info(f"✂️ 验证时精炼完成: {topic}（{len(new_content)} → {len(result.summary)} 字）")
+            return result.summary, {"refined": True, "reason": "ok"}
+        reason = getattr(result, "reasoning", "") or "refine_failed"
+        logger.debug(f"验证时精炼降级，使用未精炼内容 ({topic}): {reason}")
+        return new_content, {"refined": False, "reason": reason}
 
     async def _extract_keywords(
         self, topic: str, claim: str, provider_id: str

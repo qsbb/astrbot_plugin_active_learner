@@ -5,7 +5,7 @@ const notify = (message, error = false) => {
     window.SeriesUI.toast(message, error ? "error" : "info");
     return;
   }
-  const fallback = document.querySelector("[data-toast-fallback], #bridge-error, #startup-error, #page-error");
+  const fallback = document.querySelector("[data-toast-fallback]");
   if (fallback) {
     fallback.textContent = String(message || "");
     fallback.hidden = false;
@@ -14,7 +14,33 @@ const notify = (message, error = false) => {
   }
 };
 
-const showUnsavedConfirm = window.SeriesUI.confirm;
+// 惰性获取：顶层直接解引用 window.SeriesUI.confirm 会在共享层加载失败时拖垮整个模块，
+// 也让 _confirmModal 的 DOM 回退永不可达。
+const showUnsavedConfirm = (opts) =>
+  window.SeriesUI?.confirm ? window.SeriesUI.confirm(opts) : Promise.resolve(false);
+
+// HTML 转义统一走共享层 SeriesUI；共享层未加载时用最小兜底，避免整页脚本失效。
+const _HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const _escapeHtmlMinimal = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (ch) => _HTML_ESCAPES[ch]);
+const escapeHtml = (...args) =>
+  (window.SeriesUI?.escapeHtml || _escapeHtmlMinimal)(...args);
+const escapeHtmlAttr = (...args) =>
+  (window.SeriesUI?.escapeHtmlAttr || _escapeHtmlMinimal)(...args);
+
+// 按钮忙碌态统一走共享层 SeriesUI.setBusy；返回恢复函数。共享层缺失时本地兜底。
+function withBusy(btn, label = "") {
+  if (window.SeriesUI?.setBusy) return window.SeriesUI.setBusy(btn, true, label);
+  if (!btn) return () => {};
+  const prevText = btn.textContent;
+  const prevDisabled = btn.disabled;
+  btn.disabled = true;
+  if (label) btn.textContent = label;
+  return () => {
+    btn.disabled = prevDisabled;
+    if (label) btn.textContent = prevText;
+  };
+}
 
 function hasUnsavedChanges() {
   return Boolean(configState?.dirty);
@@ -193,8 +219,6 @@ async function loadMemories() {
     }
     renderTable(data.items || []);
     renderPagination();
-    const countEl = document.getElementById("memory-count");
-    if (countEl) countEl.textContent = String(state.total);
   } catch (e) {
     tbody.setAttribute("aria-busy", "false");
     tbody.innerHTML = `<div class="empty-row">加载失败：${escapeHtml(e.message)}</div>`;
@@ -213,7 +237,7 @@ function formatOrigin(origin) {
     return fn ? `导入:${fn}` : "导入";
   }
   if (origin.startsWith("kb:")) return `知识库:${origin.slice(3)}`;
-  if (origin.startsWith("priority_learn") || origin === "priority_learn") return "主动学习";
+  if (origin.startsWith("priority_learn")) return "主动学习";
   if (origin.startsWith("search_learn")) return "搜索学习";
   if (origin.startsWith("verify")) return "交叉验证";
   // 未知来源不再直接回显内部键名，避免用户看到英文/下划线值。
@@ -357,11 +381,7 @@ async function _batchDelete(ids) {
   if (!ids.length) return;
   const confirmed = await _confirmModal(`确定删除选中的 ${ids.length} 条记忆？此操作不可恢复。`);
   if (!confirmed) return;
-  const btn = document.getElementById("btn-batch-delete");
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "删除中…";
-  }
+  const restoreBusy = withBusy(document.getElementById("btn-batch-delete"), "删除中…");
   let ok = 0, fail = 0;
   // 并发执行（最多 4 个同时请求），避免条目多时长时间串行等待
   const CONCURRENCY = 4;
@@ -379,10 +399,7 @@ async function _batchDelete(ids) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = "批量删除";
-  }
+  restoreBusy();
   notify(`批量删除完成：${ok} 条成功${fail ? `，${fail} 条失败` : ""}`, fail > 0);
   state.selectedIds.clear();
   await Promise.all([loadMemories(), loadStats()]);
@@ -399,15 +416,11 @@ async function batchVerifySelected() {
     return;
   }
   const confirmed = await _confirmModal(
-    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。\n将由后端并发异步同时处理。`,
+    `确定对选中的 ${ids.length} 条记忆执行批量验证？\n每条验证会调用 LLM + 搜索，可能耗时较长。`,
     "确认验证"
   );
   if (!confirmed) return;
-  const btn = document.getElementById("btn-batch-verify");
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "验证中…";
-  }
+  const restoreBusy = withBusy(document.getElementById("btn-batch-verify"), "验证中…");
   const providerSelect = document.getElementById("settings-provider");
   const providerId = providerSelect ? providerSelect.value : "";
 
@@ -424,10 +437,7 @@ async function batchVerifySelected() {
     notify(`批量验证失败: ${e.message}`, true);
   }
 
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = "批量验证";
-  }
+  restoreBusy();
   state.selectedIds.clear();
   await Promise.all([loadMemories(), loadStats()]);
 }
@@ -438,14 +448,12 @@ async function batchEnrichSelected() {
     notify("请先选择需要补充信息的记忆", true);
     return;
   }
-  const CONCURRENCY = 3;
   const confirmed = await _confirmModal(
-    `确定对选中的 ${ids.length} 条记忆执行补充信息？\n每条会搜索网络 + LLM 提取新信息，可能耗时较长。\n将并发执行（最多 ${CONCURRENCY} 条同时搜索）。`,
+    `确定对选中的 ${ids.length} 条记忆执行补充信息？\n每条会搜索网络 + LLM 提取新信息，可能耗时较长。`,
     "确认补充"
   );
   if (!confirmed) return;
-  const btn = document.getElementById("btn-batch-enrich");
-  if (btn) btn.disabled = true;
+  const restoreBusy = withBusy(document.getElementById("btn-batch-enrich"), "补充中…");
   const providerSelect = document.getElementById("settings-provider");
   const providerId = providerSelect ? providerSelect.value : "";
 
@@ -470,10 +478,7 @@ async function batchEnrichSelected() {
     notify(`补充信息失败: ${e.message}`, true);
   }
 
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = "补充信息";
-  }
+  restoreBusy();
   state.selectedIds.clear();
   await Promise.all([loadMemories(), loadStats()]);
 }
@@ -484,14 +489,13 @@ function renderPagination() {
   document.getElementById("page-next").disabled = state.page >= state.totalPages;
 }
 
-function escapeHtml(s) {
-  if (s == null) return "";
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+
+// 详情弹窗「来源」一行同时承载产生方式与来源链接，避免两行语义重叠
+function _mergeSourceText(entry) {
+  const originLabel = formatOrigin(entry.origin);
+  const sourceText = String(entry.source || "").trim();
+  if (sourceText && entry.origin) return `${originLabel} · ${sourceText}`;
+  return sourceText || originLabel;
 }
 
 async function showDetail(entryId) {
@@ -518,8 +522,7 @@ async function showDetail(entryId) {
         <div class="detail-row"><div class="detail-label">状态</div><div class="detail-value">${verifiedBadge(entry)}</div></div>
         <div class="detail-row"><div class="detail-label">被质疑</div><div class="detail-value">${entry.challenge_count || 0} 次</div></div>
         <div class="detail-row"><div class="detail-label">访问次数</div><div class="detail-value">${entry.access_count || 0}</div></div>
-        <div class="detail-row"><div class="detail-label">来源</div><div class="detail-value">${escapeHtml(entry.source || "—")}</div></div>
-        <div class="detail-row"><div class="detail-label">创建来源</div><div class="detail-value">${formatOrigin(entry.origin)}</div></div>
+        <div class="detail-row"><div class="detail-label">来源</div><div class="detail-value">${escapeHtml(_mergeSourceText(entry))}</div></div>
         <div class="detail-row"><div class="detail-label">关键词</div><div class="detail-value">${escapeHtml(kw)}</div></div>
         <div class="detail-row"><div class="detail-label">创建时间</div><div class="detail-value">${formatTime(entry.created_at)}</div></div>
         <div class="detail-row"><div class="detail-label">更新时间</div><div class="detail-value">${formatTime(entry.updated_at)}</div></div>
@@ -567,11 +570,7 @@ function closeModal() {
 }
 
 async function verifyMemory(entryId, btn) {
-  const original = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "验证中…";
-  }
+  const restoreBusy = withBusy(btn, "验证中…");
   const providerSelect = document.getElementById("settings-provider");
   const providerId = providerSelect ? providerSelect.value : "";
   try {
@@ -587,10 +586,7 @@ async function verifyMemory(entryId, btn) {
   } catch (e) {
     notify(`验证失败：${e.message}`, true);
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    restoreBusy();
   }
 }
 
@@ -754,6 +750,9 @@ async function loadDebug() {
     ].map(([label, value]) =>
       `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(formatDebugValue(value))}</dd>`
     ).join("");
+    // 「关心领域」已在上方概览与「当前配置」中展示；运行值与配置值相同时不重复列出
+    const priorityTopicsSame =
+      JSON.stringify(runtime.priority_topics ?? null) === JSON.stringify(cfg.priority_topics ?? null);
     const runtimeRows = [
       ["学习权重", runtime.learn_weight],
       ["搜索条数", runtime.search_top_k],
@@ -762,7 +761,7 @@ async function loadDebug() {
       ["分块重叠", runtime.chunk_overlap],
       ["主动学习提示", runtime.enable_active_learn_hint],
       ["联网搜索", runtime.enable_web_search],
-      ["关心领域", runtime.priority_topics],
+      ...(priorityTopicsSame ? [] : [["关心领域", runtime.priority_topics]]),
       ["知识领域范围", runtime.knowledge_domain_scope],
       ["允许跨领域", runtime.enable_cross_domain],
     ].map(([label, value]) =>
@@ -1067,14 +1066,61 @@ function bindEvents() {
 
 // ---------- Settings Modal ----------
 
+// providers 只在 LLM 标签页需要，url_sources 只在 URL 来源标签页需要：
+// 每次打开弹窗重置惰性标记，从「全部配置」进入时不发这两个请求。
+let _settingsLazy = { providers: false, urlSources: false };
+let _settingsTabsApi = null;
+
 function openSettingsModal(tabName = "llm") {
   const modal = document.getElementById("settings-modal");
   modal.classList.remove("hidden");
-  switchSettingsTab(tabName);
-  const tasks = [loadProviderSettings(), loadUrlSources()];
-  Promise.all(tasks).catch((e) => {
+  _settingsLazy = { providers: false, urlSources: false };
+  activateSettingsTab(tabName);
+  loadSettings().catch((e) => {
     notify(`加载设置失败: ${e.message}`, true);
   });
+}
+
+function currentSettingsTab() {
+  return document.querySelector("#settings-modal .settings-tab.active")?.dataset.tab || "llm";
+}
+
+function activateSettingsTab(tabName) {
+  if (_settingsTabsApi) _settingsTabsApi.activate(tabName);
+  onSettingsTabActivated(tabName);
+}
+
+// tab 激活后的页面侧副作用：页脚显隐、全部配置懒加载、providers/url_sources 惰性加载
+function onSettingsTabActivated(tabName) {
+  const advanced = tabName === "advanced";
+  const footer = document.getElementById("settings-footer");
+  if (footer) footer.hidden = advanced;
+  if (tabName === "llm" && !_settingsLazy.providers) {
+    _settingsLazy.providers = true;
+    loadProviders()
+      .then(() => {
+        // Provider 列表可能晚于设置到达，重新应用已配置的选中值
+        const select = document.getElementById("settings-provider");
+        if (select) select.value = state.settings.llm_provider_id || "";
+      })
+      .catch((e) => notify(`加载 Provider 列表失败: ${e.message}`, true));
+  }
+  if (tabName === "sources" && !_settingsLazy.urlSources) {
+    _settingsLazy.urlSources = true;
+    loadUrlSources().catch((e) => notify(`加载 URL 来源失败: ${e.message}`, true));
+  }
+  if (advanced && (!configState.fields.length || (!configState.dirty && configState.stale))) {
+    loadConfigSchema().catch((e) => notify(`加载配置失败: ${e.message}`, true));
+  }
+}
+
+// 有未保存改动时的异步守卫切换：确认放弃后才激活目标 tab
+async function guardedSettingsTabSwitch(tabName, focusTab) {
+  if (currentSettingsTab() === tabName) return;
+  if (!await confirmDiscardChanges()) return;
+  if (hasUnsavedChanges()) discardConfigChanges();
+  activateSettingsTab(tabName);
+  if (focusTab) focusTab.focus();
 }
 
 function discardConfigChanges() {
@@ -1357,11 +1403,7 @@ async function saveSettings() {
     enable_cross_domain: document.getElementById("settings-enable-cross-domain").checked,
     cross_domain_exclude_admin: document.getElementById("settings-cross-domain-exclude-admin").checked,
   };
-  const saveBtn = document.getElementById("settings-save");
-  if (saveBtn) {
-    saveBtn.disabled = true;
-    saveBtn.textContent = "保存中…";
-  }
+  const restoreBusy = withBusy(document.getElementById("settings-save"), "保存中…");
   try {
     const result = await bridge.apiPost("settings", payload);
     state.settings = {
@@ -1392,55 +1434,34 @@ async function saveSettings() {
   } catch (e) {
     notify(`保存失败: ${e.message}`, true);
   } finally {
-    if (saveBtn) {
-      saveBtn.disabled = false;
-      saveBtn.textContent = "保存";
-    }
+    restoreBusy();
   }
 }
 
-async function switchSettingsTab(tabName) {
-  const current = document.querySelector(".settings-tab.active")?.dataset.tab;
-  if (current && current !== tabName) {
-    if (!await confirmDiscardChanges()) return false;
-    if (hasUnsavedChanges()) discardConfigChanges();
+// 三套 tab（设置 / 导入 / 黑话）的点击切换与方向键导航统一走共享层 SeriesUI.bindTabs；
+// 共享层缺失时退化为仅点击切换的最小实现，保证弹窗可用。
+function bindPageTabs(root, tabSelector, panelSelector) {
+  if (window.SeriesUI?.bindTabs) {
+    return window.SeriesUI.bindTabs(root, tabSelector, panelSelector, "data-tab");
   }
-  document.querySelectorAll(".settings-tab").forEach((btn) => {
-    const active = btn.dataset.tab === tabName;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
-    btn.tabIndex = active ? 0 : -1;
-  });
-  document.querySelectorAll(".settings-panel").forEach((panel) => {
-    const active = panel.dataset.panel === tabName;
-    panel.classList.toggle("active", active);
-    panel.setAttribute("aria-hidden", String(!active));
-    panel.hidden = !active;
-  });
-  const advanced = tabName === "advanced";
-  const footer = document.getElementById("settings-footer");
-  if (footer) footer.hidden = advanced;
-  if (advanced && (!configState.fields.length || (!configState.dirty && configState.stale))) {
-    loadConfigSchema().catch((e) => notify(`加载配置失败: ${e.message}`, true));
-  }
-  return true;
-}
-
-function bindTabKeyboardNavigation(selector, activate) {
-  const tabs = Array.from(document.querySelectorAll(selector));
-  tabs.forEach((tab, index) => {
-    tab.addEventListener("keydown", async (event) => {
-      let nextIndex = null;
-      if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % tabs.length;
-      if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + tabs.length) % tabs.length;
-      if (event.key === "Home") nextIndex = 0;
-      if (event.key === "End") nextIndex = tabs.length - 1;
-      if (nextIndex === null) return;
-      event.preventDefault();
-      const nextTab = tabs[nextIndex];
-      if (await activate(nextTab.dataset.tab)) nextTab.focus();
+  const scope = root || document;
+  const tabs = Array.from(scope.querySelectorAll(tabSelector));
+  const panels = Array.from(scope.querySelectorAll(panelSelector));
+  const activate = (value) => {
+    tabs.forEach((tab) => {
+      const active = tab.dataset.tab === value;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
     });
-  });
+    panels.forEach((panel) => {
+      panel.hidden = panel.dataset.panel !== value;
+    });
+  };
+  tabs.forEach((tab) => tab.addEventListener("click", () => activate(tab.dataset.tab)));
+  const initial = tabs.find((tab) => tab.classList.contains("active")) || tabs[0];
+  if (initial) activate(initial.dataset.tab);
+  return { activate };
 }
 
 function bindSettingsEvents() {
@@ -1464,12 +1485,42 @@ function bindSettingsEvents() {
     configState.dirty = true;
   });
   document.getElementById("btn-refresh-providers").addEventListener("click", loadProviderSettings);
-  document.querySelectorAll(".settings-tab").forEach((btn) => {
-    btn.addEventListener("click", () => switchSettingsTab(btn.dataset.tab));
+  // tab 的点击切换与方向键导航交给共享层；本页只叠加未保存守卫与惰性加载副作用。
+  const settingsModalEl = document.getElementById("settings-modal");
+  const settingsTablist = settingsModalEl.querySelector(".settings-tabs");
+  _settingsTabsApi = bindPageTabs(settingsModalEl, ".settings-tab", ".settings-panel");
+  const TAB_NAV_KEYS = ["ArrowRight", "ArrowLeft", "Home", "End"];
+  // capture 阶段拦截：有未保存改动时阻止共享层同步激活，确认后手动激活
+  settingsTablist.addEventListener("click", (event) => {
+    const tab = event.target.closest(".settings-tab");
+    if (!tab || !hasUnsavedChanges() || tab.dataset.tab === currentSettingsTab()) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    guardedSettingsTabSwitch(tab.dataset.tab, tab);
+  }, true);
+  settingsTablist.addEventListener("keydown", (event) => {
+    const tab = event.target.closest(".settings-tab");
+    if (!tab || !hasUnsavedChanges() || !TAB_NAV_KEYS.includes(event.key)) return;
+    const tabs = Array.from(settingsModalEl.querySelectorAll(".settings-tab"));
+    const index = tabs.indexOf(tab);
+    if (index < 0) return;
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    guardedSettingsTabSwitch(tabs[next].dataset.tab, tabs[next]);
+  }, true);
+  // 无守卫路径（无未保存改动）：共享层已同步激活，这里补副作用
+  settingsTablist.addEventListener("click", (event) => {
+    const tab = event.target.closest(".settings-tab");
+    if (tab) onSettingsTabActivated(tab.dataset.tab);
   });
-  bindTabKeyboardNavigation(".settings-tab", switchSettingsTab);
-  // 初始化 aria-selected
-  switchSettingsTab(document.querySelector(".settings-tab.active")?.dataset.tab || "llm");
+  settingsTablist.addEventListener("keydown", (event) => {
+    if (TAB_NAV_KEYS.includes(event.key)) onSettingsTabActivated(currentSettingsTab());
+  });
   bindDomainScopeTags();
   document.getElementById("settings-provider").addEventListener("change", (e) => {
     updateNoProviderHint(e.target.value, state.providers.effective);
@@ -1523,21 +1574,6 @@ function showImportResult(html, isError = false) {
   el.classList.remove("hidden");
 }
 
-function switchImportTab(tabName) {
-  document.querySelectorAll("#import-modal .tab-btn").forEach((btn) => {
-    const active = btn.dataset.tab === tabName;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
-    btn.tabIndex = active ? 0 : -1;
-  });
-  document.querySelectorAll("#import-modal .tab-panel").forEach((panel) => {
-    const active = panel.dataset.panel === tabName;
-    panel.classList.toggle("active", active);
-    panel.setAttribute("aria-hidden", String(!active));
-    panel.hidden = !active;
-  });
-}
-
 async function submitImportText(form) {
   const payload = {
     topic: form.topic.value.trim(),
@@ -1560,18 +1596,46 @@ async function submitImportText(form) {
   }
 }
 
+// 文件 → base64：分块转换避免大文件栈溢出
+async function fileToBase64(file) {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+// 分块/批量导入结果的统一渲染：标题行 + 逐条成功/失败明细
+function renderChunkResults(header, results, renderItem) {
+  const lines = [header];
+  if (results && results.length) {
+    lines.push('<ul class="import-detail-list">');
+    for (const r of results) lines.push(renderItem(r));
+    lines.push("</ul>");
+  }
+  return lines.join("");
+}
+
+const _chunkResultItem = (r) =>
+  r.ok
+    ? `<li>✅ ${escapeHtml(r.topic || "")} (chunk #${r.chunk})</li>`
+    : `<li>❌ chunk #${r.chunk}：${escapeHtml(r.error || "未知错误")}</li>`;
+
+const _zipFileResultItem = (r) =>
+  r.ok
+    ? `<li>✅ ${escapeHtml(r.file)} → ${escapeHtml(r.topic || "")}</li>`
+    : `<li>❌ ${escapeHtml(r.file)}：${escapeHtml(r.error || "未知错误")}</li>`;
+
 async function submitImportMd(form) {
   const file = form.file.files[0];
   if (!file) {
     showImportResult("❌ 请选择 Markdown 文件", true);
     return;
   }
-  const btn = form.querySelector('button[type="submit"]');
-  const original = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "导入中…";
-  }
+  const restoreBusy = withBusy(form.querySelector('button[type="submit"]'), "导入中…");
   try {
     const content = await file.text();
     const payload = {
@@ -1589,21 +1653,11 @@ async function submitImportMd(form) {
     if (result.entry) {
       showImportResult(`✅ 已导入：<strong>${escapeHtml(result.entry.topic)}</strong>`);
     } else if (result.total != null) {
-      const lines = [
+      showImportResult(renderChunkResults(
         `✅ 分块导入完成：成功 ${result.success} / 总计 ${result.total}（失败 ${result.failed}）`,
-      ];
-      if (result.results && result.results.length) {
-        lines.push('<ul class="import-detail-list">');
-        for (const r of result.results) {
-          if (r.ok) {
-            lines.push(`<li>✅ ${escapeHtml(r.topic || "")} (chunk #${r.chunk})</li>`);
-          } else {
-            lines.push(`<li>❌ chunk #${r.chunk}：${escapeHtml(r.error || "未知错误")}</li>`);
-          }
-        }
-        lines.push("</ul>");
-      }
-      showImportResult(lines.join(""));
+        result.results,
+        _chunkResultItem,
+      ));
     } else {
       showImportResult("✅ 已导入");
     }
@@ -1612,10 +1666,7 @@ async function submitImportMd(form) {
   } catch (e) {
     showImportResult(`❌ 导入失败：${escapeHtml(e.message || String(e))}`, true);
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    restoreBusy();
   }
 }
 
@@ -1625,21 +1676,9 @@ async function submitImportFile(form, endpoint, label) {
     showImportResult(`❌ 请选择${label}文件`, true);
     return;
   }
-  const btn = form.querySelector('button[type="submit"]');
-  const original = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "导入中…";
-  }
+  const restoreBusy = withBusy(form.querySelector('button[type="submit"]'), "导入中…");
   try {
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-    }
-    const base64 = btoa(binary);
+    const base64 = await fileToBase64(file);
     const payload = {
       filename: file.name,
       base64,
@@ -1650,30 +1689,17 @@ async function submitImportFile(form, endpoint, label) {
       chunk_overlap: parseInt(form.chunk_overlap?.value || "50", 10),
     };
     const result = await bridge.apiPost(endpoint, payload);
-    const lines = [
+    showImportResult(renderChunkResults(
       `✅ ${label}分块导入完成：成功 ${result.success} / 总计 ${result.total}（失败 ${result.failed}）`,
-    ];
-    if (result.results && result.results.length) {
-      lines.push('<ul class="import-detail-list">');
-      for (const r of result.results) {
-        if (r.ok) {
-          lines.push(`<li>✅ ${escapeHtml(r.topic || "")} (chunk #${r.chunk})</li>`);
-        } else {
-          lines.push(`<li>❌ chunk #${r.chunk}：${escapeHtml(r.error || "未知错误")}</li>`);
-        }
-      }
-      lines.push("</ul>");
-    }
-    showImportResult(lines.join(""));
+      result.results,
+      _chunkResultItem,
+    ));
     form.reset();
     await refreshAll();
   } catch (e) {
     showImportResult(`❌ ${label}导入失败：${escapeHtml(e.message || String(e))}`, true);
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    restoreBusy();
   }
 }
 
@@ -1683,21 +1709,9 @@ async function submitImportZip(form) {
     showImportResult("❌ 请选择 ZIP 文件", true);
     return;
   }
-  const btn = form.querySelector('button[type="submit"]');
-  const original = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "导入中…";
-  }
+  const restoreBusy = withBusy(form.querySelector('button[type="submit"]'), "导入中…");
   try {
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-    }
-    const base64 = btoa(binary);
+    const base64 = await fileToBase64(file);
     const payload = {
       filename: file.name,
       base64,
@@ -1706,42 +1720,24 @@ async function submitImportZip(form) {
       refine: form.refine.checked,
     };
     const result = await bridge.apiPost("import_zip", payload);
-    const lines = [
+    showImportResult(renderChunkResults(
       `✅ 批量导入完成：成功 ${result.success} / 总计 ${result.total}（失败 ${result.failed}）`,
-    ];
-    if (result.results && result.results.length) {
-      lines.push('<ul class="import-detail-list">');
-      for (const r of result.results) {
-        if (r.ok) {
-          lines.push(`<li>✅ ${escapeHtml(r.file)} → ${escapeHtml(r.topic || "")}</li>`);
-        } else {
-          lines.push(`<li>❌ ${escapeHtml(r.file)}：${escapeHtml(r.error || "未知错误")}</li>`);
-        }
-      }
-      lines.push("</ul>");
-    }
-    showImportResult(lines.join(""));
+      result.results,
+      _zipFileResultItem,
+    ));
     form.reset();
     await refreshAll();
   } catch (e) {
     showImportResult(`❌ 批量导入失败：${escapeHtml(e.message || String(e))}`, true);
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    restoreBusy();
   }
 }
 
 function bindImportEvents() {
   document.getElementById("btn-import").addEventListener("click", openImportModal);
 
-  document.querySelectorAll("#import-modal .tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => switchImportTab(btn.dataset.tab));
-  });
-  bindTabKeyboardNavigation("#import-modal .tab-btn", switchImportTab);
-  // 初始化 aria-selected
-  switchImportTab(document.querySelector("#import-modal .tab-btn.active")?.dataset.tab || "text");
+  bindPageTabs(document.getElementById("import-modal"), ".tab-btn", ".tab-panel");
 
   document
     .querySelectorAll("#import-modal .modal-close, #import-modal .modal-backdrop")
@@ -1942,17 +1938,6 @@ function configInputAttrs(f) {
   return `type="text"`;
 }
 
-function escapeHtmlAttr(v) {
-  if (v == null) return "";
-  if (typeof v === "boolean") return v ? "true" : "false";
-  return String(v).replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#39;"
-  })[ch]);
-}
 
 function collectConfigPayload() {
   const payload = {};
@@ -1990,21 +1975,13 @@ function cssEscape(name) {
 }
 
 async function saveConfig() {
-  const btn = document.getElementById("config-save");
-  const original = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "保存中…";
-  }
+  const restoreBusy = withBusy(document.getElementById("config-save"), "保存中…");
   let payload;
   try {
     payload = collectConfigPayload();
   } catch (e) {
     notify(`校验失败：${e.message}`, true);
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    restoreBusy();
     return;
   }
   try {
@@ -2026,10 +2003,7 @@ async function saveConfig() {
   } catch (e) {
     notify(`保存失败：${escapeHtml(e.message || String(e))}`, true);
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    restoreBusy();
   }
 }
 
@@ -2192,7 +2166,7 @@ async function startPriorityLearn() {
   }
 
   if (!topics.length) {
-    notify("未设置关心领域，请先在「📋 配置」中设置 priority_topics", true);
+    notify("未设置关心领域，请在 全部配置 → 主动学习 → 关心领域 中设置", true);
     return;
   }
 
@@ -2322,6 +2296,11 @@ function closeBuiltinKbModal() {
   document.getElementById("builtin-kb-modal").classList.add("hidden");
 }
 
+// 5xx 通常是上游 AstrBot 内部失败，详情在后端日志；引导语统一从这里出
+function serverErrorHint(msg) {
+  return String(msg || "").includes("status code 5") ? "（详细错误见下方插件日志）" : "";
+}
+
 function showBuiltinKbError(msg) {
   const errBox = document.getElementById("builtin-kb-error");
   if (!errBox) return;
@@ -2339,7 +2318,7 @@ async function loadBuiltinKbList() {
     listEl.innerHTML = "";
     const msg = e.message || String(e);
     const hint = msg.includes("status code 5")
-      ? "（详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看）"
+      ? serverErrorHint(msg)
       : "";
     showBuiltinKbError(`读取知识库列表失败：${escapeHtml(msg)}${hint}`);
   }
@@ -2394,7 +2373,7 @@ async function loadBuiltinKbDocuments(kbId) {
     docsEl.innerHTML = "";
     const msg = e.message || String(e);
     const hint = msg.includes("status code 5")
-      ? "（详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看）"
+      ? serverErrorHint(msg)
       : "";
     showBuiltinKbError(`读取文档列表失败：${escapeHtml(msg)}${hint}`);
   }
@@ -2499,10 +2478,7 @@ async function importBuiltinKb() {
     return;
   }
 
-  const btn = document.getElementById("builtin-kb-import");
-  const original = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "导入中…";
+  const restoreBusy = withBusy(document.getElementById("builtin-kb-import"), "导入中…");
   const progressEl = document.getElementById("builtin-kb-progress");
   progressEl.classList.remove("hidden");
   progressEl.classList.remove("error");
@@ -2543,13 +2519,12 @@ async function importBuiltinKb() {
     progressEl.classList.add("error");
     const errMsg = e.message || String(e);
     const hint = errMsg.includes("status code 5")
-      ? "（详细错误已记录到 AstrBot 日志，可在 data/logs/ 查看）"
+      ? serverErrorHint(errMsg)
       : "";
     progressEl.innerHTML = `<p>❌ 导入失败：${escapeHtml(errMsg)}${hint}</p>`;
     notify(`导入失败：${errMsg}`, true);
   } finally {
-    btn.disabled = false;
-    btn.textContent = original;
+    restoreBusy();
   }
 }
 
@@ -2577,21 +2552,6 @@ function openSlangModal() {
 
 function closeSlangModal() {
   document.getElementById("slang-modal").classList.add("hidden");
-}
-
-function switchSlangTab(tabName) {
-  document.querySelectorAll("#slang-modal .tab-btn").forEach((btn) => {
-    const active = btn.dataset.tab === tabName;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
-    btn.tabIndex = active ? 0 : -1;
-  });
-  document.querySelectorAll("#slang-modal .tab-panel").forEach((panel) => {
-    const active = panel.dataset.panel === tabName;
-    panel.classList.toggle("active", active);
-    panel.setAttribute("aria-hidden", String(!active));
-    panel.hidden = !active;
-  });
 }
 
 async function loadSlangData() {
@@ -2699,7 +2659,7 @@ async function slangAction(act, btn) {
   } else {
     return;
   }
-  btn.disabled = true;
+  const restoreBusy = withBusy(btn);
   try {
     const result = await bridge.apiPost(endpoint, payload);
     notify(result.msg || "操作完成", result.ok === false);
@@ -2707,7 +2667,7 @@ async function slangAction(act, btn) {
   } catch (e) {
     notify(`操作失败: ${e.message}`, true);
   } finally {
-    btn.disabled = false;
+    restoreBusy();
   }
 }
 
@@ -2721,12 +2681,7 @@ function bindSlangEvents() {
   document.getElementById("slang-refresh").addEventListener("click", () => {
     loadSlangData().catch((e) => notify(`加载黑话数据失败: ${e.message}`, true));
   });
-  document.querySelectorAll("#slang-modal .tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => switchSlangTab(btn.dataset.tab));
-  });
-  bindTabKeyboardNavigation("#slang-modal .tab-btn", switchSlangTab);
-  // 初始化 aria-selected
-  switchSlangTab(document.querySelector("#slang-modal .tab-btn.active")?.dataset.tab || "candidates");
+  bindPageTabs(document.getElementById("slang-modal"), ".tab-btn", ".tab-panel");
   // 三张表共用事件委托
   document.querySelectorAll("#slang-modal tbody").forEach((tbody) => {
     tbody.addEventListener("click", (e) => {

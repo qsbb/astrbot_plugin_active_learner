@@ -42,7 +42,7 @@ from .runtime import (
 class RetrievalMixin:
     """检索侧行为。由 ActiveLearnerPlugin 混入，依赖宿主的 store/embedder 等属性。"""
 
-    # ---- Phase 2: retrieval & embedding caches ----
+    # ---- 检索与嵌入缓存 ----
     # TTL-based caches to avoid redundant embedding API calls and
     # repeated searches for the same query+scope within a short window.
     _retrieval_cache: dict = {}
@@ -353,7 +353,7 @@ class RetrievalMixin:
         """并发启动整句 FTS/Embedding，必要时合并并逐个补查缺失对象。"""
         t_total = _time_module.perf_counter()
 
-        # Phase 2: retrieval cache check (uses hash of query for privacy)
+        # 检索缓存检查（查询哈希，保护隐私）
         cache_key = f"{scope.scope_type}:{scope.scope_id}:{hash(query)}"
         now = _time_module.monotonic()
         cached = self._retrieval_cache.get(cache_key)
@@ -368,7 +368,7 @@ class RetrievalMixin:
         async def embed_and_search(item: str) -> list:
             if self.embedder is None:
                 return []
-            # Phase 2: embedding cache (text → vector, safe to share across users)
+            # 嵌入缓存（文本 → 向量，可跨用户共享）
             embed_cache_key = f"embed:{hash(item)}"
             now_e = _time_module.monotonic()
             cached_vec = self._embedding_cache.get(embed_cache_key)
@@ -524,7 +524,7 @@ class RetrievalMixin:
             self._timing_event("result_filter", (_time_module.perf_counter() - t_filter) * 1000, result_count=len(hits))
 
         result = (hits[: self._context_inject_count], mode, coverage)
-        # Phase 2: store in retrieval cache
+        # 写入检索缓存
         self._retrieval_cache[cache_key] = (result, now)
         self._cache_prune(self._retrieval_cache, self._retrieval_cache_max)
         self._timing_event("total", (_time_module.perf_counter() - t_total) * 1000, cache_hit=False, result_count=len(hits[: self._context_inject_count]))
