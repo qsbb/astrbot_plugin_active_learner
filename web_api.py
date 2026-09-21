@@ -633,6 +633,7 @@ class WebApiMixin:
                         reply = await self.llm_service.generate(
                             prompt=prompt,
                             provider_id=provider_id,
+                            kind="fast",
                         )
                         if not reply or not reply.strip():
                             async with lock:
@@ -954,7 +955,9 @@ class WebApiMixin:
             "严格按以下格式输出，每行一个：\n"
             "1. xxx\n2. xxx\n3. xxx\n..."
         )
-        reply = await self.llm_service.generate(prompt=prompt, provider_id=provider_id)
+        reply = await self.llm_service.generate(
+            prompt=prompt, provider_id=provider_id, kind="fast"
+        )
         if not reply or not reply.strip():
             return [topic]
 

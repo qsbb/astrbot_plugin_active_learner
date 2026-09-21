@@ -2,14 +2,20 @@
 
 设计要点：
 1. 自动取第一个可用的 EmbeddingProvider（零配置）
-2. 单条查询带 LRU 缓存（避免重复嵌入相同查询）
-3. scope → (numpy 矩阵, memory_id 列表) 内存缓存，写时失效
-4. 无 provider 时返回 None，调用方降级为纯 FTS5
-5. 查询嵌入必须在 storage._lock 外完成（避免阻塞写入）
+2. 本地没有 EmbeddingProvider 时向「核」问 "embedding" 路由换实例（异步路径）
+3. 单条查询带 LRU 缓存（避免重复嵌入相同查询）
+4. scope → (numpy 矩阵, memory_id 列表) 内存缓存，写时失效
+5. 无 provider 时返回 None，调用方降级为纯 FTS5
+6. 查询嵌入必须在 storage._lock 外完成（避免阻塞写入）
+
+核路由只在异步路径（embed_query/embed_batch）查询：同步的 _resolve_provider /
+available / dim 无法 await，因此本地 provider 永远优先，核 provider 查到后缓存
+复用（缓存后 available/dim 同步可用）。
 """
 
 from __future__ import annotations
 
+import inspect
 from collections import OrderedDict
 from typing import Any, Optional
 
@@ -20,6 +26,7 @@ except ImportError:
     _NUMPY_AVAILABLE = False
     np = None  # type: ignore
 
+from .model_router import resolve_model_route as resolve_routed_model_route
 from .plugin_logger import logger
 
 
@@ -36,6 +43,8 @@ class Embedder:
         self._plugin = plugin
         self._provider: Any = None
         self._provider_checked: bool = False
+        # 核 embedding 路由换来的 provider：本地无 provider 时才解析，成功后缓存复用
+        self._kernel_provider: Any = None
         self._dim: int = 0
         self._model_name: str = ""
         self._query_cache: OrderedDict[str, list[float]] = OrderedDict()
@@ -43,7 +52,7 @@ class Embedder:
         self._matrix_cache: dict[str, tuple[Any, list[str]]] = {}
 
     def _resolve_provider(self) -> Any:
-        """取第一个可用的 embedding provider。无则返回 None（降级 FTS5）。"""
+        """取第一个可用的本地 embedding provider。无则返回 None（降级 FTS5）。"""
         if self._provider_checked:
             return self._provider
         self._provider_checked = True
@@ -56,18 +65,7 @@ class Embedder:
                 logger.info("未配置 Embedding Provider，向量检索将降级为纯 FTS5")
                 return None
             self._provider = providers[0]
-            try:
-                self._dim = int(self._provider.get_dim())
-            except Exception:
-                self._dim = 0
-            try:
-                self._model_name = str(
-                    getattr(self._provider, "model_name", "")
-                    or getattr(self._provider, "id", "")
-                    or "unknown"
-                )
-            except Exception:
-                self._model_name = "unknown"
+            self._apply_provider_meta(self._provider)
             logger.info(
                 f"Embedder 已就绪: provider={self._model_name}, dim={self._dim}"
             )
@@ -76,10 +74,67 @@ class Embedder:
             logger.warning(f"解析 Embedding Provider 失败，降级为 FTS5: {e}")
             return None
 
+    def _apply_provider_meta(self, provider: Any) -> None:
+        """同步 provider 的 dim/model_name，保证 dim 与真正用于嵌入的实例一致。"""
+        try:
+            self._dim = int(provider.get_dim())
+        except Exception:
+            self._dim = 0
+        try:
+            self._model_name = str(
+                getattr(provider, "model_name", "")
+                or getattr(provider, "id", "")
+                or "unknown"
+            )
+        except Exception:
+            self._model_name = "unknown"
+
+    async def _resolve_kernel_provider(self) -> Any:
+        """本地无 provider 时按核的 "embedding" 路由换实例；失败静默返回 None。
+
+        核不可用、契约不兼容、路由非 core/不可用、provider 查不到或异常时都会
+        落到 None，调用方继续走原有降级逻辑（无 provider → 纯 FTS5）。查到后
+        缓存复用，之后的 embed_query/embed_batch 不再查核。
+        """
+        if self._kernel_provider is not None:
+            return self._kernel_provider
+        try:
+            context = getattr(self._plugin, "context", None)
+            route = await resolve_routed_model_route(context, "embedding")
+            provider_id = route.get("provider_id") if isinstance(route, dict) else ""
+            provider_id = str(provider_id or "").strip()
+            if not provider_id:
+                return None
+            getter = getattr(context, "get_provider_by_id", None)
+            if not callable(getter):
+                return None
+            provider = getter(provider_id)
+            if inspect.isawaitable(provider):
+                provider = await provider
+            if provider is None or not callable(getattr(provider, "get_embedding", None)):
+                return None
+            self._kernel_provider = provider
+            self._apply_provider_meta(provider)
+            logger.info(
+                f"Embedder 走核 embedding 路由: provider={self._model_name}, "
+                f"dim={self._dim}"
+            )
+            return provider
+        except Exception as e:
+            logger.debug(f"核 embedding 路由不可用，回退本地逻辑: {e}")
+            return None
+
+    async def _resolve_async_provider(self) -> Any:
+        """异步路径的 provider 解析：本地优先，本地没有才问核。"""
+        provider = self._resolve_provider()
+        if provider is not None:
+            return provider
+        return await self._resolve_kernel_provider()
+
     @property
     def available(self) -> bool:
-        """是否可用（已配置 embedding provider）。"""
-        return self._resolve_provider() is not None
+        """是否可用（本地已配置 embedding provider，或核路由已解析出 provider）。"""
+        return self._resolve_provider() is not None or self._kernel_provider is not None
 
     @property
     def dim(self) -> int:
@@ -93,7 +148,7 @@ class Embedder:
         """单条查询向量，带 LRU 缓存。失败返回 None（降级 FTS5）。"""
         if not text:
             return None
-        provider = self._resolve_provider()
+        provider = await self._resolve_async_provider()
         if provider is None:
             return None
 
@@ -119,7 +174,7 @@ class Embedder:
         """批量嵌入，带 budget 限制。失败返回 None。"""
         if not texts:
             return []
-        provider = self._resolve_provider()
+        provider = await self._resolve_async_provider()
         if provider is None:
             return None
 
