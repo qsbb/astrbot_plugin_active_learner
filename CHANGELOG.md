@@ -1,4 +1,13 @@
 ## [Unreleased]
+
+## 1.9.0 - 2026-09-28
+
+### 变更
+
+- 展示名去掉系列前缀：`metadata.yaml` 的 `display_name` 由「凝心溯溪-知」改为单字 **知**；核的可信登记、页面标题、`desc` 前缀与文档同步（系列归属仍由 `desc` / `short_desc` 里的「凝心溯溪系列」措辞承载）。
+- 补齐 `series_diagnostics.py` 缺失的 `import time`（ruff `F821` 未定义名：`_link_now()` 的兜底分支会 `NameError`）。
+- `.gitignore` 增加 macOS / Windows 产物忽略（`.DS_Store`、`._*`、`Thumbs.db`、`Desktop.ini` 等）。
+
 ## 1.8.8 - 2026-09-21
 
 ### 变更
