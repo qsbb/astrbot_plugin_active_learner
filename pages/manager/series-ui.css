@@ -82,9 +82,23 @@ body[data-series-ui] *, body[data-series-ui] *::before, body[data-series-ui] *::
   -webkit-backdrop-filter: blur(20px) saturate(1.32);
 }
 
+/* 页头通用面（.hero / .page-header / .studio-hero / .topbar / .topbar-inner）
+ *
+ * 两个都必须成立，否则页头里的「更多 ▾」下拉会坏（实拍：知的「更多」只露出第一项）：
+ *
+ * 1) overflow 必须是 visible —— 面板用绝对定位展开，被祖先裁切就只剩一条；
+ *    需要裁溢出装饰的页面（如「声」的 .studio-hero::after 光斑）请在该页 CSS 里显式
+ *    声明 overflow: hidden，通用面不再替页面做裁剪决定。
+ * 2) 页头必须自带层叠上下文（z-index + isolation）—— 页面外壳 .shell 常带
+ *    backdrop-filter，会形成层叠上下文，把后面同级的 <main> 画在页头之上；
+ *    此时即使 overflow 是 visible，面板也会被 <main> 盖住（命中测试落到 MAIN）。
+ *    给页头 isolation:isolate + z-index:1 后，面板稳定浮在内容之上。
+ */
 :where(body[data-series-ui] .hero), :where(body[data-series-ui] .page-header), :where(body[data-series-ui] .studio-hero), :where(body[data-series-ui] .topbar), :where(body[data-series-ui] .topbar-inner) {
   position: relative;
-  overflow: hidden;
+  z-index: 1;
+  isolation: isolate;
+  overflow: visible;
   border: 1px solid var(--si-line);
   border-radius: var(--si-radius-lg);
   background:
@@ -395,6 +409,8 @@ body[data-series-ui] .modal:not(.hidden)) {
 :where(body[data-series-ui] .dialog-message) {
   white-space: pre-line;
 }
+/* 页头内的下拉/菜单面板：浮在页面内容之上，不被相邻卡片或 <main> 盖住 */
+:where(body[data-series-ui] .hero .more-panel), :where(body[data-series-ui] .page-header .more-panel), :where(body[data-series-ui] .studio-hero .more-panel), :where(body[data-series-ui] .topbar .more-panel), :where(body[data-series-ui] .topbar-inner .more-panel), :where(body[data-series-ui] .hero .kebab-menu), :where(body[data-series-ui] .page-header .kebab-menu), :where(body[data-series-ui] .topbar-inner .kebab-menu), :where(body[data-series-ui] .hero .more-menu), :where(body[data-series-ui] .page-header .more-menu), :where(body[data-series-ui] .topbar-inner .more-menu) { z-index: 60; }
 :where(body[data-series-ui] .popover-actions), :where(body[data-series-ui] .group-popover) { border: 1px solid var(--si-line); border-radius: var(--si-radius-sm); background: rgba(255,255,255,.9); box-shadow: var(--si-shadow); backdrop-filter: blur(18px); }
 :where(body[data-series-ui] .toast), :where(body[data-series-ui] .toast-stack > *) {
   display: flex;
