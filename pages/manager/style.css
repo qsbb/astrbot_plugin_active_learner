@@ -604,6 +604,10 @@ textarea {
   transition: border-color var(--si-transition), background var(--si-transition);
 }
 
+.config-field[hidden] {
+  display: none;
+}
+
 .config-field:focus-within {
   border-color: rgba(102, 92, 246, .34);
   background: rgba(255, 255, 255, .58);

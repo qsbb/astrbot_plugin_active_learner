@@ -215,3 +215,23 @@ def test_manager_page_shortens_and_copies_long_scope_ids():
     assert "const option = e.target.selectedOptions?.[0];" in js
     assert 'state.scopeId = option.dataset.scopeId || "";' in js
     assert '.id-chip' in css
+
+
+def test_config_conditional_visibility_for_dependent_fields():
+    """条件展示覆盖主开关与嵌套模式，避免按非决定性模式误隐藏。"""
+    js = (PAGE_DIR / "app.js").read_text(encoding="utf-8")
+    css = (PAGE_DIR / "style.css").read_text(encoding="utf-8")
+    assert "const CONFIG_DEPENDENCIES" in js
+    assert "function applyConfigVisibility(" in js
+    assert "function configFieldVisible(" in js
+    assert 'learn_weight: { key: "enable_active_learn_hint", on: true }' in js
+    assert 'graph_max_hops: { all: [{ key: "graph_memory_enabled", on: true }, { key: "graph_reconstruction_mode", notIn: ["off"] }] }' in js
+    assert 'slang_promotion_min_groups: { all: [{ key: "enable_slang_capture", on: true }, { key: "slang_promotion_enabled", on: true }] }' in js
+    assert 'cross_domain_exclude_admin: { key: "enable_cross_domain", on: false }' in js
+    assert 'verifier_search_source: { key: "enable_web_search", on: true }' in js
+    # 通用联网搜索/B站开关不受 verifier_search_source=llm 控制。
+    assert 'enable_web_search: { key: "verifier_search_source"' not in js
+    assert 'enable_bilibili: { key: "verifier_search_source"' not in js
+    assert "applyConfigVisibility();\n}" in js
+    assert "applyConfigVisibility();\n  });" in js
+    assert ".config-field[hidden]" in css

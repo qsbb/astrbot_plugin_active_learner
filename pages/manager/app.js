@@ -1483,6 +1483,7 @@ function bindSettingsEvents() {
   });
   document.getElementById("config-form").addEventListener("change", () => {
     configState.dirty = true;
+    applyConfigVisibility();
   });
   document.getElementById("btn-refresh-providers").addEventListener("click", loadProviderSettings);
   // tab 的点击切换与方向键导航交给共享层；本页只叠加未保存守卫与惰性加载副作用。
@@ -1861,6 +1862,60 @@ function configGroupFor(name) {
   return CONFIG_GROUP_MAP[name] || "其它";
 }
 
+// 条件展示：声明「当某个选择项取特定值时，哪些字段才生效」。
+// 仅影响展示，不改变配置语义；切换选择项后立即重算显隐。
+const CONFIG_DEPENDENCIES = {
+  learn_weight: { key: "enable_active_learn_hint", on: true },
+  graph_reconstruction_mode: { key: "graph_memory_enabled", on: true },
+  graph_max_hops: { all: [{ key: "graph_memory_enabled", on: true }, { key: "graph_reconstruction_mode", notIn: ["off"] }] },
+  hybrid_search_weight: { key: "embedding_enabled", on: true },
+  slang_capture_interval_hours: { key: "enable_slang_capture", on: true },
+  slang_capture_batch_size: { key: "enable_slang_capture", on: true },
+  slang_capture_min_occurrences: { key: "enable_slang_capture", on: true },
+  slang_capture_scope_only_group: { key: "enable_slang_capture", on: true },
+  slang_capture_min_speakers: { key: "enable_slang_capture", on: true },
+  slang_capture_count_interval_seconds: { key: "enable_slang_capture", on: true },
+  slang_promotion_enabled: { key: "enable_slang_capture", on: true },
+  slang_promotion_min_groups: { all: [{ key: "enable_slang_capture", on: true }, { key: "slang_promotion_enabled", on: true }] },
+  slang_promotion_external_verify: { all: [{ key: "enable_slang_capture", on: true }, { key: "slang_promotion_enabled", on: true }] },
+  slang_recall_max_per_msg: { key: "enable_slang_recall", on: true },
+  cross_domain_exclude_admin: { key: "enable_cross_domain", on: false },
+  verifier_search_source: { key: "enable_web_search", on: true },
+};
+
+function configToggleOn(value) {
+  return value === true || value === "true" || value === "on" || value === 1 || value === "1";
+}
+
+function configFieldVisible(dep, values) {
+  if (!dep) return true;
+  if (Array.isArray(dep.all) && !dep.all.every((condition) => configFieldVisible(condition, values))) return false;
+  if (Array.isArray(dep.any) && !dep.any.some((condition) => configFieldVisible(condition, values))) return false;
+  const current = values[dep.key];
+  if (Object.prototype.hasOwnProperty.call(dep, "on")) return configToggleOn(current) === dep.on;
+  if (Array.isArray(dep.notIn)) return !dep.notIn.some((v) => String(current ?? "") === String(v));
+  if (Array.isArray(dep.values)) return dep.values.some((v) => String(current ?? "") === String(v));
+  return true;
+}
+
+function currentConfigValues() {
+  const values = {};
+  configState.fields.forEach((f) => {
+    const el = document.querySelector(`#config-form [data-field="${cssEscape(f.name)}"]`);
+    if (!el) { values[f.name] = f.value; return; }
+    values[f.name] = f.type === "bool" ? !!el.checked : el.value;
+  });
+  return values;
+}
+
+function applyConfigVisibility() {
+  const values = currentConfigValues();
+  document.querySelectorAll("#config-form [data-config-card]").forEach((card) => {
+    const dep = CONFIG_DEPENDENCIES[card.dataset.configCard];
+    card.hidden = !configFieldVisible(dep, values);
+  });
+}
+
 function renderConfigForm(fields, keyword = "") {
   const container = document.getElementById("config-form");
   if (!fields.length) {
@@ -1891,6 +1946,7 @@ function renderConfigForm(fields, keyword = "") {
     for (const f of groupFields) {
       const card = document.createElement("div");
       card.className = "config-field";
+      card.dataset.configCard = f.name;
       const isBool = f.type === "bool";
       const label = document.createElement("label");
       label.className = isBool ? "config-bool" : "config-input";
@@ -1926,6 +1982,7 @@ function renderConfigForm(fields, keyword = "") {
     section.appendChild(grid);
     container.appendChild(section);
   }
+  applyConfigVisibility();
 }
 
 function configInputAttrs(f) {
