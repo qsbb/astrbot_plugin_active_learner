@@ -401,13 +401,9 @@ class WebApiMixin:
             # 诊断信息：列出当前可用的解析路径状态
             settings_pid = self.config_manager.get("llm_provider_id", "") or ""
             cfg_pid = self._cfg_llm_provider_id or ""
-            pm = getattr(self.context, "provider_manager", None)
-            pm_providers = []
-            if pm is not None:
-                for p in getattr(pm, "providers", None) or []:
-                    pm_providers.append(
-                        str(getattr(p, "id", "") or getattr(p, "name", ""))
-                    )
+            pm_providers = [
+                item["id"] for item in self._list_provider_candidates()
+            ]
             # cmd_config 诊断
             try:
                 plugin_data_dir = str(StarTools.get_data_dir())
@@ -1182,48 +1178,50 @@ class WebApiMixin:
                 continue
             if isinstance(result, str) and result:
                 return result
-            pid = getattr(result, "id", None) or getattr(result, "name", None)
+            pid = self._provider_id_of(result)
             if pid:
                 return str(pid)
-        # 兜底 1：从 provider_manager.providers 取第一个
+        # 兜底 1：provider_manager 当前生效的 provider（多配置档案下即当前档案）
         pm = getattr(self.context, "provider_manager", None)
-        if pm is not None:
-            providers = getattr(pm, "providers", None) or []
-            for p in providers:
-                pid = getattr(p, "id", None) or getattr(p, "name", None)
-                if pid:
-                    return str(pid)
-        # 兜底 2：从 cmd_config.json 读取 default_provider_id
+        current = getattr(pm, "curr_provider_inst", None) if pm is not None else None
+        pid = self._provider_id_of(current)
+        if pid:
+            return pid
+        # 兜底 2：已加载 / 已配置的 provider 列表取第一个
+        candidates = self._list_provider_candidates()
+        if candidates:
+            return candidates[0]["id"]
+        # 兜底 3：从 cmd_config.json 读取 default_provider_id
         default_pid, providers = self._get_providers_from_config()
         if default_pid:
             return default_pid
         for p in providers:
             if p.get("enable", True):
                 return p["id"]
-        # 兜底 3：插件配置中的 llm_provider_id
+        # 兜底 4：插件配置中的 llm_provider_id
         if self._cfg_llm_provider_id:
             return self._cfg_llm_provider_id
         return ""
 
     def _provider_exists(self, provider_id: str) -> bool:
-        """校验 provider_id 是否在 provider_manager 中存在（防止选了已删除的 provider）。"""
+        """校验 provider_id 是否存在于当前 AstrBot 实例（防止选了已删除的 provider）。
+
+        AstrBot 4.x 的 ProviderManager 暴露的是 provider_insts / inst_map /
+        providers_config，Provider 实例也只带 provider_config 而没有 id 属性，
+        因此统一走 _list_provider_candidates()，与 Dashboard 下拉框同源。
+        """
         if not provider_id:
             return False
-        pm = getattr(self.context, "provider_manager", None)
-        if pm is not None:
-            providers = getattr(pm, "providers", None) or []
-            for p in providers:
-                pid = getattr(p, "id", None) or getattr(p, "name", None)
-                if pid and str(pid) == str(provider_id):
-                    return True
-            # provider_manager 不为空但没找到 → 再用 cmd_config 兜底
-        # 从 cmd_config.json 校验
+        target = str(provider_id).strip()
+        if not target:
+            return False
+        candidates = self._list_provider_candidates()
+        if candidates:
+            return any(item["id"] == target for item in candidates)
+        # 列表完全拿不到（老版本或无 provider）→ 用 cmd_config 兜底
         _, cfg_providers = self._get_providers_from_config()
         if cfg_providers:
-            for p in cfg_providers:
-                if p["id"] == str(provider_id):
-                    return True
-            return False
+            return any(p["id"] == target for p in cfg_providers)
         # 都拿不到 → 放行
         return True
 
@@ -1349,6 +1347,14 @@ class WebApiMixin:
                 or ""
             ).strip(),
         }
+
+    @classmethod
+    def _provider_id_of(cls, provider: Any) -> str:
+        """从 provider 实例 / 配置字典中取唯一 id（兼容 AstrBot 各版本）。"""
+        if provider is None:
+            return ""
+        item = cls._normalize_provider(provider)
+        return item["id"] if item else ""
 
     def _list_provider_candidates(self) -> list[dict[str, str]]:
         candidates: list[Any] = []

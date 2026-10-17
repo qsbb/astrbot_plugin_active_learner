@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- Dashboard 保存「模型服务商」误报 `provider_id 不存在`：AstrBot 4.x 的 `ProviderManager` 暴露的是 `provider_insts` / `inst_map` / `providers_config`，Provider 实例只有 `provider_config` 与 `meta()`；旧校验读取不存在的 `pm.providers`，随后退回 `cmd_config.json`（默认配置档案）判断，导致下拉框能选到、保存却被拒。现在 provider 存在性校验与 `_list_provider_candidates()` 同源，默认 provider 兜底也改用当前实例列表；诊断信息里的 `pm_providers` 同步修正。
+
 ## 1.10.0 - 2026-10-10
 
 ### 优化
