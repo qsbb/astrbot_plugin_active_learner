@@ -317,3 +317,49 @@ def test_domain_restriction_prompt_does_not_demand_flat_denial():
     assert "直接明确回复你不知道/没玩过/没见过" not in source
     assert "不要用「不知道／没玩过／没见过」" in source
     assert "按人设聊一聊" in source
+
+
+def test_semantic_search_instruction_does_not_force_uncertainty_disclaimer():
+    """真正生效的那条策略不得强制"声明未核实"（固定否认的直接来源）。"""
+    instruction = build_semantic_search_instruction(0.7, has_memory_hits=False)
+    assert "应明确说明本次未能核实" not in instruction
+    assert "本地没有候选记忆不代表这个问题不能回答" in instruction
+    assert "不要因为查不到就退缩或反复说不知道" in instruction
+
+
+def test_semantic_search_instruction_keeps_honesty_boundary():
+    """去掉强制表态后，仍须保留"不虚构、不冒充已核实"的正向边界。"""
+    instruction = build_semantic_search_instruction(0.7, has_memory_hits=False)
+    assert "不要虚构真实经历、共同往事、引用来源或检索行为" in instruction
+    assert "不要把不确定的外部事实说成已经核实" in instruction
+    assert "没检索过就不要说「我查过了」" in instruction
+
+
+def test_semantic_search_instruction_still_guides_real_fact_search():
+    """豁免闲聊不等于放弃检索：时效性/不确定/要求核实时仍要搜。"""
+    instruction = build_semantic_search_instruction(0.7, has_memory_hits=False)
+    assert "对具体但不确定、易变化、实体冲突或用户要求核实时优先搜索" in instruction
+    assert "一次回答最多启动一条搜索链" in instruction
+
+
+def test_fact_guard_does_not_blanket_exempt_self_questions():
+    """「关于你自己」不能整体豁免：设定一致性、官方细节、共同往事仍要有据。"""
+    instruction = build_factual_grounding_instruction(
+        has_memory_hits=False,
+        domain_restricted=False,
+    )
+    assert "但「关于你自己」不等于全部豁免" in instruction
+    assert "官方剧情、配音、版本数据这类细节仍按外部事实处理" in instruction
+    assert "对方提到的共同往事也要有据可依" in instruction
+
+
+def test_both_paths_share_search_honesty_rule():
+    """两条注入路径对"未检索不能说查过"保持一致，避免规则冲突。"""
+    hint = build_semantic_search_instruction(0.7, has_memory_hits=False)
+    grounding = build_factual_grounding_instruction(
+        has_memory_hits=False, domain_restricted=False
+    )
+    # 两条路径都要有"不虚构"与"未检索不说查过"
+    for text in (hint, grounding):
+        assert "虚构" in text
+        assert "查过" in text
