@@ -277,3 +277,43 @@ def test_background_task_host_cancels_tasks():
         assert host.task_count == 0
 
     asyncio.run(scenario())
+
+
+def test_fact_guard_exempts_subjective_and_roleplay_content():
+    """现象：问好感/印象/冷知识被固定回"不知道，没见过"。
+
+    事实可靠性约束必须显式豁免角色内主观感受、玩笑、创作与日常闲聊，
+    否则模型会把任何没有本地记忆的提问都当成待核实事实而一律否认。
+    """
+    instruction = build_factual_grounding_instruction(
+        has_memory_hits=False,
+        domain_restricted=False,
+    )
+    assert "主观感受" in instruction
+    assert "玩笑" in instruction
+    assert "创作" in instruction
+    assert "日常闲聊" in instruction
+    assert "不要用「不知道」「没见过」敷衍" in instruction
+
+
+def test_fact_guard_prefers_reporting_search_results():
+    """现象：搜到了也不说，直接回不知道。
+
+    约束应要求搜到就把查到的内容自然说出来，而不是一律推给"不确定"。
+    """
+    instruction = build_factual_grounding_instruction(
+        has_memory_hits=False,
+        domain_restricted=False,
+    )
+    assert "搜到就把查到的内容自然说出来" in instruction
+    assert "说清来源与把握" in instruction
+
+
+def test_domain_restriction_prompt_does_not_demand_flat_denial():
+    """领域限制不应要求模型用生硬否认堵死话题。"""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert "直接明确回复你不知道/没玩过/没见过" not in source
+    assert "不要用「不知道／没玩过／没见过」" in source
+    assert "按人设聊一聊" in source
